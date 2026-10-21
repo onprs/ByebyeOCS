@@ -1,0 +1,39 @@
+name: byebyeocs_client
+description: ByebyeOCS 学习通用户客户端，共享 Web、Android 与 iOS 界面。
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.4.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  flutter_web_plugins:
+    sdk: flutter
+  flutter_riverpod: ^2.6.1
+  go_router: ^14.8.1
+  http: ^1.2.2
+  cupertino_icons: ^1.0.8
+  crypto: ^3.0.3
+  flutter_secure_storage: ^9.2.4
+  shared_preferences: ^2.3.2
+  url_launcher: ^6.3.1
+  path_provider: ^2.1.5
+  web: ^1.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/fonts/LICENSE-DroidSansFallback.txt
+  fonts:
+    - family: BboCjk
+      fonts:
+        - asset: assets/fonts/DroidSansFallbackFull.ttf

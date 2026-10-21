@@ -1,0 +1,20 @@
+# 开发维护配置；当前基础服务仅监听回环地址。
+server:
+  user_listen: "127.0.0.1:8090"
+  admin_listen: "127.0.0.1:8091"
+  read_header_timeout: 5s
+  read_timeout: 10s
+  write_timeout: 15s
+  idle_timeout: 60s
+  shutdown_timeout: 10s
+
+database:
+  # 可改用 BYEBYEOCS_DATABASE_DSN 环境变量；不要把真实连接串提交到仓库。
+  # 相对路径以本配置文件所在目录为基准；文件权限须为 0600 或更严格。
+  dsn_file: ""
+  max_connections: 12
+  connect_timeout: 5s
+  query_timeout: 3s
+
+log:
+  level: info

@@ -1,0 +1,25 @@
+import { useState } from 'react'
+import { useLocation } from 'react-router-dom'
+import { ArrowRight, Bell, BookOpen, CalendarDays, ChevronRight, Home, LogOut, Moon, Settings2, Signal, Smartphone, Sun, Wallet, Wifi, BatteryFull } from 'lucide-react'
+import { AppLink, usePreview } from '../App'
+import { useStore } from '../store'
+import { Avatar, Badge, IconButton, Logo, Modal, TextLink } from '../ui'
+import { ClientHome } from './Home'
+import { ClientCourses, CourseDetail } from './Courses'
+import { Plans } from './Plans'
+import { WalletPage } from './Wallet'
+import { Login } from './Login'
+import { Profile } from './Profile'
+const nav = [{ page: 'home', label: '首页', icon: Home }, { page: 'courses', label: '我的课程', short: '课程', icon: BookOpen }, { page: 'plans', label: '任务安排', short: '安排', icon: CalendarDays }, { page: 'wallet', label: '我的钱包', short: '钱包', icon: Wallet }]
+export function ClientApp() {
+  const pathname = useLocation().pathname, { mobile, theme, go, setTheme } = usePreview(), prefix = mobile ? '/mobile' : '/client'
+  const [notifications, setNotifications] = useState(false), [menu, setMenu] = useState(false), [help, setHelp] = useState(false)
+  const page = pathname.split('/')[2] || 'home', courseId = pathname.split('/')[3]
+  const store = useStore()
+  const pageContent = page === 'login' ? <Login/> : <><header className="client-topbar"><div className="client-topbar-inner"><AppLink to={`${prefix}/home`}><Logo/></AppLink><nav className="client-desktop-nav">{nav.map(n => <AppLink key={n.page} to={`${prefix}/${n.page}`} className={page === n.page ? 'active' : ''}>{n.label}</AppLink>)}</nav><div className="client-header-tools"><Badge>预览</Badge><IconButton label="切换主题" className="theme-control" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}</IconButton><IconButton label="我的通知" onClick={() => setNotifications(true)}><span className="notification-icon"><Bell size={18}/><i/></span></IconButton><button className="client-avatar" aria-label="个人菜单" onClick={() => setMenu(true)}><Avatar name="沈" small/></button></div></div></header><main className={`client-content client-page-${page}`}>{page === 'courses' ? courseId ? <CourseDetail id={Number(courseId)}/> : <ClientCourses/> : page === 'plans' ? <Plans/> : page === 'wallet' ? <WalletPage/> : page === 'settings' ? <Profile/> : <ClientHome/>}</main><footer className="client-footer"><Logo compact/><span>把时间留给更重要的事。</span><button onClick={() => setHelp(true)}>帮助与支持</button><span className="footer-dot">·</span><AppLink to={`${prefix}/settings`}>隐私与安全</AppLink></footer><nav className="client-bottom-nav">{nav.map(n => <AppLink key={n.page} to={`${prefix}/${n.page}`} className={page === n.page ? 'active' : ''}><n.icon size={21} strokeWidth={page === n.page ? 2.1 : 1.6}/><span>{n.short || n.label}</span>{n.page === 'plans' && store.tasks.some(t => t.owner === 'U-1001' && t.status === 'attention') && <i/>}</AppLink>)}</nav></>
+  return <div className={mobile ? 'mobile-stage' : ''}>{mobile && <div className="mobile-stage-copy"><Badge><Smartphone size={12}/>手机界面 · React 视觉原型</Badge><h2>学习，<br/>也可以从容有序。</h2><p>专为触控优化的布局。<br/>同样的学习安排，更适合掌心的体验。</p><div className="mobile-stage-lines"><i/><i/><i/></div><small>尚未实现 Flutter · 数据与支付均为模拟</small></div>}<div className={`client-shell ${mobile ? 'mobile-route' : ''}`}><div className="phone-status"><b>9:41</b><span><Signal size={13}/><Wifi size={13}/><BatteryFull size={17}/></span></div>{pageContent}</div>
+    <Modal open={notifications} onClose={() => setNotifications(false)} title="你的通知" drawer><div className="notice-list"><div><Badge tone="amber">需要处理</Badge><h3>英语课程需要重新验证</h3><p>任务已安全停止，验证身份后可继续安排。</p><TextLink onClick={() => { go(`${prefix}/plans`); setNotifications(false) }}>查看任务安排</TextLink></div><div><Badge tone="green">学习进展</Badge><h3>新的任务已获平台确认</h3><p>设计思维与创新方法 · 3.1 发现真正的问题。</p><TextLink onClick={() => { go(`${prefix}/courses/1`); setNotifications(false) }}>查看课程</TextLink></div></div></Modal>
+    <Modal open={menu} onClose={() => setMenu(false)} title="我的学习通账号"><div className="profile-info"><Avatar name="沈"/><div><h3>沈知夏</h3><p>海岚大学 · 演示账号 001</p></div><Badge tone="green" dot>已登录</Badge></div><div className="menu-list"><button onClick={() => { go(`${prefix}/settings`); setMenu(false) }}><Settings2 size={17}/>个人设置<ChevronRight size={15}/></button><button onClick={() => { go(`${prefix}/wallet`); setMenu(false) }}><Wallet size={17}/>余额与订单<ChevronRight size={15}/></button><button onClick={() => { go(`${prefix}/login`); setMenu(false) }}><LogOut size={17}/>退出登录<ChevronRight size={15}/></button></div></Modal>
+    <Modal open={help} onClose={() => setHelp(false)} title="我们来帮你" description="常见问题与处理方式。"><div className="faq-list"><div><h3>为什么任务还没有显示完成？</h3><p>处理结束后仍需查询学习通确认结果。平台暂未返回时会显示“等待验证”。</p></div><div><h3>充值支付成功，余额还没变？</h3><p>支付与到账是两个步骤，可在钱包的订单记录里持续查看。异常订单请保留订单编号联系支持。</p></div><div><h3>忘记学习通密码？</h3><p>通过学习通官方找回密码后再登录。账号变更与余额归属问题需提交身份申诉。</p><a href="https://passport2.chaoxing.com/" target="_blank" rel="noreferrer">打开学习通官方登录页 <ArrowRight size={12}/></a></div></div></Modal>
+  </div>
+}

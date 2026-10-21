@@ -1,0 +1,98 @@
+name: 代码检查与发布构建
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Go 模块与隔离 PostgreSQL
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: byebyeocs_test
+          POSTGRES_PASSWORD: integration-only
+          POSTGRES_DB: byebyeocs_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U byebyeocs_test -d byebyeocs_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: |
+            server/go.sum
+            services/tiku/go.sum
+      - name: Go 格式
+        run: |
+          files=$(gofmt -l server/cmd server/internal services/tiku)
+          test -z "$files" || { printf '需要 gofmt：\n%s\n' "$files"; exit 1; }
+      - name: 静态检查
+        run: |
+          go -C server vet ./...
+          go -C services/tiku vet ./...
+      - name: 全部 Go 包与隔离集成测试
+        env:
+          BYEBYEOCS_TEST_DATABASE_DSN_FILE: ${{ runner.temp }}/byebyeocs-test.dsn
+        run: |
+          umask 077
+          printf '%s\n' 'postgres://byebyeocs_test:integration-only@127.0.0.1:5432/byebyeocs_test?sslmode=disable' > "$BYEBYEOCS_TEST_DATABASE_DSN_FILE"
+          make test-integration
+      - name: 构建原生二进制并校验公开配置样例
+        run: |
+          make server
+          make tiku
+          make test-configs
+
+  admin:
+    name: 管理员静态应用
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/admin/package-lock.json
+      - run: npm --prefix apps/admin ci
+      - run: npm --prefix apps/admin run check
+      - run: npm --prefix apps/admin test
+      - run: npm --prefix apps/admin run build
+
+  flutter:
+    name: Flutter Web 与客户端测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+      - run: cd apps/client_flutter && flutter pub get
+      - run: cd apps/client_flutter && flutter analyze
+      - run: cd apps/client_flutter && flutter test
+      - run: cd apps/client_flutter && flutter build web --release --no-web-resources-cdn
+
+  deployment:
+    name: 部署与备份脚本隔离测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 libpq（备份脚本 DSN 解析器测试）
+        run: sudo apt-get update && sudo apt-get install -y libpq5
+      - name: shell 语法
+        run: |
+          bash -n deploy/common.sh deploy/install.sh deploy/upgrade.sh deploy/rollback.sh \
+            deploy/uninstall.sh deploy/backup.sh deploy/restore-drill.sh \
+            scripts/build-bundle.sh scripts/test-deploy.sh
+      - name: 临时目录与假 SSH 测试
+        run: make test-deploy

@@ -1,0 +1,26 @@
+{
+  "listen": "127.0.0.1:8092",
+  "database_dsn_file": "secrets/database.dsn",
+  "service_token_file": "secrets/service-token",
+  "default_model_id": "",
+  "caption_model_id": "",
+  "allow_loopback_upstreams": false,
+  "prompt_version": "fork-p1",
+  "normalization_version": "fork-n1",
+  "limits": {
+    "max_request_bytes": 33554432,
+    "max_images": 8,
+    "max_image_bytes": 5242880,
+    "max_image_pixels": 16000000,
+    "max_output_tokens": 2048,
+    "concurrency": 2,
+    "timeout_seconds": 90,
+    "idempotency_retention_hours": 168
+  },
+  "cache": {
+    "ttl_days": 7,
+    "max_ttl_days": 30,
+    "shared_enabled": false
+  },
+  "models": []
+}

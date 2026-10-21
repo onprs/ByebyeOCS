@@ -1,0 +1,49 @@
+[Unit]
+Description=ByebyeOCS 主服务
+Documentation=https://github.com/onprs/ByebyeOCS
+After=network-online.target
+Wants=network-online.target
+# PostgreSQL 由用户单独安装和管理；本单元不假定发行版的数据库单元名。
+# 数据库未就绪时程序会失败退出，由 Restart 重新尝试。
+
+[Service]
+Type=simple
+User=@SERVICE_USER@
+Group=@SERVICE_USER@
+WorkingDirectory=@DATA_DIR@
+ExecStart=@PREFIX@/current/bin/byebyeocs serve --config @CONFIG_DIR@/config.yaml
+Environment=GOMEMLIMIT=512MiB
+UMask=0077
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=75
+KillMode=control-group
+RuntimeDirectory=byebyeocs
+RuntimeDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectProc=invisible
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+ReadOnlyPaths=@PREFIX@ @CONFIG_DIR@
+ReadWritePaths=@DATA_DIR@ /run/byebyeocs
+CapabilityBoundingSet=
+AmbientCapabilities=
+TasksMax=256
+LimitNOFILE=65536
+MemoryHigh=512M
+MemoryMax=768M
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target

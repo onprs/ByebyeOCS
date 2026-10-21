@@ -1,0 +1,24 @@
+[Unit]
+Description=ByebyeOCS 加密异机备份
+Documentation=https://github.com/onprs/ByebyeOCS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=@PREFIX@/current/deploy/backup.sh
+Environment=BYEBYEOCS_BACKUP_ENV=@CONFIG_DIR@/backup.env
+UMask=0077
+TimeoutStartSec=20min
+Nice=10
+IOSchedulingClass=best-effort
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=false
+ReadOnlyPaths=@PREFIX@ @CONFIG_DIR@
+# 默认 staging；如修改 BYEBYEOCS_BACKUP_STAGING，请同步调整本行。
+ReadWritePaths=@CONFIG_DIR@/secrets /var/backups/byebyeocs
+Restart=no
