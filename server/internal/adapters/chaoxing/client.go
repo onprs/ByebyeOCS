@@ -1,8 +1,8 @@
-// Package chaoxing 实现学习通课程/任务点的真实只读适配。
+// Package chaoxing 实现学习通原生认证、只读核验和受控HTTP任务执行。
 //
-// 默认关闭。该包不包含合成上报、伪造时长、重复参数或绕过验证的逻辑；
-// 执行副作用不属于本适配器能力。上游请求经过域名、TLS、目标 IP、重定向、
-// 响应体积和速率限制，并复用服务端已核对的平台会话。
+// 平台连接与执行分别默认关闭。执行器不提供伪造时长、重复参数或跳过验证的开关；
+// 上游请求经过域名、TLS、目标IP、重定向、响应体积和速率限制，
+// 并复用服务端已核对的平台会话。请求执行记录与真实媒体记录分开。
 package chaoxing
 
 import (
@@ -115,33 +115,35 @@ func normalizeOptions(options *httpOptions) error {
 }
 
 type rateLimiter struct {
-	mu   sync.Mutex
+	once sync.Once
+	gate chan struct{}
 	next time.Time
 }
 
-// wait 原子预留下一个发送时刻，再按上下文可取消地等待。
-// 多个账号共享同一个 Platform 时请求仍按间隔串行，不产生数据竞争。
+// wait 按实际放行时间推进下一时刻，避免预留时间槽在调度延迟后形成突发。
+// 等待名额和等待发送间隔均可取消，不会因其他账号排队而阻塞停止请求。
 func (r *rateLimiter) wait(ctx context.Context, interval time.Duration) error {
-	r.mu.Lock()
-	now := time.Now()
-	slot := now
-	if r.next.After(now) {
-		slot = r.next
-	}
-	r.next = slot.Add(interval)
-	r.mu.Unlock()
-	delay := slot.Sub(now)
-	if delay <= 0 {
-		return ctx.Err()
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
+	r.once.Do(func() { r.gate = make(chan struct{}, 1) })
 	select {
+	case r.gate <- struct{}{}:
+		defer func() { <-r.gate }()
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-timer.C:
-		return nil
 	}
+	if delay := time.Until(r.next); delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.next = time.Now().Add(interval)
+	return nil
 }
 
 func (c *clientFactory) client(jar http.CookieJar) *http.Client {

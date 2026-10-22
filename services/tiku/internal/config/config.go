@@ -12,22 +12,24 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 )
 
 const (
-	DefaultMaxRequestBytes = 8 << 20
-	DefaultMaxImages       = 8
-	DefaultMaxImageBytes   = 5 << 20
-	DefaultMaxImagePixels  = 16000000
-	DefaultMaxOutputTokens = 2048
-	DefaultConcurrency     = 2
-	DefaultTimeout         = 90 * time.Second
-	DefaultCacheTTLDays    = 7
-	DefaultMaxCacheTTLDays = 30
-	DefaultIdempotencyTTL  = 168 * time.Hour
+	DefaultDatabaseMaxConnections = 4
+	DefaultMaxRequestBytes        = 8 << 20
+	DefaultMaxImages              = 8
+	DefaultMaxImageBytes          = 5 << 20
+	DefaultMaxImagePixels         = 16000000
+	DefaultMaxOutputTokens        = 2048
+	DefaultConcurrency            = 2
+	DefaultTimeout                = 90 * time.Second
+	DefaultCacheTTLDays           = 7
+	DefaultMaxCacheTTLDays        = 30
+	DefaultIdempotencyTTL         = 168 * time.Hour
 )
 
 var modelIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{1,63}$`)
@@ -62,6 +64,7 @@ type Model struct {
 
 type Config struct {
 	Listen                 string  `json:"listen"`
+	DatabaseMaxConnections int32   `json:"database_max_connections"`
 	DatabaseDSNFile        string  `json:"database_dsn_file"`
 	ServiceTokenFile       string  `json:"service_token_file"`
 	DefaultModelID         string  `json:"default_model_id"`
@@ -75,6 +78,9 @@ type Config struct {
 }
 
 func applyDefaults(c *Config) {
+	if c.DatabaseMaxConnections == 0 {
+		c.DatabaseMaxConnections = DefaultDatabaseMaxConnections
+	}
 	if c.Limits.MaxRequestBytes <= 0 {
 		c.Limits.MaxRequestBytes = DefaultMaxRequestBytes
 	}
@@ -125,6 +131,21 @@ func Load(path string) (*Config, error) {
 	if err := decoder.Decode(&c); err != nil {
 		return nil, errors.New("配置文件 JSON 无效或包含未知字段")
 	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, errors.New("配置文件路径无效")
+	}
+	directory := filepath.Dir(absolute)
+	for _, field := range []*string{&c.DatabaseDSNFile, &c.ServiceTokenFile} {
+		if *field != "" && !filepath.IsAbs(*field) {
+			*field = filepath.Join(directory, *field)
+		}
+	}
+	for index := range c.Models {
+		if value := c.Models[index].APIKeyFile; value != "" && !filepath.IsAbs(value) {
+			c.Models[index].APIKeyFile = filepath.Join(directory, value)
+		}
+	}
 	applyDefaults(&c)
 	if err := c.Validate(); err != nil {
 		return nil, err
@@ -138,6 +159,9 @@ func (c *Config) Validate() error {
 	}
 	if _, _, err := net.SplitHostPort(c.Listen); err != nil {
 		return errors.New("listen 必须是 host:port")
+	}
+	if c.DatabaseMaxConnections < 0 || c.DatabaseMaxConnections > 32 {
+		return errors.New("database_max_connections 必须在1到32之间；省略时使用4")
 	}
 	if c.DatabaseDSNFile == "" {
 		return errors.New("database_dsn_file 不能为空")

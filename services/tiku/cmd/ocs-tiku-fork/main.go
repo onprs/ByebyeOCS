@@ -134,7 +134,16 @@ func openPool(parent context.Context, cfg *config.Config) (*pgxpool.Pool, error)
 	}
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, dsn)
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, errors.New("数据库连接配置无效")
+	}
+	poolConfig.MaxConns = cfg.DatabaseMaxConnections
+	if poolConfig.MaxConns == 0 {
+		poolConfig.MaxConns = config.DefaultDatabaseMaxConnections
+	}
+	poolConfig.MinConns = 0
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, errors.New("无法创建数据库连接池")
 	}

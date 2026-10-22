@@ -1,7 +1,6 @@
 package app
 
 import (
-	"github.com/onprs/ByebyeOCS/server/internal/adapters/browser"
 	"github.com/onprs/ByebyeOCS/server/internal/adapters/chaoxing"
 	"github.com/onprs/ByebyeOCS/server/internal/adapters/chaoxing/authbridge"
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
@@ -9,8 +8,6 @@ import (
 	"github.com/onprs/ByebyeOCS/server/internal/platform/config"
 	"github.com/onprs/ByebyeOCS/server/internal/platform/fault"
 	"github.com/onprs/ByebyeOCS/server/internal/questions"
-	"path/filepath"
-	"time"
 )
 
 func defaultDependencies(cfg config.Config) (Dependencies, error) {
@@ -59,9 +56,9 @@ func buildExecutor(cfg config.Config) (learning.Executor, error) {
 	if !cfg.Learning.ExecutionEnabled {
 		return nil, nil
 	}
-	executor, err := browser.New(browser.Options{Enabled: true, Authorized: cfg.Learning.ExecutionEvidenceReference != "", ChromePath: cfg.Learning.BrowserExecutable, ProfileRoot: filepath.Join(cfg.Storage.DataDir, "chrome-profiles"), ExecutionTimeout: 45 * time.Minute, MemoryLimitMB: 512, MaxProxyConnections: 16})
+	executor, err := chaoxing.NewHTTPExecutor(chaoxing.HTTPExecutorOptions{Enabled: true, Authorized: cfg.Learning.ExecutionEvidenceReference != "", Concurrency: cfg.Learning.GlobalConcurrency})
 	if err != nil {
-		return nil, fault.New("not_configured", "浏览器执行适配配置无效或环境不可用")
+		return nil, fault.New("not_configured", "原生请求执行配置无效")
 	}
 	return executor, nil
 }

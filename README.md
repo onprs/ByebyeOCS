@@ -12,7 +12,7 @@
 
 ## 安装与运行
 
-服务端支持 Linux amd64/arm64，需要 PostgreSQL 16 或以上。生产访问使用两个独立 HTTPS 地址；管理员首次创建需要密码和 TOTP 动态验证码。运行已构建的服务不需要 Node.js、Flutter、Docker 或桌面环境。
+服务端支持 Linux amd64/arm64，需要 PostgreSQL 16 或以上。生产访问使用两个独立 HTTPS 地址；管理员首次创建需要密码和 TOTP 动态验证码。学习任务通过原生请求执行，运行已构建的服务不需要浏览器、播放器、Node.js、Flutter、Docker或桌面环境。
 
 从完整源码构建，需要 Go 1.26 或以上、Node.js 22.12 或以上、npm、Flutter 3.47.7、GNU Make 和 Python 3。在源码根目录执行：
 

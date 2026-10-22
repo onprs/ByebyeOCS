@@ -10,7 +10,7 @@
 
 用户用经过服务端核验的学习通身份进入，不注册第二套账号。稳定外部主体、内部用户与钱包、管理员身份分别建模。管理员控制台与用户客户端共享设计规则，保留各自导航、权限和会话。
 
-公开用户环境为 Linux 原生 Go 二进制、PostgreSQL 16+ 和独立 HTTPS 入口；systemd 安装工具见 [部署指南](deploy/README.md)。Docker、Chrome、Node、Flutter 不属于基础服务运行前提。浏览器学习执行单独配置受支持的 Chrome 和目标能力依据；构建静态应用时才需要 Node/Flutter。
+公开用户环境为 Linux 原生 Go 二进制、PostgreSQL 16+ 和独立 HTTPS 入口；systemd 安装工具见 [部署指南](deploy/README.md)。正式任务执行使用原生HTTP请求，运行环境不依赖浏览器、播放器或媒体解码器。Docker、Node、Flutter不属于服务运行前提；构建静态应用时才需要Node/Flutter。
 
 开发维护环境有隔离 PostgreSQL、Flutter/Android SDK 与本地浏览器，可用于受控合成身份、接口、媒体夹具和构建验证。本地联调不能证明真实学校、商户、设备或生产容量兼容。本地Git已初始化；提交、推送和发布按用户指令执行。实际环境文件、研究资料、凭据、运行数据、本地验证截图/报告和构建产物不进入版本管理。
 
@@ -57,7 +57,7 @@
 
 领取使用数据库租约与 fencing，崩溃或孤立尝试先核验，再按有界规则处理。外部执行前做新鲜只读检查；已在平台完成的任务不重播、不收费，释放本次预占。验证码、身份失效、403/429、权限问题停止相关操作或进入人工处理，不无限重试。
 
-原生适配器负责身份核验、目录读取与任务确认。可选浏览器执行器只观测真实 HTML5 播放，不伪造时间、跳到末尾、注入完成事件或绕过平台限制。最终确认来自独立平台读取。真实课程兼容性须有对应授权与目标验证，局部媒体夹具通过不能推广到全部课程。
+原生适配器负责身份核验、目录读取、HTTP任务执行与独立平台确认。视频任务从新鲜卡片取得保存位置、时长、请求间隔及签名上下文，按实际经过时间和平台节奏执行；不提供倍速、时长覆盖、重复参数或跳过交互的开关。验证码、抓拍和视频内交互进入人工处理。HTTP请求记录始终没有真实播放证据，执行结束后由独立平台读取决定确认和计量。真实课程兼容性须有对应授权与目标验证，本地协议夹具通过不能推广到全部课程。
 
 ## 7. 计量、资金与题库
 
@@ -103,4 +103,4 @@
 - [当前本地实现与验证](docs/development/local-implementation.md)、[跨模块实现契约](docs/development/implementation-contract.md)
 - [部署工具](deploy/README.md)、[维护与密钥轮换](docs/deployment/README.md)
 - [设计原型交互与本地检查](docs/design/interaction-spec.md)
-- [题库决策0006](docs/decisions/0006-tiku-fork-token-billing.md)、[基础服务决策0007](docs/decisions/0007-server-foundation.md)、[业务实现0008](docs/decisions/0008-business-implementation.md)
+- [题库决策0006](docs/decisions/0006-tiku-fork-token-billing.md)、[基础服务决策0007](docs/decisions/0007-server-foundation.md)、[业务实现0008](docs/decisions/0008-business-implementation.md)、[原生HTTP执行0009](docs/decisions/0009-native-http-execution.md)

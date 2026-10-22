@@ -1,8 +1,7 @@
 # Linux 原生部署工具
 
 这些脚本面向公开的 Linux + systemd + PostgreSQL 16 部署环境，不依赖维护者主机、SSH
-别名、代理或固定私有路径。Docker、Chrome、Flutter 不是基础运行前提；只有主动启用浏览器
-执行时，部署方才需要自行安装并确认受支持的 Chrome。
+别名、代理或固定私有路径。任务通过原生HTTP执行，不需要浏览器、播放器、媒体解码器、Docker或Flutter运行环境。
 
 ## 1. 构建发布目录
 
@@ -128,7 +127,7 @@ sudo ./deploy/backup.sh
   DSN 片段的 parser 原文。多 host DSN 生成对齐的逐 host pgpass；host/port 数量不一致或
   使用 `passfile`/`service`/`servicefile` 时失败关闭。`BYEBYEOCS_LIBPQ` 可指定非默认 libpq。
 - `--local-only` 只保留本地加密归档，不写 offsite 成功状态；本地复制不能冒充异机备份。
-- 备份不读取 `/var/lib/byebyeocs` 下的 Chrome 临时 profile；只打包配置目录及私密 keyring。
+- 备份包含主服务和题库的配置、私密keyring与数据库dump；临时导出和本地运行日志按保留策略管理。
 - 异机目标必须能通过 DNS/hosts 解析且不能是本机；脚本还会比对远端 machine-id，SSH/scp
   使用 BatchMode、StrictHostKeyChecking 和连接/存活超时；运行备份的账号需预置可信
   known_hosts 和受限 SSH 密钥。目标不可解析或无法核对时失败关闭。

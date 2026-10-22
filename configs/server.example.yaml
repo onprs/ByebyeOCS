@@ -42,7 +42,6 @@ storage:
 learning:
   enabled: false
   execution_enabled: false
-  browser_executable: ""
   execution_evidence_reference: ""
   global_concurrency: 4
   account_concurrency: 1

@@ -43,7 +43,6 @@ type Learning struct {
 	SessionExpiryFormat        string `yaml:"session_expiry_format"`
 	DisplayNamePath            string `yaml:"display_name_path"`
 	SchoolPath                 string `yaml:"school_path"`
-	BrowserExecutable          string `yaml:"browser_executable"`
 	ExecutionEvidenceReference string `yaml:"execution_evidence_reference"`
 	GlobalConcurrency          int    `yaml:"global_concurrency"`
 	AccountConcurrency         int    `yaml:"account_concurrency"`
@@ -219,8 +218,8 @@ func validateRuntime(cfg *Config) error {
 	if cfg.Learning.Enabled && (cfg.Learning.SubjectProbeURL == "" || cfg.Learning.SubjectPath == "" || cfg.Learning.SessionExpiryPath == "") {
 		return invalid("平台连接须配置已核实的主体查询地址、主体路径和会话到期路径")
 	}
-	if cfg.Learning.ExecutionEnabled && (cfg.Learning.BrowserExecutable == "" || cfg.Learning.ExecutionEvidenceReference == "") {
-		return invalid("启用浏览器执行须配置浏览器和独立的目标验证依据")
+	if cfg.Learning.ExecutionEnabled && cfg.Learning.ExecutionEvidenceReference == "" {
+		return invalid("启用原生请求执行须配置独立的目标验证依据")
 	}
 	if cfg.Learning.ExecutionEnabled && !cfg.Learning.Enabled {
 		return invalid("执行能力要求先启用已授权平台连接")

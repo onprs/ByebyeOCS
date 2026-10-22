@@ -28,7 +28,9 @@ PostgreSQL 存储。
 
 - `database_dsn_file`：独立 PostgreSQL 连接串文件。建议使用独立数据库和角色（例如
   `ocs_tiku`），不要指向主平台数据库，也不要在主平台 schema 中建表。
+- `database_max_connections`：连接池上限，默认4，可配置1到32；低内存部署可从2开始。
 - `service_token_file`：至少 32 字符的内部服务令牌；主平台用同一令牌调用 v2/内部接口。
+- 连接、服务令牌和模型密钥的相对路径均以配置文件目录为基准。
 - `models[]`：`id` 即主平台保存的 `provider_ref`；`base_url`、`model`、`api_key_file`
   只存在于 fork 配置。`vision` 表示是否直接把题目图片交给回答模型。
 - `default_model_id` 可为空；为空时 v2 请求必须显式选择模型，v1 会返回未配置错误。

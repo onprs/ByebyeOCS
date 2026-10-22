@@ -108,16 +108,12 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 	}
 	runtime.Auth = identity
 	ops.SetRevokeUser(identity.RevokeUser)
-	concurrency := cfg.Learning.GlobalConcurrency
-	if deps.Executor != nil && concurrency > 1 {
-		concurrency = 1
-	}
 	learn, err := learning.New(db.Pool(), &learning.Options{Sessions: identity, Platform: deps.Platform, Executor: deps.Executor, ExecutionEnabled: cfg.Learning.ExecutionEnabled, Logger: logger, Billing: &taskBilling{book: book}, BillingConfirmationRecorder: &taskBilling{book: book}, BillingSettlementReporter: &taskBilling{book: book}, QuestionsPolicyValidator: learning.QuestionsPolicyValidatorFunc(func(ctx context.Context, modelID, mode string) error {
 		if runtime.Questions == nil {
 			return fault.New("service_unavailable", "题库模型服务尚未准备好")
 		}
 		return runtime.Questions.ValidateQuestionPolicy(ctx, modelID, mode)
-	}), GlobalConcurrency: concurrency, AccountConcurrency: cfg.Learning.AccountConcurrency, IdentityFingerprint: func(namespace, subject string) string {
+	}), GlobalConcurrency: cfg.Learning.GlobalConcurrency, AccountConcurrency: cfg.Learning.AccountConcurrency, IdentityFingerprint: func(namespace, subject string) string {
 		sum := hmac.New(sha256.New, subjectKey)
 		sum.Write([]byte(namespace))
 		sum.Write([]byte{0})
