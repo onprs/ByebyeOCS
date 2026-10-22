@@ -59,13 +59,14 @@
 | tasks | 规范任务、state、desired_state、control_version | 稳定任务范围唯一 |
 | execution_attempts | task_id、阶段、版本、token、租约、检查点 | 一个任务最多一个有效副作用尝试 |
 | progress_evidence | task_id、attempt_id、来源、查询时间、事实 | 观察、平台确认、媒体证据分开 |
-| question_queries / submissions | 题目摘要、答案引用、确认版本、提交状态 | 查询与提交分离，原题敏感字段限期保留 |
+| question_queries / learning_work_runs | 查询内容与用量、冻结安排版本、试卷指纹、查询引用和提交状态 | 查询与自动提交分离，原题敏感字段限期保留 |
 | wallets / ledger_accounts | user_id、currency、可用/预占缓存 | 用户币种钱包唯一，缓存可由账本重建 |
 | journals / postings | 业务键、关联对象、账本账户、整数变动 | 业务键唯一，每笔 journal 变动和为零 |
 | question_model_offerings | 公开名称、fork 上游引用、能力、启停、默认、价格版本、输入/输出微元价、缓存策略 | 主平台发布给用户的模型；不保存上游密钥 |
 | question_queries | 用户/任务、公开条目、作答方式、缓存作用域、fork request_id、答案快照、用量汇总、价格版本、微元成本、完成状态 | 查询与提交分离；相同 request_id 幂等 |
 | question_calls | query_id、slot（caption/answer/agent）、输入/输出/total token、上游模型、状态、时间 | 每次模型调用的分解；用于展示和核对 |
-| question_submissions | query_id、题目/答案版本、确认令牌、平台提交事实 | 用户确认后提交；失败不自动重放 |
+| learning_work_runs | task_id、plan_revision_id、试卷指纹、公开模型、模式、query_ids、答案摘要、提交状态 | 任务级最终提交独占，提交前检查租约；结果不明只核验 |
+| question_submissions | 旧接口历史记录 | 新流程不再写入；历史记录保留 |
 | usage_meters / usage_records / usage_settlements | 计量版本、稳定范围、唯一用量事件、证据、结算/冲正引用 | 主服务和题库独立；相同量跨重试和安排只计一次 |
 | charge_intents / holds | 收费主体键、价格快照、预占/消耗/释放 | 主服务和题库独立范围，重试共享意图，不按尝试 ID 新收费 |
 | recharge_orders / payment_attempts | 本地单号、金额、渠道、支付/到账状态 | 商户单号唯一，渠道交易号唯一 |

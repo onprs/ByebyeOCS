@@ -5,7 +5,7 @@
 - 查看课程、章节、任务点与学习资料，创建和修改多课程安排。
 - 查看任务状态、执行记录、平台确认和媒体记录，暂停、继续或取消任务。
 - 查看钱包、充值订单、账务明细和题库用量；付款与余额到账分别显示。
-- 选择管理员发布的模型，使用精确缓存优先或每次调用模型，并在提交答案前确认。
+- 选择管理员发布的模型，按精确缓存优先或每次调用模型作答；安排启用后自动取题、填写、提交并复核结果。
 - 管理会话、通知、数据导出与删除申请；默认石墨，支持青禾、靛蓝及浅色、深色主题。
 
 管理员可管理用户与任务、公开模型、计费规则、订单、对账、人工余额调整和权限。普通用户使用学习通身份进入，无需注册第二套账号。
@@ -14,11 +14,15 @@
 
 服务端支持 Linux amd64/arm64，需要 PostgreSQL 16 或以上。生产访问使用两个独立 HTTPS 地址；管理员首次创建需要密码和 TOTP 动态验证码。学习任务通过原生请求执行，运行已构建的服务不需要浏览器、播放器、Node.js、Flutter、Docker或桌面环境。
 
-从完整源码构建，需要 Go 1.26 或以上、Node.js 22.12 或以上、npm、Flutter 3.47.7、GNU Make 和 Python 3。在源码根目录执行：
+从完整源码构建，需要 Git、Go 1.26 或以上、Node.js 22.12 或以上、npm、Flutter 3.47.7、GNU Make 和 Python 3：
 
 ```bash
+git clone --recurse-submodules https://github.com/onprs/ByebyeOCS.git
+cd ByebyeOCS
 make bundle VERSION=0.1.0 GOARCH=amd64
 ```
+
+已有 Git 源码先执行 `git submodule update --init --recursive`，再运行构建命令。
 
 构建目录位于 `dist/byebyeocs-0.1.0-linux-amd64/`。将其复制到目标 Linux 主机后，按 [部署指南](deploy/README.md) 安装，配置自己的数据库和两个 HTTPS 地址，创建管理员，再启动服务。arm64 主机使用 `GOARCH=arm64`。
 

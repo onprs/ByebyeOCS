@@ -1,7 +1,3 @@
-import 'dart:convert';
-
-import 'package:crypto/crypto.dart';
-
 import '../api/json.dart';
 import 'plan.dart';
 
@@ -311,27 +307,6 @@ class QuestionQueryRequest {
           'images': prompt.images,
         },
         'budget': {'max_output_tokens': maxOutputTokens},
-      };
-}
-
-String answerSha256(String answer) =>
-    sha256.convert(utf8.encode(answer)).toString();
-
-class QuestionSubmissionRequest {
-  const QuestionSubmissionRequest({
-    required this.queryId,
-    required this.answerSha256,
-    this.confirmed = true,
-  });
-
-  final String queryId;
-  final String answerSha256;
-  final bool confirmed;
-
-  Map<String, dynamic> toJson() => {
-        'query_id': queryId,
-        'answer_sha256': answerSha256,
-        'confirmed': confirmed,
       };
 }
 

@@ -533,7 +533,7 @@ func (s *Service) adminTestOffering(w http.ResponseWriter, r *http.Request) {
 		errorCode = "service_unavailable"
 		var forkErr *ForkError
 		if ok := asForkError(testErr, &forkErr); ok {
-			errorCode = forkErr.Code
+			errorCode = safeForkCode(forkErr.Code)
 		}
 	}
 	if result.Status == "failed" && status == "ok" {

@@ -29,31 +29,26 @@ extension AnswerModeValue on AnswerMode {
   }
 }
 
-/// 安排级题库策略由服务端按 revision 冻结；执行与提交能力当前固定未开放。
+/// 安排级题库策略由服务端按 revision 冻结；启用后自动取题、查询、填写并提交。
 class QuestionPolicy {
   const QuestionPolicy({
     this.enabled = false,
     this.modelOfferingId,
     this.answerMode = AnswerMode.cacheFirst,
-    this.requireManualConfirmation = true,
-    this.executionAvailable = false,
-    this.submissionAvailable = false,
+    this.requireManualConfirmation = false,
   });
 
   final bool enabled;
   final String? modelOfferingId;
   final AnswerMode answerMode;
+
+  /// 兼容旧服务的只读字段；自动执行不需要人工确认。
   final bool requireManualConfirmation;
-  final bool executionAvailable;
-  final bool submissionAvailable;
 
   QuestionPolicy copyWith({
     bool? enabled,
     Object? modelOfferingId = _unset,
     AnswerMode? answerMode,
-    bool? requireManualConfirmation,
-    bool? executionAvailable,
-    bool? submissionAvailable,
   }) {
     return QuestionPolicy(
       enabled: enabled ?? this.enabled,
@@ -61,10 +56,6 @@ class QuestionPolicy {
           ? this.modelOfferingId
           : modelOfferingId as String?,
       answerMode: answerMode ?? this.answerMode,
-      requireManualConfirmation:
-          requireManualConfirmation ?? this.requireManualConfirmation,
-      executionAvailable: executionAvailable ?? this.executionAvailable,
-      submissionAvailable: submissionAvailable ?? this.submissionAvailable,
     );
   }
 
@@ -73,7 +64,7 @@ class QuestionPolicy {
       'enabled': enabled,
       'model_offering_id': enabled ? modelOfferingId : null,
       'answer_mode': answerMode.value,
-      'require_manual_confirmation': requireManualConfirmation,
+      'require_manual_confirmation': false,
     };
   }
 
@@ -84,10 +75,7 @@ class QuestionPolicy {
       enabled: readBool(map, 'enabled') ?? false,
       modelOfferingId: readString(map, 'model_offering_id'),
       answerMode: AnswerModeValue.parse(readString(map, 'answer_mode')),
-      requireManualConfirmation:
-          readBool(map, 'require_manual_confirmation') ?? true,
-      executionAvailable: readBool(map, 'execution_available') ?? false,
-      submissionAvailable: readBool(map, 'submission_available') ?? false,
+      requireManualConfirmation: false,
     );
   }
 
@@ -287,9 +275,6 @@ class PlanDraft {
     if (priority < 0 || priority > 100) errors.add('优先级设置无效');
     if (questionPolicy.enabled && questionPolicy.modelOfferingId == null) {
       errors.add('开启题库策略时必须选择一个已发布模型');
-    }
-    if (!questionPolicy.requireManualConfirmation) {
-      errors.add('当前版本只支持提交前人工确认');
     }
     return errors;
   }

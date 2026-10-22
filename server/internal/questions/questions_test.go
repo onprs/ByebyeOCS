@@ -5,8 +5,6 @@ package questions
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -147,10 +145,9 @@ type envOptions struct {
 	auto        bool
 	autoAllowed func(context.Context) (bool, error)
 	billing     bool
-	submission  bool
 	shared      bool
 	allowShared bool
-	fork        *fakeFork
+	fork        ForkClient
 	maxInput    int
 }
 
@@ -160,14 +157,18 @@ func newTestEnv(t *testing.T, options envOptions) *testEnv {
 	userID := addUser(t, pool)
 	adminID := addAdmin(t, pool)
 	fork := options.fork
+	var fakeForkClient *fakeFork
 	if fork == nil {
-		fork = &fakeFork{}
+		fakeForkClient = &fakeFork{}
+		fork = fakeForkClient
+	} else if value, ok := fork.(*fakeFork); ok {
+		fakeForkClient = value
 	}
 	var billing Billing
-	var fake *fakeBilling
+	var fakeBill *fakeBilling
 	if options.billing {
-		fake = &fakeBilling{}
-		billing = fake
+		fakeBill = &fakeBilling{}
+		billing = fakeBill
 	}
 	maxInput := options.maxInput
 	if maxInput == 0 {
@@ -177,8 +178,8 @@ func newTestEnv(t *testing.T, options envOptions) *testEnv {
 		Fork: fork, Billing: billing, AutomaticCharging: options.auto,
 		AutomaticChargingAllowed: options.autoAllowed, MaxInputTokens: maxInput,
 		CacheScopeSecret: []byte("0123456789abcdef0123456789abcdef"),
-		AllowSharedCache: options.allowShared, SubmissionEnabled: options.submission,
-		MaxOutputTokens: 256, MaxImages: 4, MaxImageBytes: 1 << 20, MaxImagePixels: 1_000_000,
+		AllowSharedCache: options.allowShared,
+		MaxOutputTokens:  256, MaxImages: 4, MaxImageBytes: 1 << 20, MaxImagePixels: 1_000_000,
 		Now: func() time.Time { return time.Now().UTC() },
 	})
 	if err != nil {
@@ -186,7 +187,7 @@ func newTestEnv(t *testing.T, options envOptions) *testEnv {
 	}
 	mux := http.NewServeMux()
 	service.Register(mux)
-	return &testEnv{pool: pool, service: service, mux: mux, fork: fork, billing: fake, userID: userID, adminID: adminID}
+	return &testEnv{pool: pool, service: service, mux: mux, fork: fakeForkClient, billing: fakeBill, userID: userID, adminID: adminID}
 }
 
 func addUser(t *testing.T, pool *pgxpool.Pool) string {
@@ -752,28 +753,11 @@ func TestAdminTestsInvalidationAndPermissions(t *testing.T) {
 	}
 }
 
-func TestSubmissionGateAndCacheReport(t *testing.T) {
-	env := newTestEnv(t, envOptions{submission: false})
-	env.createOffering(t, "提交模型", "internal-submit", nil, true)
-	view := decodeQuery(t, env.call(t, http.MethodPost, "/api/v1/question-queries", queryBody("提交题", "cache_first"), env.user(),
-		map[string]string{"Idempotency-Key": "submit-key-0001"}))
-	sum := sha256.Sum256([]byte(view.Answer))
-	hash := hex.EncodeToString(sum[:])
-	unconfirmed := env.call(t, http.MethodPost, "/api/v1/question-submissions",
-		map[string]any{"query_id": view.ID, "answer_sha256": hash, "confirmed": false}, env.user(), nil)
-	if unconfirmed.Code != http.StatusPreconditionRequired {
-		t.Fatalf("未确认提交应 428：%d", unconfirmed.Code)
-	}
-	blocked := env.call(t, http.MethodPost, "/api/v1/question-submissions",
-		map[string]any{"query_id": view.ID, "answer_sha256": hash, "confirmed": true}, env.user(), nil)
-	if blocked.Code != http.StatusServiceUnavailable || errorCode(blocked) != "platform_submission_unavailable" {
-		t.Fatalf("未配置平台提交能力不得伪成功：%d %s", blocked.Code, blocked.Body.String())
-	}
-	var count int
-	if err := env.pool.QueryRow(context.Background(), `SELECT count(*) FROM public.question_submissions
-		WHERE query_id = $1 AND status = 'blocked'`, view.ID).Scan(&count); err != nil || count != 1 {
-		t.Fatalf("应记录一次被阻止的提交尝试：%v", err)
-	}
+func TestCacheReportOwnership(t *testing.T) {
+	env := newTestEnv(t, envOptions{})
+	env.createOffering(t, "缓存报告模型", "internal-report", nil, true)
+	view := decodeQuery(t, env.call(t, http.MethodPost, "/api/v1/question-queries", queryBody("报告题", "cache_first"), env.user(),
+		map[string]string{"Idempotency-Key": "report-key-0001"}))
 	report := env.call(t, http.MethodPost, "/api/v1/question-cache-reports",
 		map[string]any{"query_id": view.ID, "reason": "答案与教材不一致"}, env.user(), nil)
 	if report.Code != http.StatusCreated || !strings.Contains(report.Body.String(), `"status":"pending"`) {

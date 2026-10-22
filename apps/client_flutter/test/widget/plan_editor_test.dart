@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:byebyeocs_client/core/models/plan.dart';
@@ -45,7 +47,7 @@ void main() {
     expect(find.text('载入最新版本'), findsOneWidget);
     expect(find.text('设计思维与创新方法'), findsWidgets);
   });
-  testWidgets('安排编辑载入已发布模型与作答模式，不显示自动提交能力', (tester) async {
+  testWidgets('安排编辑按自动答题展示策略，旧人工确认字段不再生效', (tester) async {
     final planMap = Map<String, dynamic>.from(planFixture);
     planMap['question_policy'] = {
       'enabled': true,
@@ -55,6 +57,7 @@ void main() {
       'execution_available': false,
       'submission_available': false,
     };
+    Map<String, dynamic>? savedBody;
     final plan = LearningPlan.parse(planMap);
     final server = TestServer(
       overrides: {
@@ -62,6 +65,17 @@ void main() {
               planMap,
               headers: {'etag': '"v3"'},
             ),
+        'PATCH /api/v1/plans/p1': (request) async {
+          savedBody = jsonDecode(request.body) as Map<String, dynamic>;
+          return jsonResponse(
+            {
+              ...planMap,
+              'version': 4,
+              'current_revision_id': 'r2',
+            },
+            headers: {'etag': '"v4"'},
+          );
+        },
       },
     );
 
@@ -74,8 +88,18 @@ void main() {
     expect(find.text('题库策略'), findsOneWidget);
     expect(find.text('标准模型 · 文本 · 单价待公布'), findsOneWidget);
     expect(find.text('always_llm'), findsOneWidget);
-    expect(find.textContaining('固定开启'), findsOneWidget);
-    expect(find.textContaining('当前版本不会自动答题，也不会自动提交'), findsOneWidget);
-    expect(find.textContaining('自动提交已具备'), findsNothing);
+    expect(find.textContaining('开启后自动查询并提交测验答案'), findsOneWidget);
+    expect(find.textContaining('提交结果以平台复核为准'), findsOneWidget);
+    expect(find.textContaining('人工确认'), findsNothing);
+    expect(find.textContaining('不会自动'), findsNothing);
+
+    await tester.tap(find.text('保存安排'));
+    await settle(tester);
+
+    final policy = savedBody!['question_policy'] as Map<String, dynamic>;
+    expect(policy['enabled'], isTrue);
+    expect(policy['model_offering_id'], 'qm1');
+    expect(policy['answer_mode'], 'always_llm');
+    expect(policy['require_manual_confirmation'], isFalse);
   });
 }

@@ -48,6 +48,8 @@ const (
 	FailureCapabilityMissing  FailureClass = "capability_missing"
 	FailureInvalidTask        FailureClass = "invalid_task"
 	FailurePermanent          FailureClass = "permanent"
+	FailureAnswerUnavailable  FailureClass = "answer_unavailable"
+	FailureSubmissionUnknown  FailureClass = "submission_unknown"
 	FailureStopped            FailureClass = "stopped"
 	FailureCancelled          FailureClass = "cancelled"
 )
@@ -223,8 +225,8 @@ func (c ExecutorCapabilities) Supports(kind string) bool {
 	return false
 }
 
-// QuestionPolicy 是安排版本的题库策略快照。当前没有答题执行/提交能力，
-// 该快照只冻结用户选择，不触发模型调用，也不代表自动提交可用。
+// QuestionPolicy 是安排版本的自动做题策略快照。
+// RequireManualConfirmation 仅保留旧数据兼容；自动做题始终无需人工确认。
 type QuestionPolicy struct {
 	Enabled                   bool
 	ModelOfferingID           string
@@ -251,6 +253,7 @@ type ExecutionRequest struct {
 	UserID         string
 	FenceToken     int64
 	Session        []byte
+	TaskKind       string
 	Task           PlatformTaskRef
 	PlanRevision   string
 	Priority       int

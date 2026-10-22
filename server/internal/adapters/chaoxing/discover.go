@@ -17,12 +17,11 @@ import (
 )
 
 var (
-	courseLinkPattern  = regexp.MustCompile(`stucoursemiddle\?courseid=(\d+)&clazzid=(\d+)&cpi=(\d+)`)
-	courseNamePattern  = regexp.MustCompile(`class="course-name[^"]*"[^>]*title="([^"]*)"`)
-	knowledgePattern   = regexp.MustCompile(`toOld\(\s*'(\d+)'\s*,\s*'(\d+)'\s*,\s*'(\d+)'`)
-	cardsPattern       = regexp.MustCompile(`\bmArg\s*=\s*`)
-	embedPattern       = regexp.MustCompile(`(?i)\bmodule\s*=\s*["']insertvideo["']`)
-	attachmentIDFields = []string{"objectId", "objectid"}
+	courseLinkPattern = regexp.MustCompile(`stucoursemiddle\?courseid=(\d+)&clazzid=(\d+)&cpi=(\d+)`)
+	courseNamePattern = regexp.MustCompile(`class="course-name[^"]*"[^>]*title="([^"]*)"`)
+	knowledgePattern  = regexp.MustCompile(`toOld\(\s*'(\d+)'\s*,\s*'(\d+)'\s*,\s*'(\d+)'`)
+	cardsPattern      = regexp.MustCompile(`\bmArg\s*=\s*`)
+	embedPattern      = regexp.MustCompile(`(?i)\bmodule\s*=\s*["']insertvideo["']`)
 )
 
 func text(value any) string {
@@ -232,23 +231,12 @@ func (p *Platform) readCards(ctx context.Context, session Session, course learni
 	attachments := make([]learning.PlatformAttachment, 0, len(rawAttachments))
 	for index, raw := range rawAttachments {
 		item := mapValue(raw)
-		objectID := ""
-		for _, field := range attachmentIDFields {
-			if objectID = text(item[field]); objectID != "" {
-				break
-			}
-		}
+		taskPoint := text(item["jobid"])
+		kind := normalizeAttachmentKind(text(item["type"]))
+		objectID := attachmentObjectID(item, kind, taskPoint)
 		if objectID == "" {
 			skipped++
 			continue
-		}
-		taskPoint := text(item["jobid"])
-		kind := strings.ToLower(strings.TrimSpace(text(item["type"])))
-		if kind == "" {
-			kind = "other"
-		}
-		if len(kind) > 32 {
-			kind = "other"
 		}
 		passed := false
 		passedKnown := false
@@ -298,6 +286,33 @@ func (p *Platform) readAttachments(ctx context.Context, session Session, course 
 		}
 	}
 	return attachments, pending, nil
+}
+
+// attachmentObjectID 复用同一套资源标识规则：测验的 workid 经常没有 objectId，
+// 此时使用任务点编号作为稳定对象标识；其他类型缺少对象标识时仍按普通附件跳过。
+func attachmentObjectID(item map[string]any, kind, taskPoint string) string {
+	objectID := firstText(item["objectId"], item["objectid"], mapValue(item["property"])["objectid"])
+	if objectID == "" && kind == "quiz" && taskPoint != "" {
+		return taskPoint
+	}
+	return objectID
+}
+
+// normalizeAttachmentKind 把平台卡片类型映射为项目内任务种类。
+// 章节测验在卡片里使用 workid/work，统一记为 quiz；其他未知类型保持原值。
+func normalizeAttachmentKind(raw string) string {
+	kind := strings.ToLower(strings.TrimSpace(raw))
+	switch kind {
+	case "workid", "work", "quiz":
+		return "quiz"
+	}
+	if kind == "" {
+		return "other"
+	}
+	if len(kind) > 32 {
+		return "other"
+	}
+	return kind
 }
 
 func nonNegative(value float64) float64 {

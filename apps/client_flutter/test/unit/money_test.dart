@@ -3,7 +3,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:byebyeocs_client/core/api/api_response.dart';
 import 'package:byebyeocs_client/core/format/formatters.dart';
 import 'package:byebyeocs_client/core/models/plan.dart';
-import 'package:byebyeocs_client/core/models/question.dart';
 import 'package:byebyeocs_client/core/models/wallet.dart';
 
 void main() {
@@ -70,13 +69,6 @@ void main() {
     });
   });
 
-  test('答案摘要与后端提交契约一致', () {
-    expect(
-      answerSha256('A'),
-      '559aead08264d5795d3909718cdd05abd49572e84fe55590eef31a88a08fdffd',
-    );
-  });
-
   group('版本与安排解析', () {
     test('ETag 解析为版本号', () {
       expect(parseVersion('"v3"'), 3);
@@ -135,9 +127,7 @@ void main() {
       expect(plan.questionPolicy.enabled, isTrue);
       expect(plan.questionPolicy.modelOfferingId, 'qm_standard');
       expect(plan.questionPolicy.answerMode, AnswerMode.alwaysLlm);
-      expect(plan.questionPolicy.requireManualConfirmation, isTrue);
-      expect(plan.questionPolicy.executionAvailable, isFalse);
-      expect(plan.questionPolicy.submissionAvailable, isFalse);
+      expect(plan.questionPolicy.requireManualConfirmation, isFalse);
 
       const draft = PlanDraft(
         name: '题库安排',
@@ -154,7 +144,7 @@ void main() {
       expect(policy['enabled'], isTrue);
       expect(policy['model_offering_id'], 'qm_standard');
       expect(policy['answer_mode'], 'always_llm');
-      expect(policy['require_manual_confirmation'], isTrue);
+      expect(policy['require_manual_confirmation'], isFalse);
       expect(policy.containsKey('mode'), isFalse);
       expect(policy.containsKey('upstream'), isFalse);
 
@@ -167,7 +157,37 @@ void main() {
       expect(missing.validate(), contains('开启题库策略时必须选择一个已发布模型'));
     });
 
-    test('关闭题库策略时提交 null 模型且只保留人工确认', () {
+    test('人工确认兼容字段始终按 false 提交并允许自动执行', () {
+      const draft = PlanDraft(
+        name: '自动答题安排',
+        courseIds: ['c1'],
+        taskTypes: ['quiz'],
+        questionPolicy: QuestionPolicy(
+          enabled: true,
+          modelOfferingId: 'qm_standard',
+          requireManualConfirmation: true,
+        ),
+      );
+      final policy = draft.toJson()['question_policy'] as Map<String, dynamic>;
+      expect(policy['require_manual_confirmation'], isFalse);
+      expect(draft.validate(), isNot(contains('当前版本只支持提交前人工确认')));
+
+      final missingField = LearningPlan.parse({
+        'id': 'p1',
+        'name': '自动答题安排',
+        'status': 'active',
+        'version': 1,
+        'priority': 50,
+        'scope': {
+          'kind': 'all',
+          'course_ids': ['c1']
+        },
+        'question_policy': {'enabled': true, 'model_offering_id': 'qm1'},
+      });
+      expect(missingField.questionPolicy.requireManualConfirmation, isFalse);
+    });
+
+    test('关闭题库策略时提交 null 模型且不要求人工确认', () {
       final json = const PlanDraft(
         name: '普通安排',
         courseIds: ['c1'],
@@ -177,7 +197,7 @@ void main() {
       expect(policy['enabled'], isFalse);
       expect(policy['model_offering_id'], isNull);
       expect(policy['answer_mode'], 'cache_first');
-      expect(policy['require_manual_confirmation'], isTrue);
+      expect(policy['require_manual_confirmation'], isFalse);
     });
 
     test('安排草稿校验章节与课程', () {

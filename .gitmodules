@@ -1,0 +1,3 @@
+[submodule "tiku"]
+	path = services/tiku
+	url = https://github.com/onprs/ByebyeOCS-Tiku.git

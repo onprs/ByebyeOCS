@@ -96,6 +96,21 @@ type ForkError struct {
 
 func (e *ForkError) Error() string { return e.Message }
 
+// safeForkCode 只允许有界的机器码，避免把上游自由文本或超长内容写入查询事实。
+func safeForkCode(code string) string {
+	code = strings.TrimSpace(code)
+	if code == "" || len(code) > 64 {
+		return "service_unavailable"
+	}
+	for _, c := range code {
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_' {
+			continue
+		}
+		return "service_unavailable"
+	}
+	return code
+}
+
 type ForkClient interface {
 	Answer(ctx context.Context, request ForkAnswerRequest, idempotencyKey string) (ForkAnswerResponse, error)
 	TestModel(ctx context.Context, providerRef, kind string, confirmCost bool) (ForkTestResult, error)
@@ -170,10 +185,7 @@ func (c *httpFork) doJSON(ctx context.Context, method, path, idempotencyKey stri
 			} `json:"error"`
 		}
 		_ = json.Unmarshal(data, &envelope)
-		code := envelope.Error.Code
-		if code == "" {
-			code = "service_unavailable"
-		}
+		code := safeForkCode(envelope.Error.Code)
 		message := envelope.Error.Message
 		if message == "" {
 			message = "题库服务返回错误"

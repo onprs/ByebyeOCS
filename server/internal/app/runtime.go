@@ -108,7 +108,20 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 	}
 	runtime.Auth = identity
 	ops.SetRevokeUser(identity.RevokeUser)
-	learn, err := learning.New(db.Pool(), &learning.Options{Sessions: identity, Platform: deps.Platform, Executor: deps.Executor, ExecutionEnabled: cfg.Learning.ExecutionEnabled, Logger: logger, Billing: &taskBilling{book: book}, BillingConfirmationRecorder: &taskBilling{book: book}, BillingSettlementReporter: &taskBilling{book: book}, QuestionsPolicyValidator: learning.QuestionsPolicyValidatorFunc(func(ctx context.Context, modelID, mode string) error {
+	executor := deps.Executor
+	automaticAnswers := &workAnswerer{}
+	if cfg.Learning.ExecutionEnabled && cfg.Questions.Enabled {
+		if workPlatform, ok := deps.Platform.(learning.WorkPlatform); ok {
+			executor, err = learning.NewAutomaticExecutor(db.Pool(), learning.AutomaticExecutorOptions{
+				Enabled: true, Platform: workPlatform, Answerer: automaticAnswers,
+				Fallback: deps.Executor, BeforeExternal: ops.CheckExternalRequest, AcquireQuestion: ops.WaitForQuestion,
+			})
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	learn, err := learning.New(db.Pool(), &learning.Options{Sessions: identity, Platform: deps.Platform, Executor: executor, ExecutionEnabled: cfg.Learning.ExecutionEnabled, RecoveryRetry: true, Logger: logger, Billing: &taskBilling{book: book}, BillingConfirmationRecorder: &taskBilling{book: book}, BillingSettlementReporter: &taskBilling{book: book}, QuestionsPolicyValidator: learning.QuestionsPolicyValidatorFunc(func(ctx context.Context, modelID, mode string) error {
 		if runtime.Questions == nil {
 			return fault.New("service_unavailable", "题库模型服务尚未准备好")
 		}
@@ -138,6 +151,7 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 		return nil, err
 	}
 	runtime.Questions = answers
+	automaticAnswers.questions = answers
 	stream := events.New(db.Pool())
 	if err := stream.SetMaxStreams(cfg.Operations.MaxEventStreams); err != nil {
 		return nil, err

@@ -305,7 +305,7 @@ class _PlansPageState extends ConsumerState<PlansPage> {
                   const SizedBox(height: 12),
                   const InlineNotice(
                     icon: Icons.quiz_outlined,
-                    message: '题库策略随安排版本冻结；当前版本不会自动执行答题或自动提交，提交前仍需人工确认。',
+                    message: '题库策略随安排版本冻结；开启后自动查询并提交测验答案。',
                   ),
                 ],
                 if (hasRunning) ...[

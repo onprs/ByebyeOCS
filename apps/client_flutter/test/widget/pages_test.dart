@@ -99,6 +99,31 @@ void main() {
     expect(find.textContaining('预计'), findsWidgets);
   });
 
+  testWidgets('安排页说明题库策略自动执行，不要求人工确认', (tester) async {
+    final planMap = Map<String, dynamic>.from(planFixture);
+    planMap['question_policy'] = {
+      'enabled': true,
+      'model_offering_id': 'qm1',
+      'answer_mode': 'always_llm',
+      'require_manual_confirmation': true,
+    };
+    final server = TestServer(
+      overrides: {
+        'GET /api/v1/plans': (_) async => jsonResponse({
+              'items': [planMap],
+              'next_cursor': '',
+            }),
+      },
+    );
+
+    await pumpTestPage(tester, const PlansPage(), handler: server.call);
+
+    expect(find.text('题库策略已开启'), findsOneWidget);
+    expect(find.textContaining('开启后自动查询并提交测验答案'), findsOneWidget);
+    expect(find.textContaining('人工确认'), findsNothing);
+    expect(find.textContaining('不会自动执行答题'), findsNothing);
+  });
+
   testWidgets('钱包区分待支付、支付成功待入账与已到账', (tester) async {
     await pumpTestPage(tester, const WalletPage());
 

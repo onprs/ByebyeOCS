@@ -66,26 +66,4 @@ class QuestionRepository {
       applied: true,
     );
   }
-
-  Future<TaskControlResult> submit({
-    required QuestionQuery query,
-    required String idempotencyKey,
-  }) async {
-    final answer = query.answer ?? '';
-    final response = await _api.post(
-      'question-submissions',
-      body: QuestionSubmissionRequest(
-        queryId: query.id,
-        answerSha256: answerSha256(answer),
-        confirmed: true,
-      ).toJson(),
-      idempotencyKey: idempotencyKey,
-    );
-    final map = response.object;
-    return TaskControlResult(
-      taskId: readString(map, 'query_id') ?? query.id,
-      state: readString(map, 'status') ?? 'submitted',
-      applied: readBool(map, 'submitted') ?? true,
-    );
-  }
 }

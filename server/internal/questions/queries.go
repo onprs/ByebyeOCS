@@ -18,7 +18,8 @@ import (
 )
 
 const queryColumns = `id, user_id::text, idempotency_key, request_fingerprint, offering_id::text,
-	offering_public_id, offering_display_name, mode, cache_scope, scope_key_hash, COALESCE(question_title, ''),
+	offering_public_id, offering_display_name, COALESCE(offering_provider_ref, ''), mode, cache_scope,
+	scope_key_hash, COALESCE(question_title, ''),
 	COALESCE(question_options, ''), question_type, image_count, status, COALESCE(answer, ''), cache_hit,
 	COALESCE(cache_entry_id, ''), cache_created_at, usage, pricing, billing_state,
 	COALESCE(billing_hold_id, ''), reserved_minor, content_expired,
@@ -32,6 +33,7 @@ type queryRecord struct {
 	OfferingID          string
 	OfferingPublicID    string
 	OfferingDisplayName string
+	OfferingProviderRef string
 	Mode                string
 	CacheScope          string
 	ScopeKeyHash        string
@@ -61,7 +63,8 @@ type queryRecord struct {
 func scanQuery(row pgx.Row) (*queryRecord, error) {
 	var q queryRecord
 	err := row.Scan(&q.ID, &q.UserID, &q.IdempotencyKey, &q.Fingerprint, &q.OfferingID,
-		&q.OfferingPublicID, &q.OfferingDisplayName, &q.Mode, &q.CacheScope, &q.ScopeKeyHash, &q.QuestionTitle,
+		&q.OfferingPublicID, &q.OfferingDisplayName, &q.OfferingProviderRef, &q.Mode, &q.CacheScope,
+		&q.ScopeKeyHash, &q.QuestionTitle,
 		&q.QuestionOptions, &q.QuestionType, &q.ImageCount, &q.Status, &q.Answer, &q.CacheHit,
 		&q.CacheEntryID, &q.CacheCreatedAt, &q.Usage, &q.Pricing, &q.BillingState,
 		&q.BillingHoldID, &q.ReservedMinor, &q.ContentExpired,
@@ -226,13 +229,13 @@ func (s *Service) insertPendingQuery(ctx context.Context, queryID string, actorI
 	offering *Offering, input QueryInput, scopeHash string, images imageValidation) (bool, *queryRecord, error) {
 	tag, err := s.pool.Exec(ctx, `INSERT INTO public.question_queries
 		(id, user_id, idempotency_key, request_fingerprint, offering_id, offering_public_id, offering_display_name,
-		 mode, cache_scope, scope_key_hash, question_title, question_options, question_type, image_count,
-		 status, usage, pricing, billing_state, fork_request_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'pending','{}','{}','pending',$1)
+		 offering_provider_ref, mode, cache_scope, scope_key_hash, question_title, question_options, question_type,
+		 image_count, status, usage, pricing, billing_state, fork_request_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending','{}','{}','pending',$1)
 		ON CONFLICT (user_id, idempotency_key) DO NOTHING`,
 		queryID, actorID, idem, fp, offering.ID, offering.PublicID, offering.DisplayName,
-		input.Mode, input.CacheScope, scopeHash, input.Question.Title, input.Question.Options,
-		input.Question.Type, images.Count)
+		offering.ProviderRef, input.Mode, input.CacheScope, scopeHash, input.Question.Title,
+		input.Question.Options, input.Question.Type, images.Count)
 	if err != nil {
 		return false, nil, err
 	}
@@ -288,7 +291,7 @@ func (s *Service) waitForQuery(ctx context.Context, userID, key string) (*queryR
 			return q, nil
 		}
 		// 崩溃遗留的 pending 可以安全重驱动；fork 使用同一 request_id 幂等。
-		if s.now().Sub(q.UpdatedAt) > 2*time.Minute {
+		if s.now().Sub(q.UpdatedAt) > s.stalePendingAge() {
 			return q, nil
 		}
 		if time.Now().After(deadline) {
@@ -302,184 +305,199 @@ func (s *Service) waitForQuery(ctx context.Context, userID, key string) (*queryR
 	}
 }
 
-func (s *Service) createQuery(w http.ResponseWriter, r *http.Request) {
-	actor, ok := web.Require(w, r, "user", "self")
-	if !ok {
-		return
+// Answer 执行一次完整的题库作答业务链，供 HTTP 入口和后台自动做题直接调用。
+//
+// userID 必须是平台内部用户 UUID。idempotencyKey 必须在同一用户内稳定且唯一；
+// 后台恢复同一任务、同一试卷、同一题时应复用同一键。重复调用返回已有结果、
+// 短暂 request_in_progress，或对陈旧 pending 做一次恢复；恢复复用同一 fork
+// request_id，不产生第二次模型调用、预占或扣费。
+//
+// 返回的错误均为 *QueryError，可按 Code 分类；Message 不含 fork 原始响应或密钥。
+func (s *Service) Answer(ctx context.Context, userID, idempotencyKey string, input QueryInput) (QueryView, error) {
+	if !web.ValidID(userID) {
+		return QueryView{}, invalidUserError()
 	}
-	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
-	if idempotencyKey == "" || len(idempotencyKey) > 200 {
-		web.Error(w, r, 400, "idempotency_required", "缺少有效的 Idempotency-Key")
-		return
-	}
-	var input QueryInput
-	limit := int64(s.maxImg)*(s.maxBytes*4/3+8) + 2<<20
-	if limit > s.maxBody {
-		limit = s.maxBody
-	}
-	if !web.DecodeLimit(w, r, &input, limit) {
-		return
+	key := strings.TrimSpace(idempotencyKey)
+	if key == "" || len(key) > 200 {
+		return QueryView{}, idempotencyKeyError()
 	}
 	images, err := s.validateQuery(&input)
 	if err != nil {
-		web.Fail(w, r, err)
-		return
+		return QueryView{}, queryErrorFromFault(err, "题库请求无法处理")
 	}
-	fp := fingerprint(actor.ID, input)
+	fp := fingerprint(userID, input)
 	// 幂等重放先于模型可用性检查：模型下架后，已完成的同一请求仍返回原结果。
-	if existing, err := s.loadQueryByUserKey(r.Context(), actor.ID, idempotencyKey); err != nil {
-		web.Error(w, r, 503, "service_unavailable", "无法读取幂等记录")
-		return
-	} else if existing != nil {
-		if existing.Fingerprint != fp {
-			web.Error(w, r, 409, "idempotency_conflict", "相同 Idempotency-Key 对应不同请求")
-			return
-		}
-		if existing.Status == "pending" {
-			existing, err = s.waitForQuery(r.Context(), actor.ID, idempotencyKey)
-			if err != nil {
-				web.Fail(w, r, err)
-				return
-			}
-			if existing.Status == "pending" {
-				web.Error(w, r, 409, "request_in_progress", "相同请求仍在处理中，请稍后重试")
-				return
-			}
-		}
-		if existing.Status == "failed" {
-			writeStoredQueryError(w, r, existing.ErrorCode)
-			return
-		}
-		web.JSON(w, r, http.StatusOK, buildQueryView(existing))
-		return
-	}
-	offering, err := s.resolveOffering(r.Context(), input.ModelOfferingID)
+	existing, err := s.loadQueryByUserKey(ctx, userID, key)
 	if err != nil {
-		web.Fail(w, r, err)
-		return
+		return QueryView{}, queryErrorFromFault(err, "无法读取幂等记录")
+	}
+	if existing != nil {
+		return s.replayQuery(ctx, userID, key, fp, input, existing)
+	}
+	offering, err := s.resolveOffering(ctx, input.ModelOfferingID)
+	if err != nil {
+		return QueryView{}, queryErrorFromFault(err, "无法读取模型条目")
 	}
 	if input.Mode == "cache_first" && !offering.CachePolicy.Allow {
-		web.Error(w, r, 422, "cache_not_allowed", "该模型未启用答案缓存，请选择每次都使用模型")
-		return
+		return QueryView{}, newQueryError("cache_not_allowed", "该模型未启用答案缓存，请选择每次都使用模型", http.StatusUnprocessableEntity, false)
 	}
 	if input.CacheScope == "shared" && offering.CachePolicy.Scope != "shared" {
-		web.Error(w, r, 422, "shared_cache_not_allowed", "该模型未允许共享缓存")
-		return
+		return QueryView{}, newQueryError("shared_cache_not_allowed", "该模型未允许共享缓存", http.StatusUnprocessableEntity, false)
 	}
-	scopeKey := s.scopeKeyFor(actor.ID)
+	scopeKey := s.scopeKeyFor(userID)
 	scopeHash := hashHex(scopeKey)
 	queryID := newPrefixedID("qq_")
-	created, existing, err := s.insertPendingQuery(r.Context(), queryID, actor.ID, idempotencyKey, fp, offering, input, scopeHash, images)
-	if err != nil {
-		web.Error(w, r, 503, "service_unavailable", "无法保存题库查询")
-		return
-	}
-	if !created {
-		if existing.Fingerprint != fp {
-			web.Error(w, r, 409, "idempotency_conflict", "相同 Idempotency-Key 对应不同请求")
-			return
-		}
-		if existing.Status == "pending" {
-			existing, err = s.waitForQuery(r.Context(), actor.ID, idempotencyKey)
-			if err != nil {
-				web.Fail(w, r, err)
-				return
-			}
-			if existing.Status == "pending" {
-				web.Error(w, r, 409, "request_in_progress", "相同请求仍在处理中，请稍后重试")
-				return
-			}
-		}
-		if existing.Status == "failed" {
-			writeStoredQueryError(w, r, existing.ErrorCode)
-			return
-		}
-		web.JSON(w, r, http.StatusOK, buildQueryView(existing))
-		return
-	}
-	estimate, holdID, reservedMinor, err := s.prepareBilling(r.Context(), queryID, actor.ID, offering, input.Budget.MaxOutputTokens, images.Count)
-	if err != nil {
-		code, _ := fault.Describe(err)
-		s.markReserveFailed(r.Context(), queryID, code)
-		if code == "insufficient_balance" {
-			web.Error(w, r, 409, "insufficient_balance", "余额不足，未发起模型调用")
-		} else if code == "charging_setting_unavailable" {
-			web.Error(w, r, 503, "service_unavailable", "收费开关状态不可用，未发起付费调用")
-		} else {
-			web.Error(w, r, 503, "service_unavailable", "无法完成题库预占，未发起模型调用")
-		}
-		return
-	}
-	if err := s.requireFork(); err != nil {
-		s.finalizeQuery(r.Context(), queryID, actor.ID, finalizeInput{
-			Status: "failed", ErrorCode: "not_configured", Estimate: estimate,
-			Quote: estimate, HoldID: holdID, ReservedMinor: reservedMinor, BillingState: "released",
-		})
-		web.Fail(w, r, err)
-		return
-	}
 	forkRequest := ForkAnswerRequest{
 		RequestID: queryID, ModelOfferingID: offering.ProviderRef, Mode: input.Mode,
 		CacheScope: input.CacheScope, CacheScopeKey: scopeKey,
 		Question: ForkQuestion{Title: input.Question.Title, Options: input.Question.Options, Type: input.Question.Type, Images: input.Question.Images},
 		Budget:   ForkBudget{MaxOutputTokens: input.Budget.MaxOutputTokens},
 	}
-	forkCtx, cancel := context.WithTimeout(r.Context(), s.timeout)
-	response, forkErr := s.fork.Answer(forkCtx, forkRequest, queryID)
+	created, existing, err := s.insertPendingQuery(ctx, queryID, userID, key, fp, offering, input, scopeHash, images)
+	if err != nil {
+		return QueryView{}, newQueryError("service_unavailable", "无法保存题库查询", http.StatusServiceUnavailable, true)
+	}
+	if !created {
+		return s.replayQuery(ctx, userID, key, fp, input, existing)
+	}
+	estimate, holdID, reservedMinor, err := s.prepareBilling(ctx, queryID, userID, offering, input.Budget.MaxOutputTokens, images.Count)
+	if err != nil {
+		code, _ := fault.Describe(err)
+		if markErr := s.markReserveFailed(queryID, code); markErr != nil {
+			return QueryView{}, newQueryError("service_unavailable", "无法保存题库查询失败状态，请人工核对", http.StatusServiceUnavailable, true)
+		}
+		return QueryView{}, reserveQueryError(code)
+	}
+	return s.completeAnswer(ctx, answerCompletion{
+		queryID: queryID, userID: userID, offering: offering, request: forkRequest,
+		estimate: estimate, holdID: holdID, reservedMinor: reservedMinor,
+		billingConnected: s.billing != nil,
+	})
+}
+
+// answerCompletion 是一次已创建查询的冻结输入；恢复路径复用同一结构和同一完成链。
+type answerCompletion struct {
+	queryID            string
+	userID             string
+	offering           *Offering
+	request            ForkAnswerRequest
+	estimate           Quote
+	holdID             string
+	reservedMinor      int64
+	billingConnected   bool
+	frozenBillingState string
+	recovered          bool
+}
+
+// recoveryUncertain 表示恢复时无法确定 fork 是否已产生结果或费用，必须停止自动收费。
+func recoveryUncertain(code string) bool {
+	switch code {
+	case "upstream_timeout", "request_cancelled", "request_unknown", "request_in_progress",
+		"idempotency_conflict", "service_unavailable", "model_unavailable", "internal_error":
+		return true
+	}
+	return false
+}
+
+// completeAnswer 在已冻结的查询行上调用 fork 并完成结算/释放。
+func (s *Service) completeAnswer(ctx context.Context, c answerCompletion) (QueryView, error) {
+	queryID, userID := c.queryID, c.userID
+	offering, estimate := c.offering, c.estimate
+	holdID, reservedMinor := c.holdID, c.reservedMinor
+	billingConnected := c.billingConnected
+	if !c.recovered {
+		billingConnected = s.billing != nil
+	}
+	releaseState := func(defaultState string) string {
+		if holdID == "" && c.recovered && c.frozenBillingState != "" {
+			return c.frozenBillingState
+		}
+		return defaultState
+	}
+	if holdID != "" && s.billing == nil {
+		// 没有账本连接时不能安全结算或释放既有预占，保留事实转待复核。
+		s.markFinalizeFailed(queryID)
+		return QueryView{}, newQueryError("service_unavailable", "题库账本未连接，预占待人工核对", http.StatusServiceUnavailable, true)
+	}
+	if err := s.requireFork(); err != nil {
+		if _, finalizeErr := s.finalizeQuery(ctx, queryID, userID, finalizeInput{
+			Status: "failed", ErrorCode: "not_configured", Estimate: estimate,
+			Quote: estimate, HoldID: holdID, ReservedMinor: reservedMinor,
+			BillingState: releaseState("released"), PreserveBillingState: c.recovered,
+		}); finalizeErr != nil {
+			return QueryView{}, s.finalizeFailure(queryID)
+		}
+		return QueryView{}, queryErrorFromFault(err, "题库服务尚未配置")
+	}
+	forkCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	response, forkErr := s.fork.Answer(forkCtx, c.request, queryID)
 	cancel()
 	if forkErr != nil {
 		code := "service_unavailable"
 		var value *ForkError
 		if errors.As(forkErr, &value) {
-			code = value.Code
+			code = safeForkCode(value.Code)
 		}
 		status := "failed"
 		// 超时或取消时上游可能已产生费用；保留查询事实并进入待复核，不自动重放。
 		if code == "upstream_timeout" || code == "request_cancelled" || code == "request_unknown" {
 			status = "needs_review"
 		}
-		s.finalizeQuery(r.Context(), queryID, actor.ID, finalizeInput{
+		if c.recovered && recoveryUncertain(code) {
+			status = "needs_review"
+		}
+		view, finalizeErr := s.finalizeQuery(ctx, queryID, userID, finalizeInput{
 			Status: status, ErrorCode: code, Estimate: estimate,
-			Quote: estimate, HoldID: holdID, ReservedMinor: reservedMinor, BillingState: "released",
+			Quote: estimate, HoldID: holdID, ReservedMinor: reservedMinor,
+			BillingState: releaseState("released"), PreserveBillingState: c.recovered,
 		})
-		writeForkQueryError(w, r, forkErr)
-		return
+		if finalizeErr != nil {
+			return QueryView{}, s.finalizeFailure(queryID)
+		}
+		if c.recovered && status == "needs_review" {
+			return view, nil
+		}
+		return QueryView{}, forkQueryError(forkErr)
 	}
-	if err := normalizeForkResponse(&response, queryID, offering.ProviderRef, input.Mode); err != nil {
-		s.finalizeQuery(r.Context(), queryID, actor.ID, finalizeInput{
+	if err := normalizeForkResponse(&response, queryID, offering.ProviderRef, c.request.Mode); err != nil {
+		view, finalizeErr := s.finalizeQuery(ctx, queryID, userID, finalizeInput{
 			Status: "needs_review", ErrorCode: "invalid_fork_response", Estimate: estimate,
-			Quote: estimate, HoldID: holdID, ReservedMinor: reservedMinor, BillingState: "released",
+			Quote: estimate, HoldID: holdID, ReservedMinor: reservedMinor,
+			BillingState: releaseState("released"), PreserveBillingState: c.recovered,
 		})
-		web.Error(w, r, 502, "invalid_fork_response", "题库响应事实不完整，查询已进入待复核")
-		return
+		if finalizeErr != nil {
+			return QueryView{}, s.finalizeFailure(queryID)
+		}
+		if c.recovered {
+			return view, nil
+		}
+		return QueryView{}, newQueryError("invalid_fork_response", "题库响应事实不完整，查询已进入待复核", http.StatusBadGateway, false)
 	}
 	if response.Status == "cache_hit" {
 		quote := Quote{State: "cache_hit", Pricing: offering.Pricing,
 			ChargingAllowed: estimate.ChargingAllowed, ChargingCheckedAt: estimate.ChargingCheckedAt}
-		view, err := s.finalizeQuery(r.Context(), queryID, actor.ID, finalizeInput{
+		view, err := s.finalizeQuery(ctx, queryID, userID, finalizeInput{
 			Status: "cache_hit", Response: response, Usage: response.Usage, Quote: quote,
-			Estimate: estimate, HoldID: holdID, ReservedMinor: reservedMinor, BillingState: "no_charge",
+			Estimate: estimate, HoldID: holdID, ReservedMinor: reservedMinor,
+			BillingState: "no_charge", PreserveBillingState: c.recovered,
 		})
 		if err != nil {
-			web.Error(w, r, 503, "service_unavailable", "缓存结果保存或释放预占失败，已进入待复核")
-			return
+			return QueryView{}, s.finalizeFailure(queryID)
 		}
-		web.JSON(w, r, http.StatusOK, view)
-		return
+		return view, nil
 	}
 	if response.Status == "usage_incomplete" || !response.Usage.Complete {
-		view, err := s.finalizeQuery(r.Context(), queryID, actor.ID, finalizeInput{
+		view, err := s.finalizeQuery(ctx, queryID, userID, finalizeInput{
 			Status: "needs_review", ErrorCode: "usage_incomplete", Response: response,
 			Usage: response.Usage, Quote: Quote{State: "usage_incomplete", Pricing: offering.Pricing,
 				ChargingAllowed: estimate.ChargingAllowed, ChargingCheckedAt: estimate.ChargingCheckedAt},
-			Estimate: estimate, HoldID: holdID, ReservedMinor: reservedMinor, BillingState: "released",
+			Estimate: estimate, HoldID: holdID, ReservedMinor: reservedMinor,
+			BillingState: releaseState("released"), PreserveBillingState: c.recovered,
 		})
 		if err != nil {
-			web.Error(w, r, 503, "service_unavailable", "用量待复核查询保存失败")
-			return
+			return QueryView{}, s.finalizeFailure(queryID)
 		}
-		web.JSON(w, r, http.StatusOK, view)
-		return
+		return view, nil
 	}
 	actual, err := s.actualQuote(offering, response.Usage)
 	if err == nil {
@@ -487,14 +505,20 @@ func (s *Service) createQuery(w http.ResponseWriter, r *http.Request) {
 		actual.ChargingCheckedAt = estimate.ChargingCheckedAt
 	}
 	if err != nil {
-		s.finalizeQuery(r.Context(), queryID, actor.ID, finalizeInput{
+		view, finalizeErr := s.finalizeQuery(ctx, queryID, userID, finalizeInput{
 			Status: "needs_review", ErrorCode: "pricing_error", Response: response,
 			Usage: response.Usage, Quote: Quote{State: "unpriced", Pricing: offering.Pricing,
 				ChargingAllowed: estimate.ChargingAllowed, ChargingCheckedAt: estimate.ChargingCheckedAt},
-			Estimate: estimate, HoldID: holdID, ReservedMinor: reservedMinor, BillingState: "released",
+			Estimate: estimate, HoldID: holdID, ReservedMinor: reservedMinor,
+			BillingState: releaseState("released"), PreserveBillingState: c.recovered,
 		})
-		web.Error(w, r, 502, "pricing_error", "价格计算失败，查询已进入待复核")
-		return
+		if finalizeErr != nil {
+			return QueryView{}, s.finalizeFailure(queryID)
+		}
+		if c.recovered {
+			return view, nil
+		}
+		return QueryView{}, newQueryError("pricing_error", "价格计算失败，查询已进入待复核", http.StatusBadGateway, false)
 	}
 	status, errorCode := "answered", ""
 	settle := false
@@ -505,7 +529,7 @@ func (s *Service) createQuery(w http.ResponseWriter, r *http.Request) {
 		actual.Pricing = offering.Pricing
 	case !actual.ChargingAllowed:
 		actual.Pricing = offering.Pricing
-	case s.billing == nil:
+	case !billingConnected:
 		actual.Pricing = offering.Pricing
 	case holdID == "":
 		// 预估未形成有效预占但实际出现费用：不自动扣费，转人工复核。
@@ -517,13 +541,244 @@ func (s *Service) createQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	finalQuote := actual
 	finalQuote.Estimated = false
-	view, err := s.finalizeQuery(r.Context(), queryID, actor.ID, finalizeInput{
+	view, err := s.finalizeQuery(ctx, queryID, userID, finalizeInput{
 		Status: status, ErrorCode: errorCode, Response: response, Usage: response.Usage,
 		Quote: finalQuote, Estimate: estimate, HoldID: holdID, ReservedMinor: reservedMinor,
-		Settle: settle, BillingState: "released",
+		Settle: settle, BillingState: releaseState("released"), PreserveBillingState: c.recovered,
 	})
 	if err != nil {
-		web.Error(w, r, 503, "service_unavailable", "题库结果保存或计费失败，查询已进入待复核")
+		return QueryView{}, s.finalizeFailure(queryID)
+	}
+	return view, nil
+}
+
+const minStalePendingAge = 2 * time.Minute
+
+// stalePendingAge 至少为两分钟；fork 超时更长时顺延，避免恢复在途请求。
+func (s *Service) stalePendingAge() time.Duration {
+	threshold := minStalePendingAge
+	if candidate := s.timeout + 30*time.Second; candidate > threshold {
+		threshold = candidate
+	}
+	return threshold
+}
+
+// replayQuery 处理同用户同幂等键的重放；只要 pending 过期就尝试恢复。
+func (s *Service) replayQuery(ctx context.Context, userID, key, fp string, input QueryInput, existing *queryRecord) (QueryView, error) {
+	if existing.Fingerprint != fp {
+		return QueryView{}, idempotencyConflictError()
+	}
+	if existing.Status == "pending" {
+		if s.pendingStale(existing) {
+			return s.recoverPendingQuery(ctx, userID, key, fp, input, existing)
+		}
+		q, err := s.waitForQuery(ctx, userID, key)
+		if err != nil {
+			var safe *fault.Error
+			if errors.As(err, &safe) && safe.Code == "conflict" {
+				return QueryView{}, requestInProgressError()
+			}
+			return QueryView{}, queryErrorFromFault(err, "无法读取题库查询")
+		}
+		existing = q
+		if existing.Status == "pending" {
+			if s.pendingStale(existing) {
+				return s.recoverPendingQuery(ctx, userID, key, fp, input, existing)
+			}
+			return QueryView{}, requestInProgressError()
+		}
+	}
+	return replayStoredQuery(fp, existing)
+}
+
+func (s *Service) pendingStale(q *queryRecord) bool {
+	return q.Status == "pending" && s.now().Sub(q.UpdatedAt) > s.stalePendingAge()
+}
+
+func replayStoredQuery(fp string, q *queryRecord) (QueryView, error) {
+	if q.Fingerprint != fp {
+		return QueryView{}, idempotencyConflictError()
+	}
+	if q.Status == "failed" {
+		return QueryView{}, storedQueryError(q.ErrorCode)
+	}
+	return buildQueryView(q), nil
+}
+
+// claimStaleQuery 用单条 UPDATE 原子抢占陈旧 pending；只有一个恢复者能成功。
+func (s *Service) claimStaleQuery(ctx context.Context, queryID, userID string) (*queryRecord, error) {
+	q, err := scanQuery(s.pool.QueryRow(ctx, `UPDATE public.question_queries
+		SET updated_at = now(), version = version + 1
+		WHERE id = $1 AND user_id = $2 AND status = 'pending'
+		  AND updated_at < now() - make_interval(secs => $3)
+		RETURNING `+queryColumns, queryID, userID, s.stalePendingAge().Seconds()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return q, nil
+}
+
+func (s *Service) recoverPendingQuery(ctx context.Context, userID, key, fp string, input QueryInput, existing *queryRecord) (QueryView, error) {
+	claimed, err := s.claimStaleQuery(ctx, existing.ID, userID)
+	if err != nil {
+		return QueryView{}, newQueryError("service_unavailable", "无法抢占待恢复的题库查询", http.StatusServiceUnavailable, true)
+	}
+	if claimed == nil {
+		q, err := s.loadQueryByUserKey(ctx, userID, key)
+		if err != nil {
+			return QueryView{}, queryErrorFromFault(err, "无法读取题库查询")
+		}
+		if q == nil {
+			return QueryView{}, newQueryError("service_unavailable", "查询记录丢失", http.StatusServiceUnavailable, true)
+		}
+		if q.Status == "pending" {
+			return QueryView{}, requestInProgressError()
+		}
+		return replayStoredQuery(fp, q)
+	}
+	return s.resumeQuery(ctx, claimed, fp, input)
+}
+
+// resumeQuery 使用已冻结的模型引用、价格和收费决策重建同一 fork 请求。
+// 题目、选项、图片和预算来自调用方再次提供的同一 input；fingerprint 已先校验。
+func (s *Service) resumeQuery(ctx context.Context, q *queryRecord, fp string, input QueryInput) (QueryView, error) {
+	if q.Fingerprint != fp {
+		return QueryView{}, idempotencyConflictError()
+	}
+	if q.BillingHoldID != "" && s.billing == nil {
+		s.markFinalizeFailed(q.ID)
+		return QueryView{}, newQueryError("service_unavailable", "题库账本未连接，预占待人工核对", http.StatusServiceUnavailable, true)
+	}
+	snapshot := parsePricingSnapshot(q.Pricing)
+	estimate, estimateErr := recoveryEstimate(snapshot)
+	if estimateErr != nil {
+		return s.finalizeRecoveryReview(ctx, q, Quote{}, "recovery_state_incomplete")
+	}
+	if !matchesRecoveryInput(q, input) {
+		return s.finalizeRecoveryReview(ctx, q, estimate, "recovery_input_mismatch")
+	}
+	if q.OfferingProviderRef == "" {
+		return s.finalizeRecoveryReview(ctx, q, estimate, "recovery_model_reference_missing")
+	}
+	scopeKey := s.scopeKeyFor(q.UserID)
+	if hashHex(scopeKey) != q.ScopeKeyHash {
+		return s.finalizeRecoveryReview(ctx, q, estimate, "recovery_cache_scope_changed")
+	}
+	if (q.BillingHoldID == "") != (q.ReservedMinor == 0) {
+		return s.finalizeRecoveryReview(ctx, q, estimate, "recovery_reservation_state_invalid")
+	}
+	if snapshot.HoldID != "" && snapshot.HoldID != q.BillingHoldID {
+		return s.finalizeRecoveryReview(ctx, q, estimate, "recovery_reservation_state_invalid")
+	}
+	if snapshot.ReservedMinor != q.ReservedMinor {
+		return s.finalizeRecoveryReview(ctx, q, estimate, "recovery_reservation_state_invalid")
+	}
+	billingConnected := snapshot.BillingState != "billing_not_connected"
+	if estimate.State == "quoted" && estimate.AmountMinor > 0 && estimate.ChargingAllowed && q.BillingHoldID == "" {
+		switch snapshot.BillingState {
+		case "billing_not_connected", "automatic_charging_disabled":
+			// 冻结决策本就不收费，允许无预占恢复。
+		default:
+			return s.finalizeRecoveryReview(ctx, q, estimate, "recovery_without_reservation")
+		}
+	}
+	offering := &Offering{ID: q.OfferingID, PublicID: q.OfferingPublicID, DisplayName: q.OfferingDisplayName,
+		ProviderRef: q.OfferingProviderRef, Pricing: snapshot.Pricing}
+	request := ForkAnswerRequest{
+		RequestID: q.ID, ModelOfferingID: q.OfferingProviderRef, Mode: q.Mode,
+		CacheScope: q.CacheScope, CacheScopeKey: scopeKey,
+		Question: ForkQuestion{Title: input.Question.Title, Options: input.Question.Options, Type: input.Question.Type, Images: input.Question.Images},
+		Budget:   ForkBudget{MaxOutputTokens: input.Budget.MaxOutputTokens},
+	}
+	return s.completeAnswer(ctx, answerCompletion{
+		queryID: q.ID, userID: q.UserID, offering: offering, request: request,
+		estimate: estimate, holdID: q.BillingHoldID, reservedMinor: q.ReservedMinor,
+		billingConnected: billingConnected, frozenBillingState: snapshot.BillingState, recovered: true,
+	})
+}
+
+func matchesRecoveryInput(q *queryRecord, input QueryInput) bool {
+	return q.Mode == input.Mode && q.CacheScope == input.CacheScope &&
+		q.QuestionTitle == input.Question.Title && q.QuestionOptions == input.Question.Options &&
+		q.QuestionType == input.Question.Type && q.ImageCount == len(input.Question.Images)
+}
+
+func parsePricingSnapshot(raw []byte) pricingSnapshot {
+	var snapshot pricingSnapshot
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &snapshot)
+	}
+	return snapshot
+}
+
+func recoveryEstimate(snapshot pricingSnapshot) (Quote, error) {
+	if snapshot.ChargingCheckedAt.IsZero() {
+		return Quote{}, errors.New("收费决策未冻结")
+	}
+	switch snapshot.State {
+	case "quoted", "unpriced", "free":
+	default:
+		return Quote{}, errors.New("价格快照状态不可恢复")
+	}
+	return Quote{
+		State: snapshot.State, Pricing: snapshot.Pricing,
+		InputTokens: snapshot.EstimatedInputTokens, OutputTokens: snapshot.EstimatedOutputTokens,
+		CostMicros: snapshot.EstimatedCostMicros, AmountMinor: snapshot.EstimatedAmountMinor,
+		Estimated: true, ChargingAllowed: snapshot.AutomaticChargingAllowed,
+		ChargingCheckedAt: snapshot.ChargingCheckedAt,
+	}, nil
+}
+
+func (s *Service) finalizeRecoveryReview(ctx context.Context, q *queryRecord, estimate Quote, code string) (QueryView, error) {
+	if q.BillingHoldID != "" && s.billing == nil {
+		s.markFinalizeFailed(q.ID)
+		return QueryView{}, newQueryError("service_unavailable", "题库账本未连接，预占待人工核对", http.StatusServiceUnavailable, true)
+	}
+	billingState := q.BillingState
+	if q.BillingHoldID != "" {
+		billingState = "released"
+	} else {
+		switch billingState {
+		case "", "pending", "reserved":
+			billingState = "released"
+		}
+	}
+	view, err := s.finalizeQuery(ctx, q.ID, q.UserID, finalizeInput{
+		Status: "needs_review", ErrorCode: code, Estimate: estimate,
+		Quote: estimate, HoldID: q.BillingHoldID, ReservedMinor: q.ReservedMinor,
+		BillingState: billingState, PreserveBillingState: true,
+	})
+	if err != nil {
+		return QueryView{}, s.finalizeFailure(q.ID)
+	}
+	return view, nil
+}
+
+// createQuery 只负责身份、请求头和请求体解码，业务链交由 Answer。
+func (s *Service) createQuery(w http.ResponseWriter, r *http.Request) {
+	actor, ok := web.Require(w, r, "user", "self")
+	if !ok {
+		return
+	}
+	idempotencyKey := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if idempotencyKey == "" || len(idempotencyKey) > 200 {
+		writeQueryError(w, r, idempotencyKeyError())
+		return
+	}
+	var input QueryInput
+	limit := int64(s.maxImg)*(s.maxBytes*4/3+8) + 2<<20
+	if limit > s.maxBody {
+		limit = s.maxBody
+	}
+	if !web.DecodeLimit(w, r, &input, limit) {
+		return
+	}
+	view, err := s.Answer(r.Context(), actor.ID, idempotencyKey, input)
+	if err != nil {
+		writeQueryError(w, r, err)
 		return
 	}
 	web.JSON(w, r, http.StatusOK, view)
@@ -547,6 +802,8 @@ type finalizeInput struct {
 	ReservedMinor int64
 	Settle        bool
 	BillingState  string
+	// PreserveBillingState 用于恢复已冻结的无预占计费事实；新请求继续按当前账本连接重算。
+	PreserveBillingState bool
 }
 
 func noReserveBillingState(quote Quote, billing bool) string {
@@ -614,6 +871,9 @@ func (s *Service) prepareBilling(ctx context.Context, queryID, userID string, of
 
 // finalizeQuery 在同一个数据库事务中完成幂等结算/释放、查询事实和用户事件。
 func (s *Service) finalizeQuery(ctx context.Context, queryID, userID string, in finalizeInput) (QueryView, error) {
+	if in.HoldID != "" && s.billing == nil {
+		return QueryView{}, errors.New("题库账本未连接，不能结算或释放既有预占")
+	}
 	usageJSON, err := json.Marshal(in.Usage)
 	if err != nil {
 		return QueryView{}, err
@@ -625,7 +885,7 @@ func (s *Service) finalizeQuery(ctx context.Context, queryID, userID string, in 
 		snapshot.EstimatedCostMicros = in.Estimate.CostMicros
 		snapshot.EstimatedAmountMinor = in.Estimate.AmountMinor
 	}
-	if in.HoldID == "" {
+	if in.HoldID == "" && !in.PreserveBillingState {
 		snapshot.BillingState = noReserveBillingState(in.Quote, s.billing != nil)
 	}
 	if in.Status == "failed" || (in.Status == "needs_review" && in.ErrorCode != "usage_incomplete") {
@@ -637,19 +897,26 @@ func (s *Service) finalizeQuery(ctx context.Context, queryID, userID string, in 
 		return QueryView{}, err
 	}
 	defer tx.Rollback(context.Background())
+	// 任一未提交路径都必须释放预占；Release 以业务键幂等，提交结果不明时重放也安全。
+	committed := false
+	if in.HoldID != "" {
+		defer func() {
+			if !committed {
+				s.releaseAfterLedgerFailure(queryID, in.HoldID)
+			}
+		}()
+	}
 	key := s.billingKey(queryID)
 	if in.HoldID != "" {
 		if in.Settle && in.Quote.ChargingAllowed && in.Quote.State == "quoted" && in.Quote.AmountMinor > 0 {
 			if err := s.billing.Settle(ctx, tx, in.HoldID, key, in.Quote.AmountMinor); err != nil {
 				_ = tx.Rollback(context.Background())
-				s.releaseAfterLedgerFailure(queryID, in.HoldID)
 				s.markLedgerFailure(queryID, userID, in, "billing_settlement_failed")
 				return QueryView{}, err
 			}
 			if in.Quote.AmountMinor < in.ReservedMinor {
 				if err := s.billing.Release(ctx, tx, in.HoldID, key); err != nil {
 					_ = tx.Rollback(context.Background())
-					s.releaseAfterLedgerFailure(queryID, in.HoldID)
 					s.markLedgerFailure(queryID, userID, in, "billing_release_failed")
 					return QueryView{}, err
 				}
@@ -674,7 +941,7 @@ func (s *Service) finalizeQuery(ctx context.Context, queryID, userID string, in 
 	err = tx.QueryRow(ctx, `UPDATE public.question_queries SET status = $2, answer = NULLIF($3,''),
 		cache_hit = $4, cache_entry_id = NULLIF($5,''), cache_created_at = $6, usage = $7, pricing = $8,
 		billing_state = $9, billing_hold_id = NULLIF($10,''), reserved_minor = $11,
-		error_code = NULLIF($12,''), completed_at = now(), updated_at = now(),
+		error_code = NULLIF($12,''), offering_provider_ref = NULL, completed_at = now(), updated_at = now(),
 		version = version + 1
 		WHERE id = $1 AND status = 'pending' RETURNING version`,
 		queryID, in.Status, in.Response.Answer, in.Response.Cache.Hit, valueOrEmpty(in.Response.Cache.EntryID),
@@ -699,6 +966,7 @@ func (s *Service) finalizeQuery(ctx context.Context, queryID, userID string, in 
 	if err := tx.Commit(ctx); err != nil {
 		return QueryView{}, err
 	}
+	committed = true
 	q, err := s.loadQueryAdmin(ctx, queryID)
 	if err != nil || q == nil {
 		return QueryView{}, errors.New("无法读取已保存的查询")
@@ -737,8 +1005,9 @@ func (s *Service) markLedgerFailure(queryID, userID string, in finalizeInput, co
 	defer tx.Rollback(context.Background())
 	var version int64
 	err = tx.QueryRow(ctx, `UPDATE public.question_queries SET status = 'needs_review', usage = $2,
-		pricing = $3, billing_state = $4, error_code = $5, completed_at = now(), updated_at = now(),
-		version = version + 1 WHERE id = $1 AND status = 'pending' RETURNING version`,
+		pricing = $3, billing_state = $4, error_code = $5, offering_provider_ref = NULL,
+		completed_at = now(), updated_at = now(), version = version + 1
+		WHERE id = $1 AND status = 'pending' RETURNING version`,
 		queryID, usageJSON, pricingJSON, code, code).Scan(&version)
 	if err != nil {
 		return
@@ -747,14 +1016,40 @@ func (s *Service) markLedgerFailure(queryID, userID string, in finalizeInput, co
 	_ = tx.Commit(ctx)
 }
 
-func (s *Service) markReserveFailed(ctx context.Context, queryID, code string) {
+func (s *Service) markReserveFailed(queryID, code string) error {
 	billingState := "reserve_failed"
 	if code == "charging_setting_unavailable" {
 		billingState = "charging_setting_unavailable"
 	}
-	_, _ = s.pool.Exec(context.Background(), `UPDATE public.question_queries SET status = 'failed',
-		error_code = $2, billing_state = $3, completed_at = now(), updated_at = now(), version = version + 1
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tag, err := s.pool.Exec(ctx, `UPDATE public.question_queries SET status = 'failed',
+		error_code = $2, billing_state = $3, offering_provider_ref = NULL, completed_at = now(),
+		updated_at = now(), version = version + 1
 		WHERE id = $1 AND status = 'pending'`, queryID, code, billingState)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("题库查询预占失败状态未保存")
+	}
+	return nil
+}
+
+// markFinalizeFailed 只把仍处于 pending 的查询标记为待复核；已完成或已被其他路径
+// 标记的记录不会被覆盖。
+func (s *Service) markFinalizeFailed(queryID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = s.pool.Exec(ctx, `UPDATE public.question_queries SET status = 'needs_review',
+		error_code = 'finalize_failed', billing_state = 'finalize_failed', offering_provider_ref = NULL,
+		completed_at = now(), updated_at = now(), version = version + 1
+		WHERE id = $1 AND status = 'pending'`, queryID)
+}
+
+func (s *Service) finalizeFailure(queryID string) *QueryError {
+	s.markFinalizeFailed(queryID)
+	return newQueryError("service_unavailable", "题库结果保存或计费失败，请人工核对", http.StatusServiceUnavailable, true)
 }
 
 // recordQuestionEvent 直接写共享 outbox 结构，resource_id 使用 qq_ 公开编号。
@@ -776,61 +1071,6 @@ func recordQuestionEvent(ctx context.Context, tx pgx.Tx, userID, queryID string,
 		return errors.New("无法写入题库事件")
 	}
 	return nil
-}
-
-func (s *Service) markQueryFailed(ctx context.Context, queryID, code string) {
-	_, _ = s.pool.Exec(context.Background(), `UPDATE public.question_queries SET status = 'failed',
-		error_code = $2, completed_at = now(), updated_at = now(), version = version + 1
-		WHERE id = $1 AND status = 'pending'`, queryID, code)
-}
-
-func (s *Service) markQueryNeedsReview(ctx context.Context, queryID, code, billingState string) {
-	_, _ = s.pool.Exec(context.Background(), `UPDATE public.question_queries SET status = 'needs_review',
-		error_code = $2, billing_state = $3, completed_at = now(), updated_at = now(), version = version + 1
-		WHERE id = $1 AND status = 'pending'`, queryID, code, billingState)
-}
-
-func writeStoredQueryError(w http.ResponseWriter, r *http.Request, code string) {
-	switch code {
-	case "model_disabled":
-		web.Error(w, r, 409, code, "该模型已下架，请重新选择")
-	case "vision_unsupported", "budget_exceeded", "invalid_question":
-		web.Error(w, r, 422, code, "题库请求无法处理")
-	case "upstream_timeout":
-		web.Error(w, r, 504, code, "题库服务超时，结果待核对")
-	case "upstream_rate_limited":
-		web.Error(w, r, 429, code, "题库服务限流，请稍后人工重试")
-	case "insufficient_balance":
-		web.Error(w, r, 409, code, "余额不足，未发起模型调用")
-	case "request_unknown":
-		web.Error(w, r, 409, code, "题库上游结果未知，已保留待复核事实")
-	default:
-		web.Error(w, r, 503, "service_unavailable", "题库查询失败")
-	}
-}
-
-func writeForkQueryError(w http.ResponseWriter, r *http.Request, err error) {
-	var forkErr *ForkError
-	if errors.As(err, &forkErr) {
-		switch forkErr.Code {
-		case "model_disabled":
-			web.Error(w, r, 409, forkErr.Code, "该模型已下架，请重新选择")
-			return
-		case "vision_unsupported", "budget_exceeded", "invalid_question", "invalid_mode", "invalid_scope":
-			web.Error(w, r, 422, forkErr.Code, forkErr.Message)
-			return
-		case "upstream_timeout":
-			web.Error(w, r, 504, forkErr.Code, "题库服务超时，结果未知；不会自动重试")
-			return
-		case "upstream_rate_limited":
-			web.Error(w, r, 429, forkErr.Code, "题库服务限流，请稍后人工重试")
-			return
-		case "request_unknown":
-			web.Error(w, r, 409, forkErr.Code, "题库上游结果未知，已保留待复核事实")
-			return
-		}
-	}
-	web.Error(w, r, 503, "service_unavailable", "题库服务不可用")
 }
 
 func (s *Service) getUserQuery(w http.ResponseWriter, r *http.Request) {
@@ -1024,60 +1264,6 @@ func (s *Service) createCacheReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.JSON(w, r, http.StatusCreated, map[string]any{"id": id, "status": "pending", "created_at": s.now()})
-}
-
-type submissionInput struct {
-	QueryID      string `json:"query_id"`
-	AnswerSHA256 string `json:"answer_sha256"`
-	Confirmed    bool   `json:"confirmed"`
-}
-
-func (s *Service) createSubmission(w http.ResponseWriter, r *http.Request) {
-	actor, ok := web.Require(w, r, "user", "self")
-	if !ok {
-		return
-	}
-	var input submissionInput
-	if !web.Decode(w, r, &input) {
-		return
-	}
-	if !input.Confirmed {
-		web.Error(w, r, 428, "confirmation_required", "提交前必须人工确认题目与答案")
-		return
-	}
-	if len(input.AnswerSHA256) != 64 {
-		web.Error(w, r, 422, "validation_failed", "答案摘要无效")
-		return
-	}
-	q, err := s.loadQueryByID(r.Context(), actor.ID, input.QueryID)
-	if err != nil {
-		web.Error(w, r, 503, "service_unavailable", "无法读取题库查询")
-		return
-	}
-	if q == nil {
-		web.Error(w, r, 404, "not_found", "题库查询不存在")
-		return
-	}
-	if q.Status != "answered" && q.Status != "cache_hit" {
-		web.Error(w, r, 409, "conflict", "当前查询结果不可提交")
-		return
-	}
-	if q.ContentExpired || q.QuestionTitle == "" || q.Answer == "" {
-		web.Error(w, r, 409, "content_expired", "原题或答案已过保留期，不能提交；请重新查询并人工确认")
-		return
-	}
-	if hashHex(q.Answer) != input.AnswerSHA256 {
-		web.Error(w, r, 409, "conflict", "答案已变化，请重新确认")
-		return
-	}
-	reason := "platform_submission_disabled"
-	if s.submit {
-		reason = "platform_submission_adapter_not_configured"
-	}
-	_, _ = s.pool.Exec(r.Context(), `INSERT INTO public.question_submissions
-		(id, query_id, user_id, answer_sha256, status, reason) VALUES ($1,$2,$3,$4,'blocked',$5)`,
-		web.NewID(), q.ID, actor.ID, input.AnswerSHA256, reason)
-	web.Error(w, r, 503, "platform_submission_unavailable", "平台提交能力尚未配置，未执行任何提交")
 }
 
 func truncateRunes(value string, limit int) string {

@@ -110,6 +110,11 @@ func (o *Options) validate() error {
 	return nil
 }
 
+func (s *Service) questionExecutionAvailable() bool {
+	return s.opts.ExecutionEnabled && s.opts.Executor != nil &&
+		s.opts.Executor.Capabilities().Enabled && s.opts.Executor.Capabilities().Supports("quiz")
+}
+
 type discardWriter struct{}
 
 func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }

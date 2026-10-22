@@ -11,7 +11,7 @@ LDFLAGS := -X github.com/onprs/ByebyeOCS/server/internal/command.Version=$(VERSI
 	-X github.com/onprs/ByebyeOCS/server/internal/command.Commit=$(COMMIT) \
 	-X github.com/onprs/ByebyeOCS/server/internal/command.BuildTime=$(BUILD_TIME)
 
-.PHONY: help server tiku admin flutter-web build \
+.PHONY: help server tiku tiku-source admin flutter-web build \
 	check checks check-go check-admin check-flutter \
 	test test-go test-admin test-flutter test-integration test-deploy \
 	bundle clean
@@ -37,7 +37,10 @@ server:
 	mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go -C server build -trimpath -ldflags '$(LDFLAGS)' -o ../$(BIN_DIR)/byebyeocs ./cmd/byebyeocs
 
-tiku:
+tiku-source:
+	@test -f services/tiku/cmd/ocs-tiku-fork/main.go || { printf '错误：题库子模块尚未初始化，请先执行 git submodule update --init --recursive。\n' >&2; exit 1; }
+
+tiku: tiku-source
 	mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 GOOS=linux GOARCH=$(GOARCH) go -C services/tiku build -trimpath -o ../../$(BIN_DIR)/ocs-tiku-fork ./cmd/ocs-tiku-fork
 
@@ -51,7 +54,7 @@ flutter-web:
 
 build: server tiku admin flutter-web
 
-check-go:
+check-go: tiku-source
 	@set -e; files=$$(gofmt -l server/cmd server/internal services/tiku); if [[ -n "$$files" ]]; then printf '需要 gofmt：\n%s\n' "$$files" >&2; exit 1; fi
 	go -C server vet ./...
 	go -C services/tiku vet ./...
@@ -67,7 +70,7 @@ check-flutter:
 check: check-go check-admin check-flutter
 checks: check
 
-test-go:
+test-go: tiku-source
 	go -C server test -race ./...
 	go -C services/tiku test -race ./...
 
@@ -82,7 +85,7 @@ test-flutter:
 test: test-go test-admin test-flutter
 tests: test
 
-test-integration:
+test-integration: tiku-source
 	@test -n "$$BYEBYEOCS_TEST_DATABASE_DSN_FILE" || { printf '错误：请设置 BYEBYEOCS_TEST_DATABASE_DSN_FILE 为隔离 PostgreSQL 连接文件。\n' >&2; exit 1; }
 	BYEBYEOCS_TEST_DATABASE_DSN_FILE="$$BYEBYEOCS_TEST_DATABASE_DSN_FILE" go -C server test -race -tags=integration ./...
 	BYEBYEOCS_TEST_DATABASE_DSN_FILE="$$BYEBYEOCS_TEST_DATABASE_DSN_FILE" go -C services/tiku test -race ./...

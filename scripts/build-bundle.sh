@@ -48,6 +48,10 @@ mkdir -p "$DIST/api"
 cp -a -- "$ROOT/api/." "$DIST/api/"
 cp -a -- "$ROOT/DESIGN.md" "$DIST/DESIGN.md"
 python3 "$ROOT/scripts/collect-notices.py" "$DIST/THIRD_PARTY_NOTICES" "$GOARCH"
+mkdir -p "$DIST/THIRD_PARTY_NOTICES/ocs-tiku-fork"
+for notice in LICENSE README.md UPSTREAM.md; do
+  cp -a -- "$ROOT/services/tiku/$notice" "$DIST/THIRD_PARTY_NOTICES/ocs-tiku-fork/$notice"
+done
 LICENSE_ENTRY=null
 PROJECT_LICENSE=not_declared
 if [[ -n "$LICENSE_FILE" ]]; then
@@ -79,9 +83,10 @@ chmod -R a+rX -- "$DIST"
 COMMIT=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || printf 'unknown')
 BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 MAIN_SCHEMA=$(find "$ROOT/server/internal/platform/postgres/migrations" -maxdepth 1 -name '*.sql' -printf '%f\n' | sed -n 's/^0*\([0-9][0-9]*\)_.*/\1/p' | sort -n | tail -1)
-TIKU_SCHEMA=$(find "$ROOT/services/tiku/internal/store/migrations" -maxdepth 1 -name '*.sql' -printf '%f\n' | sed -n 's/^0*\([0-9][0-9]*\)_.*/\1/p' | sort -n | tail -1)
+TIKU_SCHEMA=$(find "$ROOT/services/tiku/internal/platform/store/migrations" -maxdepth 1 -name '*.sql' -printf '%f\n' | sed -n 's/^0*\([0-9][0-9]*\)_.*/\1/p' | sort -n | tail -1)
+TIKU_COMMIT=$(git -C "$ROOT/services/tiku" rev-parse HEAD)
 cat >"$DIST/release.json" <<EOF
-{"format":1,"version":"$VERSION","goos":"linux","goarch":"$GOARCH","commit":"$COMMIT","build_time":"$BUILD_TIME","main_schema":$MAIN_SCHEMA,"tiku_schema":$TIKU_SCHEMA,"project_license":"$PROJECT_LICENSE","license_file":$LICENSE_ENTRY,"third_party_notices":"THIRD_PARTY_NOTICES"}
+{"format":1,"version":"$VERSION","goos":"linux","goarch":"$GOARCH","commit":"$COMMIT","build_time":"$BUILD_TIME","main_schema":$MAIN_SCHEMA,"tiku_schema":$TIKU_SCHEMA,"tiku_repository":"https://github.com/onprs/ByebyeOCS-Tiku","tiku_commit":"$TIKU_COMMIT","project_license":"$PROJECT_LICENSE","license_file":$LICENSE_ENTRY,"third_party_notices":"THIRD_PARTY_NOTICES"}
 EOF
 
 (

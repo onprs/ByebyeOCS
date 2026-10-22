@@ -1599,13 +1599,13 @@ func TestPlanQuestionPolicyPersistenceAndValidation(t *testing.T) {
 	courseID := courseIDForUser(t, pool, userID)
 	actor := Actor{ID: userID, Kind: "user"}
 
-	// 默认关闭、无模型、人工确认；不调用题库校验。
+	// 默认关闭、无模型、无需人工确认；不调用题库校验。
 	defaultPlan, err := service.CreatePlan(context.Background(), actor, policyPlanInput(courseID, QuestionPolicyInput{}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if defaultPlan.QuestionPolicy.Enabled || defaultPlan.QuestionPolicy.ModelOfferingID != nil ||
-		defaultPlan.QuestionPolicy.AnswerMode != "cache_first" || !defaultPlan.QuestionPolicy.RequireManualConfirmation ||
+		defaultPlan.QuestionPolicy.AnswerMode != "cache_first" || defaultPlan.QuestionPolicy.RequireManualConfirmation ||
 		defaultPlan.QuestionPolicy.ExecutionAvailable || defaultPlan.QuestionPolicy.SubmissionAvailable {
 		t.Fatalf("默认题库策略错误: %+v", defaultPlan.QuestionPolicy)
 	}
@@ -1616,7 +1616,6 @@ func TestPlanQuestionPolicyPersistenceAndValidation(t *testing.T) {
 	invalid := []QuestionPolicyInput{
 		{Enabled: true, AnswerMode: "cache_first"},
 		{Enabled: true, ModelOfferingID: ptrString("qm_allowed"), AnswerMode: "invalid"},
-		{Enabled: true, ModelOfferingID: ptrString("qm_allowed"), AnswerMode: "cache_first", RequireManualConfirmation: ptrBool(false)},
 		{Enabled: true, ModelOfferingID: ptrString("qm_unknown"), AnswerMode: "cache_first"},
 	}
 	for index, policy := range invalid {
@@ -1627,14 +1626,14 @@ func TestPlanQuestionPolicyPersistenceAndValidation(t *testing.T) {
 
 	validator.calls = 0
 	valid := policyPlanInput(courseID, QuestionPolicyInput{Enabled: true,
-		ModelOfferingID: ptrString("qm_allowed"), AnswerMode: "always_llm"})
+		ModelOfferingID: ptrString("qm_allowed"), AnswerMode: "always_llm", RequireManualConfirmation: ptrBool(false)})
 	plan, err := service.CreatePlan(context.Background(), actor, valid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !plan.QuestionPolicy.Enabled || plan.QuestionPolicy.ModelOfferingID == nil ||
 		*plan.QuestionPolicy.ModelOfferingID != "qm_allowed" || plan.QuestionPolicy.AnswerMode != "always_llm" ||
-		!plan.QuestionPolicy.RequireManualConfirmation || plan.QuestionPolicy.ExecutionAvailable ||
+		plan.QuestionPolicy.RequireManualConfirmation || plan.QuestionPolicy.ExecutionAvailable ||
 		plan.QuestionPolicy.SubmissionAvailable {
 		t.Fatalf("有效题库策略回传错误: %+v", plan.QuestionPolicy)
 	}
@@ -1649,7 +1648,7 @@ func TestPlanQuestionPolicyPersistenceAndValidation(t *testing.T) {
 		Scan(&enabled, &model, &mode, &manual); err != nil {
 		t.Fatal(err)
 	}
-	if !enabled || model != "qm_allowed" || mode != "always_llm" || !manual {
+	if !enabled || model != "qm_allowed" || mode != "always_llm" || manual {
 		t.Fatal("题库策略未写入不可变版本")
 	}
 
@@ -1702,7 +1701,8 @@ func TestQuestionPolicyFrozenForRunningAttempt(t *testing.T) {
 		t.Fatal(err)
 	}
 	job := claimOne(t, service)
-	if !job.QuestionPolicy.Enabled || job.QuestionPolicy.Mode != "cache_first" {
+	if !job.QuestionPolicy.Enabled || job.QuestionPolicy.Mode != "cache_first" ||
+		job.QuestionPolicy.ModelOfferingID != "qm_allowed" || job.QuestionPolicy.RequireManualConfirmation {
 		t.Fatalf("领取尝试没有冻结题库策略: %+v", job.QuestionPolicy)
 	}
 	input.QuestionPolicy.AnswerMode = "always_llm"

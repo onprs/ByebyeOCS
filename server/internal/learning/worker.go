@@ -224,6 +224,16 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 				}
 				return errServiceUnavailable
 			}
+			if policyModel != nil {
+				job.QuestionPolicy.ModelOfferingID = *policyModel
+			}
+			job.QuestionPolicy.RequireManualConfirmation = false
+			if candidate.taskKind == "quiz" && !job.QuestionPolicy.Enabled {
+				if err := markTaskAttention(ctx, tx, job.TaskID, "question_policy_disabled", s.now()); err != nil {
+					return err
+				}
+				continue
+			}
 			now := s.now()
 			billingState := "disabled"
 			billingHold := ""
@@ -383,7 +393,7 @@ func (s *Service) execute(ctx context.Context, job executionJob) {
 	_ = s.pool.QueryRow(ctx, `SELECT cancel_requested FROM public.learning_task_attempts WHERE id = $1`, job.AttemptID).Scan(&stopRequested)
 	result, err := s.opts.Executor.Execute(ctx, ExecutionRequest{
 		AttemptID: job.AttemptID, TaskID: job.TaskID, UserID: job.UserID, FenceToken: job.FenceToken,
-		Session: session,
+		Session: session, TaskKind: job.TaskKind,
 		Task: PlatformTaskRef{
 			Course: PlatformCourseRef{ExternalCourseID: job.CourseExternal, ExternalClassID: job.ClassExternal,
 				CPI: job.CPI, CycleKey: job.CycleKey},
@@ -625,14 +635,26 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 			return errServiceUnavailable
 		}
 		terminalBilling := false
+		verificationReason := "execution_completed"
+		if job.TaskKind == "quiz" {
+			verificationReason = "question_submission"
+		}
 		switch {
 		case failure == nil:
 			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
 				state = 'waiting_verification', lease_attempt_id = NULL, lease_owner = '', lease_expires_at = NULL,
 				stop_requested_at = NULL, observation = $2, media_evidence = $3,
 				last_error_code = '', last_error_scope = '', next_attempt_at = NULL, next_verify_at = $4,
-				verification_reason = 'execution_completed', verification_attempts = 0,
+				verification_reason = $5, verification_attempts = 0,
 				version = version + 1, updated_at = $4
+				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, now, verificationReason)
+		case failure.Class == FailureSubmissionUnknown:
+			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
+				state = 'waiting_verification', lease_attempt_id = NULL, lease_owner = '', lease_expires_at = NULL,
+				stop_requested_at = NULL, observation = $2, media_evidence = $3,
+				last_error_code = 'submission_unknown', last_error_scope = 'platform',
+				next_attempt_at = NULL, next_verify_at = $4, verification_reason = 'question_submission',
+				verification_attempts = 0, version = version + 1, updated_at = $4
 				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, now)
 		case failure.Class == FailureStopped || failure.Class == FailureCancelled:
 			target := StatePaused
@@ -662,19 +684,20 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 			if err == nil {
 				err = s.blockAccount(ctx, tx, record.UserID, string(failure.Class), "平台要求重新验证或拒绝访问", nil)
 			}
-		case failure.Class == FailureCapabilityMissing:
+		case failure.Class == FailureCapabilityMissing || failure.Class == FailureAnswerUnavailable:
 			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
 				state = 'needs_attention', lease_attempt_id = NULL, lease_owner = '', lease_expires_at = NULL,
-				observation = $2, media_evidence = $3, last_error_code = 'capability_missing',
+				observation = $2, media_evidence = $3, last_error_code = $5,
 				last_error_scope = 'task', version = version + 1, updated_at = $4
-				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, now)
+				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, now, string(failure.Class))
 			terminalBilling = true
 		case failure.Class == FailureInvalidTask || failure.Class == FailurePermanent:
 			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
 				state = 'failed', lease_attempt_id = NULL, lease_owner = '', lease_expires_at = NULL,
 				observation = $2, media_evidence = $3, last_error_code = $4, last_error_scope = 'task',
+				failure_count = GREATEST(failure_count, $6), next_attempt_at = NULL,
 				version = version + 1, updated_at = $5
-				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, string(failure.Class), now)
+				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, string(failure.Class), now, s.opts.MaxAttempts)
 			terminalBilling = true
 		default:
 			if record.DesiredState == DesiredCancel || record.DesiredState == DesiredPause {

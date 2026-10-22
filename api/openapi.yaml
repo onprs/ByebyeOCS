@@ -2576,44 +2576,6 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/CacheReportInput'
-  /api/v1/question-submissions:
-    post:
-      operationId: submitQuestionAnswer
-      tags:
-      - user-questions
-      summary: 确认后提交答案（当前平台适配器未配置）
-      responses:
-        '503':
-          $ref: '#/components/responses/ServiceUnavailable'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '409':
-          $ref: '#/components/responses/Conflict'
-        '404':
-          $ref: '#/components/responses/NotFound'
-        '422':
-          $ref: '#/components/responses/ValidationFailed'
-        '415':
-          $ref: '#/components/responses/UnsupportedMediaType'
-        '428':
-          $ref: '#/components/responses/PreconditionRequired'
-        '500':
-          $ref: '#/components/responses/InternalError'
-      description: success 路径依赖平台提交适配器；当前代码在最终阶段统一返回 503 platform_submission_unavailable，且不执行实际提交。
-      security:
-      - userCookie: []
-      - userBearer: []
-      parameters:
-      - $ref: '#/components/parameters/UserCsrf'
-      - $ref: '#/components/parameters/UserOrigin'
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: '#/components/schemas/SubmissionInput'
   /admin/api/v1/question-models:
     get:
       operationId: listAdminQuestionModels
@@ -3761,7 +3723,7 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     PreconditionRequired:
-      description: 缺少 If-Match 版本条件或人工确认条件（precondition_required / confirmation_required / cost_confirmation_required）
+      description: 缺少 If-Match 版本条件，或未授权管理员付费模型测试（precondition_required / cost_confirmation_required）
       content:
         application/json:
           schema:
@@ -5485,9 +5447,11 @@ components:
           - always_llm
         require_manual_confirmation:
           type: boolean
-          description: 当前版本只接受 true；自动提交尚未实现
+          deprecated: true
+          default: false
+          description: 仅兼容旧客户端，输入值忽略；启用策略后全自动取题、作答与提交
       additionalProperties: false
-      description: 题库策略；字段均可省略，省略时默认关闭、cache_first、人工确认。
+      description: 题库策略；省略时默认关闭、cache_first。启用后按冻结的模型与模式自动执行，无需人工确认。
     QuestionPolicyView:
       type: object
       properties:
@@ -5504,12 +5468,16 @@ components:
           - always_llm
         require_manual_confirmation:
           type: boolean
+          deprecated: true
+          enum:
+          - false
+          description: 兼容字段，始终为 false
         execution_available:
           type: boolean
-          description: 当前版本固定为 false
+          description: 当前部署是否接入自动做题执行器
         submission_available:
           type: boolean
-          description: 当前版本固定为 false
+          description: 当前部署是否启用自动平台提交
       additionalProperties: false
       required:
       - enabled
@@ -8131,6 +8099,7 @@ components:
           - multiple
           - judgement
           - completion
+          - shortanswer
         images:
           type: array
           items:
@@ -8545,22 +8514,6 @@ components:
       - id
       - status
       - created_at
-    SubmissionInput:
-      type: object
-      properties:
-        query_id:
-          type: string
-          pattern: ^qq_[0-9a-f]{32}$
-        answer_sha256:
-          type: string
-          pattern: ^[0-9a-f]{64}$
-        confirmed:
-          type: boolean
-      additionalProperties: false
-      required:
-      - query_id
-      - answer_sha256
-      - confirmed
     CacheInvalidationInput:
       type: object
       properties:

@@ -72,6 +72,43 @@ func (s *Service) resourceGate(ctx context.Context) error {
 	return nil
 }
 
+// CheckExternalRequest 供后台编排与 HTTP 入口复用资源、恢复状态门槛。
+func (s *Service) CheckExternalRequest(ctx context.Context) error {
+	return s.resourceGate(ctx)
+}
+
+// AcquireQuestion 在 HTTP 查询与后台做题之间共享并发名额。
+// 成功后调用方必须释放；失败时不占用名额。
+func (s *Service) AcquireQuestion(ctx context.Context) (func(), error) {
+	if err := s.resourceGate(ctx); err != nil {
+		return nil, err
+	}
+	select {
+	case s.questionSlots <- struct{}{}:
+		return func() { <-s.questionSlots }, nil
+	default:
+		return nil, fault.New("rate_limited", "题库正在处理其他查询，请稍后重试")
+	}
+}
+
+// WaitForQuestion 供后台任务等待共享名额；等待期间可由任务取消或失去租约中断。
+func (s *Service) WaitForQuestion(ctx context.Context) (func(), error) {
+	if err := s.resourceGate(ctx); err != nil {
+		return nil, err
+	}
+	select {
+	case s.questionSlots <- struct{}{}:
+		release := func() { <-s.questionSlots }
+		if err := s.resourceGate(ctx); err != nil {
+			release()
+			return nil, err
+		}
+		return release, nil
+	case <-ctx.Done():
+		return nil, fault.New("service_unavailable", "题库等待已取消")
+	}
+}
+
 // Gate 只用于新付费/收费操作，不能阻断已有支付回调、释放和必要恢复。
 func (s *Service) Gate(ctx context.Context) error {
 	if err := s.resourceGate(ctx); err != nil {

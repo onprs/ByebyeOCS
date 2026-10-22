@@ -200,7 +200,6 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
         enabled: _questionEnabled,
         modelOfferingId: _questionEnabled ? _questionModelId : null,
         answerMode: _answerMode,
-        requireManualConfirmation: true,
       ),
     );
     final errors = draft.validate();
@@ -709,7 +708,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      '策略随安排版本冻结；修改只影响后续领取的任务。',
+                      '策略随安排版本冻结；开启后自动查询并提交测验答案。',
                       style: TextStyle(
                         color: colors.textSecondary,
                         fontSize: 11.5,
@@ -739,7 +738,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
           if (!_questionEnabled) ...[
             const SizedBox(height: 8),
             Text(
-              '关闭时不会指定模型或作答方式，也不会自动把测验交给题库。',
+              '关闭时不会查询或提交测验答案。',
               style: TextStyle(
                 color: colors.textSecondary,
                 fontSize: 11.5,
@@ -844,7 +843,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
             ),
             const SizedBox(height: 10),
             Text(
-              '提交前人工确认：固定开启。当前版本不会自动答题，也不会自动提交。',
+              '提交结果以平台复核为准。',
               style: TextStyle(
                 color: colors.textSecondary,
                 fontSize: 11,

@@ -540,6 +540,20 @@ func (s *Service) applyVerification(ctx context.Context, taskID string, check Pl
 			}
 		}
 		if check.Status == CheckUnconfirmed {
+			if record.VerificationReason == "question_submission" {
+				// 最终提交已经发起；平台尚未确认时只继续读取，不重新执行做题。
+				target, code := StateWaitingVerification, "submission_unconfirmed"
+				var next any = now.Add(s.retryDelay(verificationAttempts, nil))
+				if verificationAttempts >= s.opts.MaxVerifications {
+					target, next = StateNeedsAttention, nil
+				}
+				_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET state=$2,
+					platform_check=$3,platform_status='unconfirmed',platform_checked_at=$4,
+					last_error_code=$5,last_error_scope='platform',next_verify_at=$6,
+					next_attempt_at=NULL,version=version+1,updated_at=$4 WHERE id=$1`,
+					taskID, target, checkJSON, now, code, next)
+				return err
+			}
 			if record.VerificationReason == "crash_recovery" {
 				safeRecovery := s.opts.RecoveryRetry && s.opts.Executor != nil &&
 					s.opts.Executor.Capabilities().SafeLeaseRecovery

@@ -1,4 +1,4 @@
-// Package chaoxing 实现学习通原生认证、只读核验和受控HTTP任务执行。
+// Package chaoxing 实现学习通原生认证、只读核验、受控HTTP任务执行与章节测验提交。
 //
 // 平台连接与执行分别默认关闭。执行器不提供伪造时长、重复参数或跳过验证的开关；
 // 上游请求经过域名、TLS、目标IP、重定向、响应体积和速率限制，
@@ -35,6 +35,8 @@ var defaultEndpoints = Endpoints{
 	Catalog:    "https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse",
 	Cards:      "https://mooc1.chaoxing.com/mooc-ans/knowledge/cards",
 	Login:      "https://passport2.chaoxing.com/fanyalogin",
+	Work:       "https://mooc1.chaoxing.com/mooc-ans/api/work",
+	WorkSubmit: "https://mooc1.chaoxing.com/mooc-ans/work/addStudentWorkNew",
 }
 
 // Endpoints 仅用于固定上游入口和隔离契约测试，不接受用户输入。
@@ -43,6 +45,8 @@ type Endpoints struct {
 	Catalog    string
 	Cards      string
 	Login      string
+	Work       string
+	WorkSubmit string
 }
 
 type httpOptions struct {
@@ -284,7 +288,13 @@ func NewPlatform(options Options) (*Platform, error) {
 	if endpoints.Cards == "" {
 		endpoints.Cards = defaultEndpoints.Cards
 	}
-	for _, raw := range []string{endpoints.CourseList, endpoints.Catalog, endpoints.Cards} {
+	if endpoints.Work == "" {
+		endpoints.Work = defaultEndpoints.Work
+	}
+	if endpoints.WorkSubmit == "" {
+		endpoints.WorkSubmit = defaultEndpoints.WorkSubmit
+	}
+	for _, raw := range []string{endpoints.CourseList, endpoints.Catalog, endpoints.Cards, endpoints.Work, endpoints.WorkSubmit} {
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Scheme != "https" || parsed.User != nil {
 			return nil, errors.New("上游入口必须是 HTTPS 地址")

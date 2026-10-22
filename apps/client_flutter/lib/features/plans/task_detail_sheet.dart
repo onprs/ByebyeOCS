@@ -806,10 +806,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
   QuestionPrompt? _manualPrompt;
   bool _loadingExisting = false;
   bool _querying = false;
-  bool _submitting = false;
   bool _reporting = false;
-  bool _confirmedAnswer = false;
-  bool _submittedThisSession = false;
   String? _selectedModelId;
   AnswerMode _mode = AnswerMode.cacheFirst;
   String? _error;
@@ -843,7 +840,6 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
       setState(() {
         _query = query;
         _loadingExisting = false;
-        _confirmedAnswer = false;
       });
     } on ApiException catch (error) {
       if (!mounted) return;
@@ -870,7 +866,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
     return SectionCard(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
       title: '题库答案',
-      subtitle: '查询、用户确认与提交相互独立；提交前需要人工核对。',
+      subtitle: '单独查询只展示答案；安排内的测验由平台自动提交。',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -919,18 +915,8 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
               const SizedBox(height: 14),
               _QueryResult(
                 query: _query!,
-                confirmed: _confirmedAnswer,
-                submitting: _submitting,
                 reporting: _reporting,
-                onConfirmChanged: (value) {
-                  setState(() {
-                    _confirmedAnswer = value;
-                    _error = null;
-                  });
-                },
-                onSubmit:
-                    _query!.submitted || _submittedThisSession ? null : _submit,
-                onReport: _query!.submitted ? null : _report,
+                onReport: _report,
               ),
             ],
             if (_query?.status == 'needs_review') ...[
@@ -987,7 +973,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
         Padding(
           padding: const EdgeInsets.only(bottom: 8),
           child: Text(
-            '安排策略在任务领取时冻结；此处的模型与模式只用于本次手工查询，不会自动执行或提交。',
+            '单独查询不影响安排已冻结的模型与模式。',
             style: TextStyle(color: colors.muted, fontSize: 11, height: 1.5),
           ),
         ),
@@ -1097,7 +1083,6 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
       _querying = true;
       _error = null;
       _notice = null;
-      _confirmedAnswer = false;
     });
     try {
       final query = await ref.read(questionRepositoryProvider).createQuery(
@@ -1112,7 +1097,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
       setState(() {
         _query = query;
         _querying = false;
-        _notice = query.answered ? '答案已返回，请核对后再提交' : '查询已提交，答案返回后可继续核对';
+        _notice = query.answered ? '答案已返回' : '查询已提交，答案返回后可继续查看';
       });
       if (!query.answered && query.id.isNotEmpty) {
         await _refreshQuery(query.id);
@@ -1141,7 +1126,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
         _query = query;
         _querying = false;
         _error = null;
-        if (query.answered) _notice = '答案已刷新，请核对后再提交';
+        if (query.answered) _notice = '答案已刷新';
       });
     } on ApiException catch (error) {
       if (!mounted) return;
@@ -1154,46 +1139,6 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
       setState(() {
         _querying = false;
         _error = '答案刷新未完成';
-      });
-    }
-  }
-
-  Future<void> _submit() async {
-    final query = _query;
-    if (query == null || !_confirmedAnswer || _submitting) return;
-    final confirmed = await showConfirmDialog(
-      context,
-      title: '提交这道题的答案？',
-      message: '提交后由学习通处理。请确认题目、答案与来源均已核对。',
-      confirmLabel: '确认提交',
-    );
-    if (!confirmed || !mounted) return;
-    setState(() {
-      _submitting = true;
-      _error = null;
-    });
-    try {
-      await ref.read(questionRepositoryProvider).submit(
-            query: query,
-            idempotencyKey: newIdempotencyKey(),
-          );
-      if (!mounted) return;
-      setState(() {
-        _submitting = false;
-        _submittedThisSession = true;
-        _notice = '答案已提交，等待学习通返回结果';
-      });
-    } on ApiException catch (error) {
-      if (!mounted) return;
-      setState(() {
-        _submitting = false;
-        _error = error.userMessage;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _submitting = false;
-        _error = '答案提交未完成，请稍后重试';
       });
     }
   }
@@ -1309,20 +1254,12 @@ class _PromptView extends StatelessWidget {
 class _QueryResult extends StatelessWidget {
   const _QueryResult({
     required this.query,
-    required this.confirmed,
-    required this.submitting,
     required this.reporting,
-    required this.onConfirmChanged,
-    required this.onSubmit,
     required this.onReport,
   });
 
   final QuestionQuery query;
-  final bool confirmed;
-  final bool submitting;
   final bool reporting;
-  final ValueChanged<bool> onConfirmChanged;
-  final VoidCallback? onSubmit;
   final VoidCallback? onReport;
 
   @override
@@ -1414,36 +1351,10 @@ class _QueryResult extends StatelessWidget {
             ),
           ],
           const SizedBox(height: 10),
-          Material(
-            color: Colors.transparent,
-            child: CheckboxListTile(
-              value: confirmed,
-              onChanged: query.submitted || submitting
-                  ? null
-                  : (value) => onConfirmChanged(value ?? false),
-              controlAffinity: ListTileControlAffinity.leading,
-              contentPadding: EdgeInsets.zero,
-              visualDensity: VisualDensity.compact,
-              title: Text(
-                '我已核对题目、答案与来源，确认提交这道题',
-                style: TextStyle(
-                  color: colors.textSecondary,
-                  fontSize: 12,
-                  height: 1.5,
-                ),
-              ),
-            ),
-          ),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              AsyncButton(
-                label: '提交到学习通',
-                icon: Icons.send_outlined,
-                busy: submitting,
-                onPressed: confirmed && query.answered ? onSubmit : null,
-              ),
               AsyncButton(
                 label: '报告答案问题',
                 icon: Icons.flag_outlined,

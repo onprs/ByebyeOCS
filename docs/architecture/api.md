@@ -51,7 +51,7 @@
 | POST `/question-queries` | 查询答案，提交模型条目、`cache_first`/`always_llm`、预算 | 服务端价格快照、预占、`Idempotency-Key`；不能提交任意上游模型 |
 | GET `/question-queries/{id}` | 原题、答案、模型、缓存命中、token 分解与状态 | 无虚构置信度；不返回上游密钥 |
 | POST `/question-cache-reports` | 报告错误缓存/答案 | 标记待复核，不直接删除财务证据 |
-| POST `/question-submissions` | 确认后提交 | 题目/答案版本及确认令牌，避免重放 |
+| 安排中的题库策略 | 后台自动取题、作答、提交与复核 | 不提供人工提交API；按冻结版本、试卷指纹和持久提交状态执行 |
 | GET `/pricing`、GET `/usage` | 已确定的用量模式、有效价格/计量版本、个人用量和结算 | 单位或价格未配置时明确不可收费，不能当 0 元价格 |
 | GET `/wallet` | 可用、预占与币种 | 字符串整数分 |
 | GET `/wallet/entries` | 充值/消费/释放/退款 | 可解释业务关联与价格版本 |

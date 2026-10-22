@@ -18,7 +18,7 @@
 
 ZPay商户信息、通道、通知域名和经营类别须按自己的商户实际能力配置。返回页不负责入账。回调验签/查单后的数据库事务负责订单和到账；未决支付和退款保留复核入口。
 
-题库使用独立PostgreSQL和服务令牌，上游模型密钥仅在题库。主服务发布公开ID；`cache_first`和`always_llm`的缓存及token规则见 [题库适配](../architecture/integrations.md)。平台答案提交当前关闭，必要的人工确认始终保留。
+题库使用独立PostgreSQL和服务令牌，上游模型密钥仅在题库。主服务发布公开ID；`cache_first`和`always_llm`的缓存及token规则见 [题库适配](../architecture/integrations.md)。安排启用题库策略后全自动取题、作答、填写、提交和独立平台复核，无需人工确认；实际平台执行仍由部署配置启用。
 
 ## 备份与恢复点
 

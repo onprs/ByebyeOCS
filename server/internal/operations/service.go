@@ -117,18 +117,18 @@ func (s *Service) Guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		questionRequest := r.Method == "POST" && (r.URL.Path == "/api/v1/question-queries" || (strings.HasPrefix(r.URL.Path, "/admin/api/v1/question-models/") && strings.HasSuffix(r.URL.Path, "/tests")))
 		if questionRequest {
-			select {
-			case s.questionSlots <- struct{}{}:
-				defer func() { <-s.questionSlots }()
-			default:
-				w.Header().Set("Retry-After", "3")
-				web.Error(w, r, 429, "rate_limited", "题库正在处理其他查询，请稍后重试")
+			release, err := s.AcquireQuestion(r.Context())
+			if err != nil {
+				code, _ := fault.Describe(err)
+				if code == "rate_limited" {
+					w.Header().Set("Retry-After", "3")
+					web.Error(w, r, 429, code, "题库正在处理其他查询，请稍后重试")
+				} else {
+					web.Fail(w, r, err)
+				}
 				return
 			}
-			if err := s.resourceGate(r.Context()); err != nil {
-				web.Fail(w, r, err)
-				return
-			}
+			defer release()
 		}
 		if s.options.DiskProtection && r.Method == "POST" {
 			path := r.URL.Path

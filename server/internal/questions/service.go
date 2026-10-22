@@ -126,8 +126,6 @@ type Options struct {
 	MaxRequestBytes             int64
 	ForkTimeout                 time.Duration
 	Now                         func() time.Time
-	// SubmissionEnabled 只表示平台提交能力是否由部署配置开启；没有真实适配器时仍返回不可用。
-	SubmissionEnabled bool
 }
 
 // Billing 由账本模块实现；三个方法都必须在调用方事务内执行。
@@ -155,7 +153,6 @@ type Service struct {
 	maxBody       int64
 	timeout       time.Duration
 	now           func() time.Time
-	submit        bool
 }
 
 func New(pool *pgxpool.Pool, options Options) (*Service, error) {
@@ -236,7 +233,7 @@ func New(pool *pgxpool.Pool, options Options) (*Service, error) {
 		imageInput: imageInput, captionOutput: captionOutput,
 		scopeKey: secret, shared: options.AllowSharedCache,
 		maxOut: maxOut, maxImg: maxImages, maxBytes: maxBytes, maxPix: maxPixels, maxBody: maxBody,
-		timeout: timeout, now: func() time.Time { return now().UTC() }, submit: options.SubmissionEnabled,
+		timeout: timeout, now: func() time.Time { return now().UTC() },
 	}, nil
 }
 
@@ -253,7 +250,6 @@ func (s *Service) RegisterUser(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/question-queries", s.listUserQueries)
 	mux.HandleFunc("GET /api/v1/question-queries/{id}", s.getUserQuery)
 	mux.HandleFunc("POST /api/v1/question-cache-reports", s.createCacheReport)
-	mux.HandleFunc("POST /api/v1/question-submissions", s.createSubmission)
 }
 
 func (s *Service) RegisterAdmin(mux *http.ServeMux) {
@@ -358,7 +354,7 @@ func newPrefixedID(prefix string) string {
 
 func validQuestionType(value string) bool {
 	switch value {
-	case "single", "multiple", "judgement", "completion":
+	case "single", "multiple", "judgement", "completion", "shortanswer":
 		return true
 	}
 	return false

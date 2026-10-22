@@ -40,7 +40,7 @@ type QuestionPolicyView struct {
 	ModelOfferingID           *string `json:"model_offering_id"`
 	AnswerMode                string  `json:"answer_mode"`
 	RequireManualConfirmation bool    `json:"require_manual_confirmation"`
-	// 当前版本无答题执行/自动提交能力，固定为 false；客户端不能写入。
+	// 能力取决于当前部署的自动做题执行器，客户端不能写入。
 	ExecutionAvailable  bool `json:"execution_available"`
 	SubmissionAvailable bool `json:"submission_available"`
 }
@@ -137,14 +137,8 @@ func (s *Service) normalizeQuestionPolicy(ctx context.Context, input QuestionPol
 	if policy.Mode != "cache_first" && policy.Mode != "always_llm" {
 		return QuestionPolicy{}, validation("题库模式仅支持 cache_first 或 always_llm")
 	}
-	if input.RequireManualConfirmation == nil {
-		policy.RequireManualConfirmation = true
-	} else {
-		policy.RequireManualConfirmation = *input.RequireManualConfirmation
-	}
-	if !policy.RequireManualConfirmation {
-		return QuestionPolicy{}, validation("当前版本仅支持人工确认，自动提交尚未实现")
-	}
+	// 旧客户端的确认字段仅作兼容解析，所有新安排均自动执行与提交。
+	policy.RequireManualConfirmation = false
 	if input.ModelOfferingID != nil {
 		value := strings.TrimSpace(*input.ModelOfferingID)
 		if value != "" {
@@ -304,7 +298,7 @@ func (s *Service) createOrUpdatePlan(ctx context.Context, actor Actor, actorKind
 				return err
 			}
 		}
-		item, err := readPlanTx(ctx, tx, planID, actor.ID)
+		item, err := s.readPlanTx(ctx, tx, planID, actor.ID)
 		if err != nil {
 			return err
 		}
@@ -317,7 +311,7 @@ func (s *Service) createOrUpdatePlan(ctx context.Context, actor Actor, actorKind
 	return result, nil
 }
 
-func readPlanTx(ctx context.Context, tx pgx.Tx, planID, userID string) (PlanView, error) {
+func (s *Service) readPlanTx(ctx context.Context, tx pgx.Tx, planID, userID string) (PlanView, error) {
 	var item PlanView
 	var revisionID string
 	var courseIDs []string
@@ -348,8 +342,9 @@ func readPlanTx(ctx context.Context, tx pgx.Tx, planID, userID string) (PlanView
 	item.Scope = PlanScopeView{Kind: scopeKind, CourseIDs: courseIDs}
 	item.QuestionPolicy = QuestionPolicyView{
 		Enabled: policyEnabled, ModelOfferingID: modelOffering, AnswerMode: policyMode,
-		RequireManualConfirmation: manualConfirmation,
-		ExecutionAvailable:        false, SubmissionAvailable: false,
+		RequireManualConfirmation: false,
+		ExecutionAvailable:        s.questionExecutionAvailable(),
+		SubmissionAvailable:       s.questionExecutionAvailable(),
 	}
 	if scopeKind == "selected" && len(chapterIDs) > 0 {
 		rows, err := tx.Query(ctx, `SELECT t.course_id::text, c.id::text
@@ -425,7 +420,7 @@ func (s *Service) GetPlan(ctx context.Context, actor Actor, planID string) (Plan
 		return result, errNotFound
 	}
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		item, err := readPlanTx(ctx, tx, planID, actor.ID)
+		item, err := s.readPlanTx(ctx, tx, planID, actor.ID)
 		if err != nil {
 			return err
 		}
@@ -483,7 +478,7 @@ func (s *Service) ControlPlan(ctx context.Context, actor Actor, planID, idempote
 			if storedHash != hash {
 				return errIdempotency
 			}
-			item, err := readPlanTx(ctx, tx, planID, planUser)
+			item, err := s.readPlanTx(ctx, tx, planID, planUser)
 			if err != nil {
 				return err
 			}
