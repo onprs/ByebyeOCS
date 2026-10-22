@@ -34,6 +34,7 @@ var defaultEndpoints = Endpoints{
 	CourseList: "https://mooc2-ans.chaoxing.com/mooc2-ans/visit/courselistdata",
 	Catalog:    "https://mooc2-ans.chaoxing.com/mooc2-ans/mycourse/studentcourse",
 	Cards:      "https://mooc1.chaoxing.com/mooc-ans/knowledge/cards",
+	Study:      "https://mooc1.chaoxing.com/mooc-ans/mycourse/studentstudyAjax",
 	Login:      "https://passport2.chaoxing.com/fanyalogin",
 	Work:       "https://mooc1.chaoxing.com/mooc-ans/api/work",
 	WorkSubmit: "https://mooc1.chaoxing.com/mooc-ans/work/addStudentWorkNew",
@@ -44,6 +45,7 @@ type Endpoints struct {
 	CourseList string
 	Catalog    string
 	Cards      string
+	Study      string
 	Login      string
 	Work       string
 	WorkSubmit string
@@ -287,6 +289,9 @@ func NewPlatform(options Options) (*Platform, error) {
 	}
 	if endpoints.Cards == "" {
 		endpoints.Cards = defaultEndpoints.Cards
+		if endpoints.Study == "" {
+			endpoints.Study = defaultEndpoints.Study
+		}
 	}
 	if endpoints.Work == "" {
 		endpoints.Work = defaultEndpoints.Work
@@ -294,7 +299,10 @@ func NewPlatform(options Options) (*Platform, error) {
 	if endpoints.WorkSubmit == "" {
 		endpoints.WorkSubmit = defaultEndpoints.WorkSubmit
 	}
-	for _, raw := range []string{endpoints.CourseList, endpoints.Catalog, endpoints.Cards, endpoints.Work, endpoints.WorkSubmit} {
+	for _, raw := range []string{endpoints.CourseList, endpoints.Catalog, endpoints.Cards, endpoints.Work, endpoints.WorkSubmit, endpoints.Study} {
+		if raw == "" {
+			continue
+		}
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.Scheme != "https" || parsed.User != nil {
 			return nil, errors.New("上游入口必须是 HTTPS 地址")
@@ -328,7 +336,12 @@ func (p *Platform) CheckTask(ctx context.Context, sessionBytes []byte, ref learn
 	if err != nil {
 		return learning.PlatformCheck{Status: learning.CheckUnknown}, learning.Fail(learning.FailureIdentityInvalid, "平台会话格式无效")
 	}
-	attachments, pending, err := p.readAttachments(ctx, session, ref.Course, ref.ChapterExternalID)
+	ctx, cleanup, err := p.withSessionClient(ctx, session)
+	if err != nil {
+		return learning.PlatformCheck{Status: learning.CheckUnknown}, err
+	}
+	defer cleanup()
+	attachments, pending, err := p.readTaskAttachments(ctx, session, ref)
 	if err != nil {
 		return learning.PlatformCheck{Status: learning.CheckUnknown}, err
 	}

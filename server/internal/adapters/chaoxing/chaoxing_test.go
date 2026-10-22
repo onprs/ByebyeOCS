@@ -179,11 +179,11 @@ func TestDiscoverCourseAndCheckTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.Chapters) != 1 || len(snapshot.Chapters[0].Attachments) != 3 {
+	if len(snapshot.Chapters) != 1 || len(snapshot.Chapters[0].Attachments) != 4 {
 		t.Fatalf("快照结构错误: %+v", snapshot)
 	}
-	if snapshot.SkippedAttachments != 1 {
-		t.Fatal("缺少对象标识的附件未计数")
+	if snapshot.SkippedAttachments != 0 || snapshot.Chapters[0].Attachments[3].TaskPointID != "9003" {
+		t.Fatal("有稳定任务点编号的附件被遗漏")
 	}
 	var resource, taskPoint *learning.PlatformAttachment
 	for index := range snapshot.Chapters[0].Attachments {

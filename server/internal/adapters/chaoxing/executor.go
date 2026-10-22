@@ -8,7 +8,6 @@ import (
 	"math"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +30,7 @@ type HTTPExecutorOptions struct {
 	wait func(context.Context, time.Duration) error
 }
 
-// HTTPExecutor 通过平台下发的任务上下文和普通请求节奏执行视频任务。
+// HTTPExecutor 按平台上下文执行视频、音频及文档/阅读任务。
 // 本执行器不下载或解码媒体，所有观察均为请求执行记录，Media 始终不可用。
 type HTTPExecutor struct {
 	options  HTTPExecutorOptions
@@ -66,7 +65,7 @@ func NewHTTPExecutor(options HTTPExecutorOptions) (*HTTPExecutor, error) {
 }
 
 func (e *HTTPExecutor) Capabilities() learning.ExecutorCapabilities {
-	result := learning.ExecutorCapabilities{Name: "chaoxing-http-video", TaskKinds: []string{"video"}, SafeLeaseRecovery: true}
+	result := learning.ExecutorCapabilities{Name: "chaoxing-http", TaskKinds: []string{"video", "audio", "document"}, SafeLeaseRecovery: true}
 	switch {
 	case !e.options.Enabled:
 		result.DisabledReason = "http_executor_disabled"
@@ -92,6 +91,12 @@ func (e *HTTPExecutor) Execute(ctx context.Context, request learning.ExecutionRe
 			return result, learning.Fail(learning.FailureInvalidTask, "任务缺少有效的课程、章节或任务点标识")
 		}
 	}
+	if request.Task.CardIndex < 0 || request.Task.CardIndex >= maxChapterCards {
+		return result, learning.Fail(learning.FailureInvalidTask, "任务卡片页码无效")
+	}
+	if request.TaskKind != "" && !e.Capabilities().Supports(request.TaskKind) {
+		return result, learning.Fail(learning.FailureCapabilityMissing, "当前任务类型尚未支持原生执行")
+	}
 	session, err := decodeSession(request.Session)
 	if err != nil {
 		return result, learning.Fail(learning.FailureIdentityInvalid, "平台会话无效，需要重新验证")
@@ -109,7 +114,11 @@ func (e *HTTPExecutor) Execute(ctx context.Context, request learning.ExecutionRe
 	client := e.platform.factory.client(jar)
 	defer client.CloseIdleConnections()
 	run := &httpExecution{executor: e, session: session, client: client, request: request}
-	result, err = run.execute(ctx)
+	if request.TaskKind == "document" {
+		result, err = run.executeDocument(ctx)
+	} else {
+		result, err = run.execute(ctx)
+	}
 	if ctx.Err() != nil {
 		result.Completed = false
 		result.StopAcknowledged = true
@@ -154,13 +163,12 @@ type httpExecution struct {
 	reportURL string
 	other     string
 	rt        string
+	mediaType string
 	engine    *bool
 	duration  int
 	position  int
 	interval  time.Duration
 }
-
-var executionVerificationPage = regexp.MustCompile(`(?is)(<input\b[^>]*(?:name|id)\s*=\s*["'](?:captcha|verifycode)|<title>[^<]*(?:验证码|验证|captcha)|请输入验证码|验证码错误|captcha:)`)
 
 func (r *httpExecution) get(ctx context.Context, address, role string) ([]byte, error) {
 	factory := &r.executor.platform.factory
@@ -208,8 +216,13 @@ func (r *httpExecution) get(ctx context.Context, address, role string) ([]byte, 
 		return nil, learning.Fail(learning.FailureCapabilityMissing, "平台原生响应不可用或超出体积限制")
 	}
 	lower := strings.ToLower(string(data))
-	if executionVerificationPage.Match(data) {
+	if strings.HasPrefix(strings.TrimSpace(lower), "captcha:") {
 		return nil, learning.Fail(learning.FailureVerificationNeeded, "平台要求验证，已停止执行")
+	}
+	if strings.HasPrefix(strings.TrimSpace(lower), "<") {
+		if failure := workControlFailure(parseHTMLDocument(data)); failure != nil {
+			return nil, failure
+		}
 	}
 	var challenge map[string]any
 	if json.Unmarshal(data, &challenge) == nil {
@@ -220,6 +233,9 @@ func (r *httpExecution) get(ctx context.Context, address, role string) ([]byte, 
 		}
 		for _, key := range []string{"error", "message", "msg"} {
 			message := strings.ToLower(text(challenge[key]))
+			if failure := workFailureForMessage(message); failure != nil {
+				return nil, failure
+			}
 			if strings.Contains(message, "captcha") || strings.Contains(message, "验证码") {
 				return nil, learning.Fail(learning.FailureVerificationNeeded, "平台要求验证，已停止执行")
 			}

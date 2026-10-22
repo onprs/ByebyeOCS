@@ -347,10 +347,20 @@ func (s *Service) readPlanTx(ctx context.Context, tx pgx.Tx, planID, userID stri
 		SubmissionAvailable:       s.questionExecutionAvailable(),
 	}
 	if scopeKind == "selected" && len(chapterIDs) > 0 {
-		rows, err := tx.Query(ctx, `SELECT t.course_id::text, c.id::text
+		// 计划的选定范围保存章节行标识；快照重建或旧数据可能指向历史行。
+		// 这里按稳定外部章节标识解析到当前快照行，避免编辑安排时写回旧标识。
+		rows, err := tx.Query(ctx, `SELECT DISTINCT c.course_id::text, COALESCE(cur.id, c.id)::text
 			FROM public.learning_chapters c
-			JOIN public.learning_courses t ON t.id = c.course_id AND t.user_id = c.user_id
-			WHERE c.id = ANY($1::uuid[]) AND c.user_id = $2`, chapterIDs, userID)
+			LEFT JOIN LATERAL (
+				SELECT ch.id
+				FROM public.learning_chapters ch
+				JOIN public.learning_courses lc ON lc.id = ch.course_id AND lc.user_id = ch.user_id
+				WHERE ch.course_id = c.course_id AND ch.user_id = c.user_id
+				  AND ch.external_id = c.external_id AND ch.snapshot_version = lc.snapshot_version
+				LIMIT 1
+			) cur ON true
+			WHERE c.id = ANY($1::uuid[]) AND c.user_id = $2
+			ORDER BY 1, 2`, chapterIDs, userID)
 		if err != nil {
 			return item, errServiceUnavailable
 		}
@@ -500,6 +510,12 @@ func (s *Service) ControlPlan(ctx context.Context, actor Actor, planID, idempote
 		}
 		if tag.RowsAffected() != 1 {
 			return conflict("已归档安排不能启停")
+		}
+		// 暂停期间同步发现的新任务不会绑定；恢复时按当前版本补齐关联。
+		if status == "active" {
+			if err := bindMatchingTasks(ctx, tx, planUser); err != nil {
+				return err
+			}
 		}
 		commandID = newID()
 		_, err = tx.Exec(ctx, `INSERT INTO public.learning_plan_commands

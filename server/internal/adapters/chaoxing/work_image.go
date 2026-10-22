@@ -118,12 +118,11 @@ func (p *Platform) fetchWorkImage(ctx context.Context, session Session, ref work
 	if err != nil || !p.factory.allowedURL(target) || target.Fragment != "" {
 		return learning.WorkImage{}, learning.Fail(learning.FailureCapabilityMissing, "测验图片地址不在允许范围")
 	}
-	jar, err := sessionJar(session)
+	client, cleanup, err := p.requestClient(ctx, session)
 	if err != nil {
-		return learning.WorkImage{}, learning.Fail(learning.FailureIdentityInvalid, "平台会话无法建立 Cookie 容器")
+		return learning.WorkImage{}, err
 	}
-	client := p.factory.client(jar)
-	defer client.CloseIdleConnections()
+	defer cleanup()
 	limit := int64(maxWorkImageBytes)
 	if p.options.MaxResponseBytes > 0 && p.options.MaxResponseBytes < limit {
 		limit = p.options.MaxResponseBytes

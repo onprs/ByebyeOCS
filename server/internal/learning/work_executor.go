@@ -87,6 +87,15 @@ func (e *AutomaticExecutor) Execute(ctx context.Context, req ExecutionRequest) (
 	if err := e.beforeExternal(ctx, req); err != nil {
 		return ExecutionResult{}, err
 	}
+	if scoped, ok := e.opts.Platform.(WorkSessionPlatform); ok {
+		var cleanup func()
+		var err error
+		ctx, cleanup, err = scoped.BeginWorkSession(ctx, req.Session)
+		if err != nil {
+			return ExecutionResult{}, err
+		}
+		defer cleanup()
+	}
 	sheet, err := e.opts.Platform.ReadWork(ctx, req.Session, req.Task)
 	if err != nil {
 		return ExecutionResult{}, err

@@ -26,9 +26,15 @@ type executionJob struct {
 	CycleKey             string
 	ChapterExternal      string
 	ObjectID             string
+	CardIndex            int
 	TaskPointID          string
 	MediaDurationSeconds float64
 	QuestionPolicy       QuestionPolicy
+	// 已冻结的计费事实；重试时原样延续，避免重新报价或丢失预占。
+	BillingState    string
+	BillingHoldID   string
+	BillingQuoteRaw json.RawMessage
+	PriceVersion    string
 }
 
 type runningExecution struct {
@@ -114,9 +120,10 @@ func (s *Service) dispatchLoop(ctx context.Context) {
 }
 
 type claimCandidate struct {
-	id       string
-	userID   string
-	taskKind string
+	id           string
+	userID       string
+	taskKind     string
+	planPriority int
 }
 
 func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
@@ -137,9 +144,26 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 		if active >= s.opts.GlobalConcurrency {
 			return nil
 		}
-		rows, err := tx.Query(ctx, `SELECT t.id::text, t.user_id::text, t.task_kind
+		rows, err := tx.Query(ctx, `SELECT t.id::text, t.user_id::text, t.task_kind, matching_plan.priority
 			FROM public.learning_tasks t
 			JOIN public.learning_accounts a ON a.user_id = t.user_id
+			JOIN public.learning_courses course ON course.id = t.course_id AND course.user_id = t.user_id
+			JOIN public.learning_attachments att ON att.id = t.attachment_id
+				AND att.user_id = t.user_id AND att.course_id = t.course_id
+			JOIN LATERAL (
+				SELECT max(r.priority) AS priority
+				FROM public.learning_plan_task_bindings b
+				JOIN public.learning_plans p ON p.id = b.plan_id AND p.user_id = b.user_id AND p.status = 'active'
+				JOIN public.learning_plan_revisions r ON r.id = p.current_revision_id AND r.user_id = p.user_id
+				WHERE b.task_id = t.id AND b.plan_revision_id = p.current_revision_id
+				  -- 绑定是历史关联；领取前按当前版本重新核对课程、类型与选定章节的外部标识。
+				  AND t.course_id = ANY(r.course_ids)
+				  AND t.task_kind = ANY(r.task_types)
+				  AND (r.scope_kind = 'all' OR EXISTS (
+					SELECT 1 FROM public.learning_chapters sc
+					WHERE sc.id = ANY(r.chapter_ids) AND sc.course_id = t.course_id
+					  AND sc.user_id = t.user_id AND sc.external_id = t.chapter_external_id))
+			) matching_plan ON matching_plan.priority IS NOT NULL
 			WHERE t.state IN ('pending', 'failed')
 			  AND t.desired_state = 'run'
 			  AND t.lease_attempt_id IS NULL
@@ -148,12 +172,10 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 			  AND t.failure_count < $1
 			  AND a.blocked_code = ''
 			  AND (a.blocked_until IS NULL OR a.blocked_until <= now())
-			  AND EXISTS (
-				SELECT 1 FROM public.learning_plan_task_bindings b
-				JOIN public.learning_plans p ON p.id = b.plan_id AND p.user_id = b.user_id AND p.status = 'active'
-				WHERE b.task_id = t.id AND b.plan_revision_id = p.current_revision_id)
+			  -- 最新完整快照中已不存在的附件不能再领取。
+			  AND att.snapshot_version = course.snapshot_version
 			ORDER BY COALESCE(a.last_claimed_at, '1970-01-01'::timestamptz),
-				t.priority DESC, COALESCE(t.next_attempt_at, t.created_at), t.created_at
+				matching_plan.priority DESC, COALESCE(t.next_attempt_at, t.created_at), t.created_at
 			LIMIT 100`, s.opts.MaxAttempts)
 		if err != nil {
 			return errServiceUnavailable
@@ -161,7 +183,7 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 		candidates := make([]claimCandidate, 0, 100)
 		for rows.Next() {
 			var item claimCandidate
-			if err := rows.Scan(&item.id, &item.userID, &item.taskKind); err != nil {
+			if err := rows.Scan(&item.id, &item.userID, &item.taskKind, &item.planPriority); err != nil {
 				rows.Close()
 				return errServiceUnavailable
 			}
@@ -185,8 +207,9 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 			job.TaskID = candidate.id
 			job.UserID = candidate.userID
 			err := tx.QueryRow(ctx, `SELECT t.course_external_id, t.class_external_id, c.external_cpi,
-				t.cycle_key, t.chapter_external_id, a.external_object_id, t.task_point_id, t.task_kind, t.priority,
-				a.duration_seconds
+				t.cycle_key, t.chapter_external_id, a.external_object_id, a.card_index, t.task_point_id,
+				t.task_kind, a.duration_seconds,
+				t.billing_state, t.billing_hold_id, t.billing_quote, COALESCE(t.price_version_id::text, '')
 				FROM public.learning_tasks t
 				JOIN public.learning_courses c ON c.id = t.course_id AND c.user_id = t.user_id
 				JOIN public.learning_attachments a ON a.id = t.attachment_id AND a.user_id = t.user_id
@@ -194,9 +217,13 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 				WHERE t.id = $1 AND t.state IN ('pending', 'failed') AND t.desired_state = 'run'
 				  AND t.lease_attempt_id IS NULL AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= now())
 				  AND ac.blocked_code = '' AND (ac.blocked_until IS NULL OR ac.blocked_until <= now())
+				  -- 二次加锁核对最新快照，避免候选读取后状态变化。
+				  AND a.snapshot_version = c.snapshot_version
 				FOR UPDATE OF t SKIP LOCKED`, candidate.id).Scan(
 				&job.CourseExternal, &job.ClassExternal, &job.CPI, &job.CycleKey, &job.ChapterExternal,
-				&job.ObjectID, &job.TaskPointID, &job.TaskKind, &job.Priority, &job.MediaDurationSeconds)
+				&job.ObjectID, &job.CardIndex, &job.TaskPointID, &job.TaskKind,
+				&job.MediaDurationSeconds, &job.BillingState, &job.BillingHoldID, &job.BillingQuoteRaw,
+				&job.PriceVersion)
 			if errors.Is(err, pgx.ErrNoRows) {
 				continue
 			}
@@ -210,14 +237,24 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 				continue
 			}
 			var policyModel *string
-			if err := tx.QueryRow(ctx, `SELECT r.id::text, r.question_policy_enabled,
+			if err := tx.QueryRow(ctx, `SELECT r.id::text, r.priority, r.question_policy_enabled,
 				r.question_model_offering_id, r.question_mode, r.require_manual_confirmation
 				FROM public.learning_plan_task_bindings b
+				JOIN public.learning_tasks t ON t.id = b.task_id AND t.user_id = b.user_id
 				JOIN public.learning_plans p ON p.id = b.plan_id AND p.user_id = b.user_id AND p.status = 'active'
 				JOIN public.learning_plan_revisions r ON r.id = p.current_revision_id AND r.user_id = p.user_id
 				WHERE b.task_id = $1 AND b.plan_revision_id = p.current_revision_id
-				ORDER BY r.priority DESC, r.created_at DESC LIMIT 1`, job.TaskID).Scan(
-				&job.PlanRevisionID, &job.QuestionPolicy.Enabled, &policyModel,
+				  -- 与候选领取相同：历史绑定必须仍符合当前课程、类型和稳定章节范围。
+				  AND t.course_id = ANY(r.course_ids)
+				  AND t.task_kind = ANY(r.task_types)
+				  AND (r.scope_kind = 'all' OR EXISTS (
+					SELECT 1 FROM public.learning_chapters sc
+					WHERE sc.id = ANY(r.chapter_ids) AND sc.course_id = t.course_id
+					  AND sc.user_id = t.user_id AND sc.external_id = t.chapter_external_id))
+				-- 测验任务优先采用已启用题库策略的有效安排，不能让未启用策略的高优先级安排阻塞。
+				ORDER BY CASE WHEN $2 = 'quiz' AND r.question_policy_enabled THEN 0 ELSE 1 END,
+				         r.priority DESC, r.created_at DESC LIMIT 1`, job.TaskID, candidate.taskKind).Scan(
+				&job.PlanRevisionID, &job.Priority, &job.QuestionPolicy.Enabled, &policyModel,
 				&job.QuestionPolicy.Mode, &job.QuestionPolicy.RequireManualConfirmation); err != nil {
 				if errors.Is(err, pgx.ErrNoRows) {
 					continue
@@ -239,9 +276,22 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 			billingHold := ""
 			billingQuote := []byte("{}")
 			var priceVersion any
-			if s.opts.Billing != nil {
+			state, hold, quoteJSON, storedPrice, billingCode := frozenClaimBilling(job)
+			if billingCode != "" {
+				if err := markTaskAttention(ctx, tx, job.TaskID, billingCode, now); err != nil {
+					return err
+				}
+				continue
+			}
+			if len(job.BillingQuoteRaw) > 2 {
+				// 任务已有冻结报价：重试不重新报价，也不覆盖原预占引用。
+				billingState, billingHold, billingQuote, priceVersion = state, hold, quoteJSON, storedPrice
+			} else if s.opts.Billing == nil {
+				// 未接线账本也要冻结“未启用扣费”，避免后续接线后追溯报价已启动任务。
+				billingQuote, _ = json.Marshal(BillingQuote{Configured: false, State: "disabled"})
+			} else {
 				var quote BillingQuote
-				var hold string
+				var reservedHold string
 				billingCode := "billing_quote_failed"
 				billingErr := withSavepoint(ctx, tx, func(sp pgx.Tx) error {
 					parsed, err := s.opts.Billing.Quote(ctx, sp, job.UserID, job.TaskID, job.TaskKind)
@@ -255,7 +305,7 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 						if err != nil {
 							return err
 						}
-						hold = reserved
+						reservedHold = reserved
 					}
 					quote = parsed
 					return nil
@@ -270,7 +320,7 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 				if quote.Configured && quote.AmountMinor > 0 {
 					billingState = "reserved"
 				}
-				billingHold = hold
+				billingHold = reservedHold
 				billingQuote, _ = json.Marshal(quote)
 				if web.ValidID(quote.PriceVersion) {
 					priceVersion = quote.PriceVersion
@@ -397,7 +447,8 @@ func (s *Service) execute(ctx context.Context, job executionJob) {
 		Task: PlatformTaskRef{
 			Course: PlatformCourseRef{ExternalCourseID: job.CourseExternal, ExternalClassID: job.ClassExternal,
 				CPI: job.CPI, CycleKey: job.CycleKey},
-			ChapterExternalID: job.ChapterExternal, ObjectID: job.ObjectID, TaskPointID: job.TaskPointID,
+			CardIndex: job.CardIndex, ChapterExternalID: job.ChapterExternal, ObjectID: job.ObjectID,
+			TaskPointID: job.TaskPointID,
 		},
 		PlanRevision: job.PlanRevisionID, Priority: job.Priority, StopRequested: stopRequested,
 		QuestionPolicy: job.QuestionPolicy, MediaDurationSeconds: job.MediaDurationSeconds,
@@ -442,7 +493,8 @@ func (s *Service) preflight(ctx context.Context, job executionJob, session []byt
 		Task: PlatformTaskRef{
 			Course: PlatformCourseRef{ExternalCourseID: job.CourseExternal,
 				ExternalClassID: job.ClassExternal, CPI: job.CPI, CycleKey: job.CycleKey},
-			ChapterExternalID: job.ChapterExternal, ObjectID: job.ObjectID, TaskPointID: job.TaskPointID,
+			CardIndex: job.CardIndex, ChapterExternalID: job.ChapterExternal, ObjectID: job.ObjectID,
+			TaskPointID: job.TaskPointID,
 		},
 	})
 	if err != nil {
@@ -656,6 +708,35 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 				next_attempt_at = NULL, next_verify_at = $4, verification_reason = 'question_submission',
 				verification_attempts = 0, version = version + 1, updated_at = $4
 				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, now)
+		case (failure.Class == FailureStopped || failure.Class == FailureCancelled) && cancelRequested &&
+			record.LastErrorCode == snapshotMissingCode && record.DesiredState == DesiredRun:
+			// 快照触发的停止须保留原运行意图和预占；已发送最终提交时只回到核验。
+			var present, submitted bool
+			if err := tx.QueryRow(ctx, `SELECT
+				EXISTS (SELECT 1 FROM public.learning_attachments a
+					JOIN public.learning_courses c ON c.id = a.course_id AND c.user_id = a.user_id
+					WHERE a.id = t.attachment_id AND a.user_id = t.user_id
+					  AND a.snapshot_version = c.snapshot_version),
+				EXISTS (SELECT 1 FROM public.learning_work_runs w WHERE w.task_id = t.id
+					AND w.state IN ('submitting', 'submitted', 'submission_unknown'))
+				FROM public.learning_tasks t WHERE t.id = $1`, job.TaskID).Scan(&present, &submitted); err != nil {
+				return errServiceUnavailable
+			}
+			target, code, reason := StateNeedsAttention, snapshotMissingCode, ""
+			var nextVerify any
+			if submitted {
+				target, code, reason, nextVerify = StateWaitingVerification, "", "question_submission", now
+			} else if present {
+				// 停止握手结束前任务已重现，按原报价重新领取，保留原查询幂等键。
+				target, code = StatePending, ""
+			}
+			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
+				state = $2, lease_attempt_id = NULL, lease_owner = '', lease_expires_at = NULL,
+				stop_requested_at = NULL, observation = $3, media_evidence = $4,
+				last_error_code = $5, last_error_scope = CASE WHEN $5 = '' THEN '' ELSE 'task' END,
+				next_attempt_at = NULL, next_verify_at = $6, verification_reason = $7,
+				version = version + 1, updated_at = $8 WHERE id = $1`,
+				job.TaskID, target, observationJSON, mediaJSON, code, nextVerify, reason, now)
 		case failure.Class == FailureStopped || failure.Class == FailureCancelled:
 			target := StatePaused
 			desired := DesiredPause
@@ -796,6 +877,37 @@ func mustJSON(value any) []byte {
 		return []byte("{}")
 	}
 	return raw
+}
+
+// frozenClaimBilling 读取任务已持久化的报价与预占事实。重试必须沿用首次领取时
+// 冻结的价格版本，不能因为改价、关闭收费或账本暂时不可用而重新报价或丢失预占。
+func frozenClaimBilling(job executionJob) (state, hold string, quoteJSON []byte, priceVersion any, code string) {
+	if len(job.BillingQuoteRaw) <= 2 {
+		if job.BillingHoldID != "" {
+			return "", "", nil, nil, "billing_hold_without_quote"
+		}
+		return "disabled", "", []byte("{}"), nil, ""
+	}
+	var quote BillingQuote
+	if json.Unmarshal(job.BillingQuoteRaw, &quote) != nil || quote.AmountMinor < 0 {
+		return "", "", nil, nil, "billing_quote_unreadable"
+	}
+	if job.PriceVersion != "" {
+		priceVersion = job.PriceVersion
+	}
+	if quote.Configured && quote.AmountMinor > 0 {
+		if job.BillingHoldID == "" {
+			return "", "", nil, nil, "billing_hold_missing"
+		}
+		if job.BillingState == "released" {
+			return "", "", nil, nil, "billing_hold_released"
+		}
+		return "reserved", job.BillingHoldID, job.BillingQuoteRaw, priceVersion, ""
+	}
+	if job.BillingHoldID != "" {
+		return "", "", nil, nil, "billing_quote_inconsistent"
+	}
+	return billingQuoteState(quote), "", job.BillingQuoteRaw, priceVersion, ""
 }
 
 func billingQuoteState(quote BillingQuote) string {

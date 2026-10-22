@@ -75,15 +75,23 @@ func newHTTPExecutionFixture(t *testing.T) *httpExecutionFixture {
 				f.mutate(defaults, task)
 			}
 			body, _ := json.Marshal(map[string]any{"defaults": defaults, "attachments": []any{task}})
-			fmt.Fprintf(w, `<iframe src="/ananas/modules/video/index.html"></iframe><script>mArg = %s;</script>`, body)
-		case "/ananas/modules/video/index.html":
+			module := "video"
+			if attachmentKind(task) == "audio" {
+				module = "audio"
+			}
+			fmt.Fprintf(w, `<iframe src="/ananas/modules/%s/index.html"></iframe><script>mArg = %s;</script>`, module, body)
+		case "/ananas/modules/video/index.html", "/ananas/modules/audio/index.html":
 			fmt.Fprint(w, "<html><body>协议测试文档</body></html>")
 		case "/ananas/status/video-object":
 			fmt.Fprint(w, `{"status":"success","duration":90,"dtoken":"fixture-request-token"}`)
 		case "/timeline":
 			fmt.Fprint(w, f.timeline)
 		case "/multimedia/log/a/300/fixture-request-token":
-			if request.Header.Get("Referer") != f.server.URL+"/ananas/modules/video/index.html" {
+			module := "video"
+			if request.URL.Query().Get("dtype") == "Audio" {
+				module = "audio"
+			}
+			if request.Header.Get("Referer") != f.server.URL+"/ananas/modules/"+module+"/index.html" {
 				t.Error("原生请求没有正常来源上下文")
 			}
 			query := request.URL.Query()

@@ -324,14 +324,14 @@ func parseQuestionType(n *htmlNode) (workType, error) {
 	}
 	for _, attribute := range []string{"typename", "data-type", "data-typename"} {
 		if candidate := strings.TrimSpace(n.attr(attribute)); candidate != "" {
-			if mapped, err := workTypeFromLabel(candidate); err == nil && mapped.Code != code {
+			if mapped, err := workTypeFromLabel(candidate); err == nil && !workTypeLabelCompatible(code, mapped) {
 				return workType{}, learning.Fail(learning.FailureCapabilityMissing, "测验题型与标签不一致")
 			}
 		}
 	}
 	labelNode := n.firstByClass("newZy_TItle", "mark_name", "question-type", "type-tag")
 	if labelNode != nil {
-		if mapped, err := workTypeFromLabel(htmlNodeText(labelNode)); err == nil && mapped.Code != code {
+		if mapped, err := workTypeFromLabel(htmlNodeText(labelNode)); err == nil && !workTypeLabelCompatible(code, mapped) {
 			return workType{}, learning.Fail(learning.FailureCapabilityMissing, "测验题型与标签不一致")
 		}
 	}
@@ -353,12 +353,24 @@ func workTypeFromCode(code string) (workType, error) {
 		return workType{Code: "2", Kind: "completion"}, nil
 	case "3":
 		return workType{Code: "3", Kind: "judgement"}, nil
-	case "4":
-		return workType{Code: "4", Kind: "shortanswer"}, nil
-	case "5", "6", "7":
-		return workType{}, learning.Fail(learning.FailureCapabilityMissing, "测验包含暂不支持的题型")
+	case "4", "5", "6", "7":
+		// 简答、名词解释、论述、计算在作答形式上同为文字主观题；原始题型码仍按平台值提交。
+		return workType{Code: strings.TrimSpace(code), Kind: "shortanswer"}, nil
 	}
 	return workType{}, learning.Fail(learning.FailureCapabilityMissing, "测验题型代码未识别")
+}
+
+// workTextAnswerCode 判断题型码是否属于文字主观题族（简答、名词解释、论述、计算）。
+func workTextAnswerCode(code string) bool {
+	return len(code) == 1 && code[0] >= '4' && code[0] <= '7'
+}
+
+// workTypeLabelCompatible 允许主观题族内的标签与题型码存在版本差异，其他不一致仍然停止。
+func workTypeLabelCompatible(code string, mapped workType) bool {
+	if mapped.Code == code {
+		return true
+	}
+	return workTextAnswerCode(code) && workTextAnswerCode(mapped.Code)
 }
 
 func workTypeFromLabel(value string) (workType, error) {
@@ -372,10 +384,14 @@ func workTypeFromLabel(value string) (workType, error) {
 		return workType{Code: "2", Kind: "completion"}, nil
 	case strings.Contains(value, "单选") || strings.Contains(value, "单项选择"):
 		return workType{Code: "0", Kind: "single"}, nil
+	case strings.Contains(value, "名词解释"):
+		return workType{Code: "5", Kind: "shortanswer"}, nil
+	case strings.Contains(value, "论述"):
+		return workType{Code: "6", Kind: "shortanswer"}, nil
+	case strings.Contains(value, "计算"):
+		return workType{Code: "7", Kind: "shortanswer"}, nil
 	case strings.Contains(value, "简答"):
 		return workType{Code: "4", Kind: "shortanswer"}, nil
-	case strings.Contains(value, "名词解释") || strings.Contains(value, "论述") || strings.Contains(value, "计算"):
-		return workType{}, learning.Fail(learning.FailureCapabilityMissing, "测验包含暂不支持的题型")
 	}
 	if match := typeLabelPattern.FindString(value); match != "" {
 		return workTypeFromLabel(match)
@@ -597,74 +613,108 @@ func isWorkSpace(value byte) bool {
 	return value == ' ' || value == '\t' || value == '\r' || value == '\n'
 }
 
+// workBlankPlan 记录空位数量与页面上的真实提交字段；提交只写入页面已有的字段名。
 type workBlankPlan struct {
-	Count int
-	Style string
+	Count  int
+	Style  string
+	Fields []string
+}
+
+// workBlankField 从表单字段名识别填空题空位序号。
+// 序号 0 表示不编号的单字段写法，大于 0 表示分空编号写法；返回的 ok 只说明命名规则匹配。
+func workBlankField(name, lowerID string) (int, bool) {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if lower == "" || lowerID == "" {
+		return 0, false
+	}
+	// answereditor 是平台富文本空位的前缀，必须先于 answer 判断。
+	for _, prefix := range []string{"answereditor", "answer"} {
+		if !strings.HasPrefix(lower, prefix) {
+			continue
+		}
+		rest := strings.TrimPrefix(lower, prefix)
+		if rest == lowerID {
+			return 0, true
+		}
+		if !strings.HasPrefix(rest, lowerID) {
+			return 0, false
+		}
+		suffix := strings.TrimPrefix(rest, lowerID)
+		if suffix == "" {
+			return 0, true
+		}
+		if !isDigits(suffix) {
+			return 0, false
+		}
+		index, err := strconv.Atoi(suffix)
+		if err != nil || index <= 0 || index > 20 {
+			return 0, false
+		}
+		return index, true
+	}
+	return 0, false
 }
 
 func parseWorkBlanks(question *htmlNode, form *htmlNode, questionID, kind string) (workBlankPlan, error) {
 	if kind != "completion" {
 		return workBlankPlan{}, nil
 	}
+	lowerID := strings.ToLower(questionID)
 	size := 0
 	if form != nil {
 		form.walk(func(item *htmlNode) bool {
-			if item.tag != "input" {
+			if item.tag != "input" || strings.ToLower(strings.TrimSpace(item.attr("name"))) != "tiankongsize"+lowerID {
 				return true
 			}
-			name := strings.ToLower(strings.TrimSpace(item.attr("name")))
-			if name == "tiankongsize"+strings.ToLower(questionID) {
-				if parsed, err := strconv.Atoi(strings.TrimSpace(item.attr("value"))); err == nil && parsed > 0 {
-					size = parsed
-				}
-				return false
+			if parsed, err := strconv.Atoi(strings.TrimSpace(item.attr("value"))); err == nil && parsed > 0 {
+				size = parsed
 			}
-			return true
+			return false
 		})
 	}
-	singleFields := map[string]bool{}
+	// 编号字段按空位序号去重；未编号字段按页面出现顺序记录，允许同一字段名重复提交多个空位。
+	numbered := map[int]string{}
+	plain := make([]string, 0, 2)
 	maxIndex := 0
 	mobileBlanks := 0
+	var conflict *learning.Failure
 	question.walk(func(item *htmlNode) bool {
-		if item.tag == "input" || item.tag == "textarea" || isContentEditable(item) {
-			for _, value := range []string{item.attr("name"), item.attr("id")} {
-				lower := strings.ToLower(strings.TrimSpace(value))
-				if lower == "" || strings.HasPrefix(lower, "answertype") {
-					continue
-				}
-				if strings.HasPrefix(lower, "answer") {
-					rest := strings.TrimPrefix(lower, "answer")
-					if rest == strings.ToLower(questionID) {
-						singleFields[lower] = true
-					} else if strings.HasPrefix(rest, strings.ToLower(questionID)) {
-						suffix := strings.TrimPrefix(rest, strings.ToLower(questionID))
-						if isDigits(suffix) {
-							if parsed, err := strconv.Atoi(suffix); err == nil && parsed > maxIndex {
-								maxIndex = parsed
-							}
-						}
-					}
-				}
-				if strings.HasPrefix(lower, "answereditor") {
-					rest := strings.TrimPrefix(lower, "answereditor")
-					if strings.HasPrefix(rest, strings.ToLower(questionID)) {
-						suffix := strings.TrimPrefix(rest, strings.ToLower(questionID))
-						if suffix == "" {
-							singleFields[lower] = true
-						} else if isDigits(suffix) {
-							if parsed, err := strconv.Atoi(suffix); err == nil && parsed > maxIndex {
-								maxIndex = parsed
-							}
-						}
-					}
-				}
-			}
-			if item.hasClass("blankInp2") {
-				mobileBlanks++
-			}
+		if conflict != nil {
+			return false
 		}
+		if item.tag != "input" && item.tag != "textarea" && !isContentEditable(item) {
+			return true
+		}
+		if item.hasClass("blankInp2") {
+			mobileBlanks++
+		}
+		name := strings.TrimSpace(item.attr("name"))
+		index, matched := workBlankField(name, lowerID)
+		if !matched {
+			// 缺少可提交名称时只用 id 识别空位数量。
+			index, matched = workBlankField(item.attr("id"), lowerID)
+			if !matched {
+				return true
+			}
+			name = ""
+		}
+		if index == 0 {
+			plain = append(plain, name)
+			return true
+		}
+		if index > maxIndex {
+			maxIndex = index
+		}
+		if current, exists := numbered[index]; exists && current != name {
+			conflict = learning.Fail(learning.FailureCapabilityMissing, "填空题空位字段不一致")
+			return false
+		}
+		numbered[index] = name
 		return true
 	})
+	if conflict != nil {
+		return workBlankPlan{}, conflict
+	}
 	if list := question.first(func(item *htmlNode) bool { return item.hasClass("blankList2") }); list != nil {
 		count := 0
 		for _, child := range list.children {
@@ -676,7 +726,7 @@ func parseWorkBlanks(question *htmlNode, form *htmlNode, questionID, kind string
 			mobileBlanks = count
 		}
 	}
-	if size == 0 && maxIndex == 0 && mobileBlanks == 0 && len(singleFields) == 0 {
+	if size == 0 && maxIndex == 0 && mobileBlanks == 0 && len(plain) == 0 && len(numbered) == 0 {
 		return workBlankPlan{}, learning.Fail(learning.FailureCapabilityMissing, "填空题缺少可识别的作答空位")
 	}
 	if size > 0 && maxIndex > 0 && size != maxIndex {
@@ -685,21 +735,126 @@ func parseWorkBlanks(question *htmlNode, form *htmlNode, questionID, kind string
 	if size > 0 && mobileBlanks > 0 && size != mobileBlanks {
 		return workBlankPlan{}, learning.Fail(learning.FailureCapabilityMissing, "填空题空位数量与页面不一致")
 	}
-	if size > 1 && len(singleFields) > 0 && maxIndex == 0 && mobileBlanks == 0 {
-		return workBlankPlan{}, learning.Fail(learning.FailureCapabilityMissing, "填空题分空表单未识别")
+	if len(plain) > 0 && (len(numbered) > 0 || maxIndex > 0) {
+		return workBlankPlan{}, learning.Fail(learning.FailureCapabilityMissing, "填空题空位字段不一致")
 	}
-	count := max(size, maxIndex, mobileBlanks, len(singleFields))
+	count := max(size, maxIndex, mobileBlanks, len(plain), len(numbered))
 	if count == 0 {
 		return workBlankPlan{}, learning.Fail(learning.FailureCapabilityMissing, "填空题缺少可识别的作答空位")
 	}
 	if count > 20 {
 		return workBlankPlan{}, learning.Fail(learning.FailureCapabilityMissing, "填空题空位数量超出限制")
 	}
-	style := "single"
-	if count > 1 || maxIndex > 0 || mobileBlanks > 0 || len(singleFields) > 1 {
-		style = "indexed"
+	plan := workBlankPlan{Count: count, Style: "indexed"}
+	if len(plain) > 0 {
+		if len(plain) != count {
+			return workBlankPlan{}, learning.Fail(learning.FailureCapabilityMissing, "填空题空位数量与表单不一致")
+		}
+		plan.Fields = plain
+		if count == 1 {
+			plan.Style = "single"
+		}
+	} else {
+		plan.Fields = make([]string, 0, count)
+		for index := 1; index <= count; index++ {
+			plan.Fields = append(plan.Fields, numbered[index])
+		}
 	}
-	return workBlankPlan{Count: count, Style: style}, nil
+	for _, name := range plan.Fields {
+		if name == "" {
+			return workBlankPlan{}, learning.Fail(learning.FailureCapabilityMissing, "填空题空位字段未识别")
+		}
+	}
+	return plan, nil
+}
+
+// workAnswerFieldName 判断字段名是否是不分空的文字作答字段（简答、名词解释、论述、计算）。
+func workAnswerFieldName(name, lowerID string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	if lower == "" || lowerID == "" {
+		return false
+	}
+	return lower == "answer"+lowerID || lower == "answereditor"+lowerID
+}
+
+// workDisabledContainers 标记位于禁用 fieldset 内的节点：禁用 fieldset 会禁用其全部后代控件。
+func workDisabledContainers(root *htmlNode) map[*htmlNode]bool {
+	disabled := map[*htmlNode]bool{}
+	var walk func(*htmlNode, bool)
+	walk = func(node *htmlNode, inherited bool) {
+		current := inherited
+		if node.tag == "fieldset" {
+			if _, ok := node.attrs["disabled"]; ok {
+				current = true
+			}
+		}
+		if current {
+			disabled[node] = true
+		}
+		for _, child := range node.children {
+			walk(child, current)
+		}
+	}
+	walk(root, false)
+	return disabled
+}
+
+// parseWorkAnswerField 只接受当前页面上真实存在且唯一可写的文字作答字段。
+// 可选附件控件不阻止文字作答；必填上传、无可写文本字段或字段冲突时停止。
+func parseWorkAnswerField(question *htmlNode, questionID string, disabled map[*htmlNode]bool) (string, error) {
+	lowerID := strings.ToLower(questionID)
+	fields := map[string]bool{}
+	blocked := 0
+	requiredUpload := false
+	question.walk(func(item *htmlNode) bool {
+		if requiredUpload {
+			return false
+		}
+		kind := strings.ToLower(strings.TrimSpace(item.attr("type")))
+		if item.tag == "input" && kind == "file" {
+			_, required := item.attrs["required"]
+			if required || strings.EqualFold(strings.TrimSpace(item.attr("aria-required")), "true") {
+				requiredUpload = true
+			}
+			return true
+		}
+		if item.tag != "input" && item.tag != "textarea" && !isContentEditable(item) {
+			return true
+		}
+		name := strings.TrimSpace(item.attr("name"))
+		if !workAnswerFieldName(name, lowerID) {
+			return true
+		}
+		if item.tag != "textarea" && !isContentEditable(item) &&
+			!(item.tag == "input" && (kind == "" || kind == "text" || kind == "hidden")) {
+			return true
+		}
+		// disabled/readonly 是布尔属性，属性存在即不可写；禁用 fieldset 的后代同样不可写。
+		_, ownDisabled := item.attrs["disabled"]
+		_, readonly := item.attrs["readonly"]
+		if ownDisabled || readonly || disabled[item] ||
+			strings.EqualFold(strings.TrimSpace(item.attr("aria-disabled")), "true") {
+			blocked++
+			return true
+		}
+		fields[name] = true
+		return true
+	})
+	if requiredUpload {
+		return "", learning.Fail(learning.FailureCapabilityMissing, "测验主观题要求上传附件，无法按文字作答")
+	}
+	switch len(fields) {
+	case 0:
+		if blocked > 0 {
+			return "", learning.Fail(learning.FailureCapabilityMissing, "测验主观题作答字段不可写")
+		}
+		return "", learning.Fail(learning.FailureCapabilityMissing, "测验主观题缺少可写入的文本字段")
+	case 1:
+		for name := range fields {
+			return name, nil
+		}
+	}
+	return "", learning.Fail(learning.FailureCapabilityMissing, "测验主观题作答字段结构不一致")
 }
 
 func extractWorkForm(root *htmlNode) (*htmlNode, url.Values, error) {
@@ -812,7 +967,14 @@ func hasWorkEditableControls(form *htmlNode) bool {
 		if !strings.HasPrefix(name, "answer") && !strings.HasPrefix(id, "answereditor") {
 			return true
 		}
-		if item.attr("disabled") != "" || item.attr("readonly") != "" {
+		// disabled/readonly 是布尔属性，浏览器可省略取值，必须按属性存在判断。
+		if _, disabled := item.attrs["disabled"]; disabled {
+			return true
+		}
+		if _, readonly := item.attrs["readonly"]; readonly {
+			return true
+		}
+		if strings.EqualFold(strings.TrimSpace(item.attr("aria-disabled")), "true") {
 			return true
 		}
 		if isContentEditable(item) {

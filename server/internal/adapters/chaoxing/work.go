@@ -23,6 +23,7 @@ const (
 )
 
 var _ learning.WorkPlatform = (*Platform)(nil)
+var _ learning.WorkSessionPlatform = (*Platform)(nil)
 
 type workJob struct {
 	CourseID    string
@@ -40,6 +41,8 @@ type workQuestion struct {
 	learning.WorkQuestion
 	TypeCode    string
 	BlankStyle  string
+	BlankFields []string
+	AnswerField string
 	ImageRefs   []workImageRef
 	ImageHashes []string
 }
@@ -61,6 +64,12 @@ func (p *Platform) ReadWork(ctx context.Context, sessionBytes []byte, task learn
 	if err != nil {
 		return learning.WorkSheet{}, learning.Fail(learning.FailureIdentityInvalid, "平台会话格式无效")
 	}
+	// 读取过程中的卡片、试卷与图片必须复用同一 Cookie 容器，否则平台轮换的 Cookie 会丢失。
+	ctx, cleanup, err := p.withSessionClient(ctx, session)
+	if err != nil {
+		return learning.WorkSheet{}, err
+	}
+	defer cleanup()
 	page, err := p.readWorkPage(ctx, session, task)
 	if err != nil {
 		return learning.WorkSheet{}, err
@@ -84,6 +93,12 @@ func (p *Platform) SubmitWork(ctx context.Context, sessionBytes []byte, task lea
 	if err != nil {
 		return learning.WorkSubmission{}, learning.Fail(learning.FailureIdentityInvalid, "平台会话格式无效")
 	}
+	// 重新取题和最终提交必须在同一 Cookie 容器内完成，提交请求要带上本次读取轮换后的 Cookie。
+	ctx, cleanup, err := p.withSessionClient(ctx, session)
+	if err != nil {
+		return learning.WorkSubmission{}, err
+	}
+	defer cleanup()
 	// 提交前重新读取一次当前表单和题目，不能复用调用方缓存。
 	page, err := p.readWorkPage(ctx, session, task)
 	if err != nil {
@@ -134,13 +149,18 @@ func (p *Platform) readWorkPage(ctx context.Context, session Session, task learn
 }
 
 func (p *Platform) readWorkJob(ctx context.Context, session Session, task learning.PlatformTaskRef) (workJob, error) {
+	if task.CardIndex < 0 || task.CardIndex >= maxChapterCards {
+		return workJob{}, learning.Fail(learning.FailureInvalidTask, "测验任务卡片页码无效")
+	}
 	for _, value := range []string{task.Course.ExternalCourseID, task.Course.ExternalClassID, task.Course.CPI,
 		task.ChapterExternalID, task.ObjectID, task.TaskPointID} {
 		if !safeWorkToken(value) {
 			return workJob{}, learning.Fail(learning.FailureInvalidTask, "测验任务缺少有效标识")
 		}
 	}
-	payload, err := p.do(ctx, session, http.MethodGet, p.cardsURL(task.Course, task.ChapterExternalID), nil, "course_cards")
+	// 章节测验所在卡片可能不在 num=0 页面，必须按任务记录的实际卡片页码读取。
+	payload, err := p.do(ctx, session, http.MethodGet,
+		p.cardsURLAtIndex(task.Course, task.ChapterExternalID, task.CardIndex), nil, "course_cards")
 	if err != nil {
 		return workJob{}, err
 	}
@@ -252,7 +272,21 @@ func workReadQuery(job workJob) url.Values {
 func parseWorkPage(payload []byte, baseURL string, job workJob) (*workPage, error) {
 	root := parseHTMLDocument(payload)
 	visible := htmlNodeText(root)
+	// 验证控件与错误通知在题目区域之外，必须优先于题目和表单判定识别。
+	if failure := workControlFailure(root); failure != nil {
+		return nil, failure
+	}
 	questionNodes := collectQuestionNodes(root)
+	form, formValues, err := extractWorkForm(root)
+	if err != nil {
+		return nil, err
+	}
+	// 平台把可作答题目放在表单内；表单外出现同名容器时只取表单内的真实题目。
+	if form != nil {
+		if scoped := collectQuestionNodes(form); len(scoped) > 0 {
+			questionNodes = scoped
+		}
+	}
 	if len(questionNodes) == 0 {
 		if already, failure := classifyWorkPageMessage(visible, payload); failure != nil {
 			return nil, failure
@@ -260,12 +294,6 @@ func parseWorkPage(payload []byte, baseURL string, job workJob) (*workPage, erro
 			return &workPage{Sheet: learning.WorkSheet{Fingerprint: workFingerprint(job, nil, nil), Submitted: true},
 				Job: job}, nil
 		}
-	} else if failure := workControlFailure(root); failure != nil {
-		return nil, failure
-	}
-	form, formValues, err := extractWorkForm(root)
-	if err != nil {
-		return nil, err
 	}
 	controls := form != nil && hasWorkEditableControls(form)
 	fields := form != nil && hasWorkSubmitFields(formValues)
@@ -296,8 +324,9 @@ func parseWorkPage(payload []byte, baseURL string, job workJob) (*workPage, erro
 	}
 	questions := make([]workQuestion, 0, len(questionNodes))
 	seen := map[string]bool{}
+	disabled := workDisabledContainers(root)
 	for _, node := range questionNodes {
-		question, err := parseWorkQuestion(node, form, baseURL)
+		question, err := parseWorkQuestion(node, form, baseURL, disabled)
 		if err != nil {
 			return nil, err
 		}
@@ -312,7 +341,7 @@ func parseWorkPage(payload []byte, baseURL string, job workJob) (*workPage, erro
 	return page, nil
 }
 
-func parseWorkQuestion(node *htmlNode, form *htmlNode, baseURL string) (workQuestion, error) {
+func parseWorkQuestion(node *htmlNode, form *htmlNode, baseURL string, disabled map[*htmlNode]bool) (workQuestion, error) {
 	id, err := parseQuestionID(node)
 	if err != nil {
 		return workQuestion{}, err
@@ -356,9 +385,18 @@ func parseWorkQuestion(node *htmlNode, form *htmlNode, baseURL string) (workQues
 		}
 		refs = append(refs, ref)
 	}
+	answerField := ""
+	if kind.Kind == "shortanswer" {
+		// 主观题只写入页面已有的文字字段，不伪造 answer{id} 之类的字段名。
+		field, err := parseWorkAnswerField(node, id, disabled)
+		if err != nil {
+			return workQuestion{}, err
+		}
+		answerField = field
+	}
 	return workQuestion{WorkQuestion: learning.WorkQuestion{ID: id, Type: kind.Kind, Title: title,
 		Options: options, Blanks: blanks.Count}, TypeCode: kind.Code, BlankStyle: blanks.Style,
-		ImageRefs: refs}, nil
+		BlankFields: append([]string(nil), blanks.Fields...), AnswerField: answerField, ImageRefs: refs}, nil
 }
 
 func workPublicQuestions(questions []workQuestion) []learning.WorkQuestion {
@@ -424,12 +462,14 @@ func workFingerprint(job workJob, form url.Values, questions []workQuestion) str
 		Text  string `json:"text"`
 	}
 	type fingerprintQuestion struct {
-		ID       string              `json:"id"`
-		TypeCode string              `json:"type_code"`
-		Title    string              `json:"title"`
-		Options  []fingerprintOption `json:"options"`
-		Blanks   int                 `json:"blanks"`
-		Images   []string            `json:"images"`
+		ID          string              `json:"id"`
+		TypeCode    string              `json:"type_code"`
+		Title       string              `json:"title"`
+		Options     []fingerprintOption `json:"options"`
+		Blanks      int                 `json:"blanks"`
+		BlankFields []string            `json:"blank_fields"`
+		AnswerField string              `json:"answer_field"`
+		Images      []string            `json:"images"`
 	}
 	document := struct {
 		Version         int                   `json:"version"`
@@ -440,7 +480,7 @@ func workFingerprint(job workJob, form url.Values, questions []workQuestion) str
 		TotalQuestionNo string                `json:"total_question_num"`
 		FullScore       string                `json:"full_score"`
 		Questions       []fingerprintQuestion `json:"questions"`
-	}{Version: 1, WorkID: job.WorkID, JobID: job.JobID}
+	}{Version: 3, WorkID: job.WorkID, JobID: job.JobID}
 	if form != nil {
 		document.WorkAnswerID = firstWorkValue(form, "workAnswerId")
 		document.WorkRelationID = firstWorkValue(form, "workRelationId")
@@ -449,7 +489,9 @@ func workFingerprint(job workJob, form url.Values, questions []workQuestion) str
 	}
 	for _, question := range questions {
 		item := fingerprintQuestion{ID: question.ID, TypeCode: question.TypeCode,
-			Title: question.Title, Blanks: question.Blanks}
+			Title: question.Title, Blanks: question.Blanks,
+			BlankFields: append([]string(nil), question.BlankFields...),
+			AnswerField: question.AnswerField}
 		for _, option := range question.Options {
 			item.Options = append(item.Options, fingerprintOption{Label: option.Label,
 				Value: option.Value, Text: option.Text})
@@ -502,24 +544,35 @@ func buildWorkSubmissionForm(page *workPage, answers []learning.WorkAnswer) (url
 		questionIDs = append(questionIDs, question.ID)
 		form.Set("answertype"+question.ID, question.TypeCode)
 		switch question.Type {
-		case "single", "judgement", "shortanswer":
+		case "single", "judgement":
 			form.Set("answer"+question.ID, values[0])
+		case "shortanswer":
+			if question.AnswerField == "" {
+				return nil, learning.Fail(learning.FailurePermanent, "简答题缺少当前页面的作答字段")
+			}
+			form.Set(question.AnswerField, values[0])
 		case "multiple":
 			for _, value := range values {
 				form.Add("answercheck"+question.ID, value)
 			}
 			form.Set("answer"+question.ID, strings.Join(values, ""))
 		case "completion":
-			if question.BlankStyle == "indexed" {
-				form.Set("tiankongsize"+question.ID, strconv.Itoa(len(values)))
-				for index, value := range values {
-					form.Set("answer"+question.ID+strconv.Itoa(index+1), value)
+			// 只写入当前页面真实存在的空位字段，不构造页面没有的字段名。
+			if len(question.BlankFields) != len(values) {
+				return nil, learning.Fail(learning.FailurePermanent, "填空答案数量与当前试卷不一致")
+			}
+			seenFields := map[string]bool{}
+			for index, field := range question.BlankFields {
+				if field == "" {
+					return nil, learning.Fail(learning.FailurePermanent, "填空答案缺少当前页面的字段")
 				}
-			} else {
-				if len(values) != 1 {
-					return nil, learning.Fail(learning.FailurePermanent, "填空题分空表单与答案不一致")
+				// 有些页面多个空位共用同一个未编号字段名，此时按空位顺序重复提交。
+				if seenFields[field] {
+					form.Add(field, values[index])
+				} else {
+					form.Set(field, values[index])
+					seenFields[field] = true
 				}
-				form.Set("answer"+question.ID, values[0])
 			}
 		default:
 			return nil, learning.Fail(learning.FailurePermanent, "答案题型不在支持范围")
@@ -674,13 +727,13 @@ func (p *Platform) postWorkSubmission(ctx context.Context, session Session, page
 	if err != nil || !p.factory.allowedURL(endpoint) || endpoint.Fragment != "" {
 		return learning.WorkSubmission{}, learning.Fail(learning.FailureCapabilityMissing, "测验提交入口不在允许范围")
 	}
-	jar, err := sessionJar(session)
+	client, cleanup, err := p.requestClient(ctx, session)
 	if err != nil {
-		return learning.WorkSubmission{}, learning.Fail(learning.FailureIdentityInvalid, "平台会话无法建立 Cookie 容器")
+		return learning.WorkSubmission{}, err
 	}
-	client := p.factory.client(jar)
-	defer client.CloseIdleConnections()
+	defer cleanup()
 	// 最终提交不跟随重定向，避免 POST 被改写成 GET 或转向未确认地址。
+	// 该 client 只在本次任务的上下文内使用，提交之后不再发出请求。
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	if err := p.factory.limiter.wait(ctx, p.options.MinRequestInterval); err != nil {
 		return learning.WorkSubmission{}, learning.Fail(learning.FailureStopped, "测验提交等待被停止")

@@ -204,6 +204,18 @@ func (r *Runtime) capabilities(ctx context.Context, audience, id string) map[str
 	capability.CredentialVerify = r.userLoginAvailable
 	features["tiku"] = r.cfg.Questions.Enabled
 	body["execution"] = capability
+	taskTypes := make([]map[string]any, 0, 5)
+	for _, item := range []struct{ id, name string }{{"video", "视频"}, {"audio", "音频"}, {"document", "文档/阅读"}, {"quiz", "测验"}, {"other", "其他"}} {
+		supported := false
+		for _, kind := range capability.TaskKinds {
+			if kind == item.id {
+				supported = true
+				break
+			}
+		}
+		taskTypes = append(taskTypes, map[string]any{"id": item.id, "name": item.name, "available": supported})
+	}
+	body["task_types"] = taskTypes
 	readCtx, cancel := context.WithTimeout(ctx, r.cfg.Database.QueryTimeout)
 	defer cancel()
 	price, err := r.Ledger.PublicMetadata(readCtx)

@@ -45,6 +45,12 @@ type WorkSubmission struct {
 	AlreadySubmitted bool
 }
 
+// WorkSessionPlatform 为同一次自动作答共享平台轮换的Cookie容器。
+// 返回的清理函数在本次执行结束时调用，不跨账号、任务或进程保存容器。
+type WorkSessionPlatform interface {
+	BeginWorkSession(context.Context, []byte) (context.Context, func(), error)
+}
+
 // WorkPlatform 通过原生 HTTP 取题并提交。SubmitWork 必须重新取题并核对指纹，
 // 在实际 POST 前调用 beforePost（若非 nil），一次调用最多提交一次。
 // beforePost 仅核对租约并保存提交标记，不涉及人工确认；失败时不得发送 POST。

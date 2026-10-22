@@ -155,15 +155,35 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 		}
 		chapterCount := len(snapshot.Chapters)
 		attachmentCount, taskPointCount, incompleteCount := 0, 0, 0
-		chapterIDs := make(map[string]string, len(snapshot.Chapters))
+		seenChapterExternal := make(map[string]bool, len(snapshot.Chapters))
 		for position, chapter := range snapshot.Chapters {
-			chapterID := newID()
-			chapterIDs[chapter.ExternalID] = chapterID
-			if _, err := tx.Exec(ctx, `INSERT INTO public.learning_chapters
-				(id, course_id, user_id, snapshot_version, external_id, parent_external_id, title, sort_order)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-				chapterID, courseID, account.UserID, version, chapter.ExternalID,
-				truncate(chapter.ParentExternalID, 128), truncate(chapter.Title, 200), position); err != nil {
+			if chapter.ExternalID == "" || seenChapterExternal[chapter.ExternalID] {
+				return Fail(FailureInvalidTask, "课程快照章节标识缺失或重复")
+			}
+			seenChapterExternal[chapter.ExternalID] = true
+			// 章节行以账号内稳定外部章节标识复用，避免每次同步重生成 UUID
+			// 让“选定章节”安排和历史关联失效。快照版本只表示最近一次出现。
+			var chapterID string
+			err := tx.QueryRow(ctx, `SELECT id::text FROM public.learning_chapters
+				WHERE course_id = $1 AND user_id = $2 AND external_id = $3
+				ORDER BY snapshot_version DESC LIMIT 1 FOR UPDATE`,
+				courseID, account.UserID, chapter.ExternalID).Scan(&chapterID)
+			switch {
+			case err == nil:
+				_, err = tx.Exec(ctx, `UPDATE public.learning_chapters
+					SET snapshot_version = $3, parent_external_id = $4, title = $5, sort_order = $6
+					WHERE id = $1 AND user_id = $2`,
+					chapterID, account.UserID, version, truncate(chapter.ParentExternalID, 128),
+					truncate(chapter.Title, 200), position)
+			case errors.Is(err, pgx.ErrNoRows):
+				chapterID = newID()
+				_, err = tx.Exec(ctx, `INSERT INTO public.learning_chapters
+					(id, course_id, user_id, snapshot_version, external_id, parent_external_id, title, sort_order)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+					chapterID, courseID, account.UserID, version, chapter.ExternalID,
+					truncate(chapter.ParentExternalID, 128), truncate(chapter.Title, 200), position)
+			}
+			if err != nil {
 				return errServiceUnavailable
 			}
 			for index, attachment := range chapter.Attachments {
@@ -180,15 +200,19 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 				if played < 0 {
 					played = 0
 				}
+				if attachment.CardIndex < 0 || attachment.CardIndex > 31 {
+					return Fail(FailureInvalidTask, "课程快照附件卡片页码无效")
+				}
 				_, err := tx.Exec(ctx, `INSERT INTO public.learning_attachments
 					(id, course_id, chapter_id, user_id, snapshot_version, external_object_id, task_point_id,
 					 kind, title, duration_seconds, played_seconds, platform_passed, passed_known,
-					 is_task_point, counted_incomplete, sort_order, progress_checked_at)
-					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+					 is_task_point, counted_incomplete, sort_order, card_index, progress_checked_at)
+					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
 					attachmentID, courseID, chapterID, account.UserID, version, attachment.ObjectID,
 					attachment.TaskPointID, truncate(attachment.Kind, 32), truncate(attachment.Title, 200),
 					nonNegative(attachment.DurationSeconds), played, attachment.Passed, attachment.PassedKnown,
-					taskPoint, taskPoint && !attachment.Passed, index, checkedAt(attachment.PassedKnown, now))
+					taskPoint, taskPoint && !attachment.Passed, index, attachment.CardIndex,
+					checkedAt(attachment.PassedKnown, now))
 				if err != nil {
 					return errServiceUnavailable
 				}
@@ -237,6 +261,23 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 		if err != nil {
 			return errServiceUnavailable
 		}
+		if err := requestStaleSnapshotStops(ctx, tx, account.UserID, courseID, now); err != nil {
+			return err
+		}
+		// 最新快照已不存在的未运行任务先转人工；随后把重新出现在快照中的
+		// 同类任务恢复为待执行，保留用户明确的暂停/取消意图。
+		if _, err := restoreSnapshotTasks(ctx, tx, account.UserID, courseID, version, now); err != nil {
+			return err
+		}
+		for {
+			marked, err := markStaleSnapshotTasks(ctx, tx, account.UserID, courseID, now)
+			if err != nil {
+				return err
+			}
+			if marked < 50 {
+				break
+			}
+		}
 		if err := bindMatchingTasks(ctx, tx, account.UserID); err != nil {
 			return err
 		}
@@ -264,7 +305,10 @@ func bindMatchingTasks(ctx context.Context, tx pgx.Tx, userID string) error {
 		JOIN public.learning_tasks t ON t.user_id = p.user_id
 		WHERE p.user_id = $1 AND p.status = 'active'
 		  AND t.course_id = ANY(r.course_ids)
-		  AND (r.scope_kind = 'all' OR t.chapter_id = ANY(r.chapter_ids))
+		  AND (r.scope_kind = 'all' OR EXISTS (
+			SELECT 1 FROM public.learning_chapters sc
+			WHERE sc.id = ANY(r.chapter_ids) AND sc.course_id = t.course_id
+			  AND sc.user_id = t.user_id AND sc.external_id = t.chapter_external_id))
 		  AND t.task_kind = ANY(r.task_types)
 		ON CONFLICT DO NOTHING`, userID)
 	if err != nil {
@@ -288,3 +332,111 @@ func checkedAt(known bool, at time.Time) any {
 }
 
 func intString(value int) string { return fmt.Sprintf("%d", value) }
+
+const snapshotMissingCode = "snapshot_task_missing"
+
+// restoreSnapshotTasks 把重新出现在最新完整快照中的任务从本模块造成的
+// needs_attention 恢复为待执行。只处理 desired_state=run 的任务。
+func restoreSnapshotTasks(ctx context.Context, tx pgx.Tx, userID, courseID string, version int64, now time.Time) (int, error) {
+	rows, err := tx.Query(ctx, `UPDATE public.learning_tasks t SET
+			state = 'pending', last_error_code = '', last_error_scope = '',
+			failure_count = 0, verification_attempts = 0, verification_reason = '',
+			next_attempt_at = NULL, next_verify_at = NULL, version = version + 1, updated_at = $4
+		FROM public.learning_attachments a
+		WHERE t.user_id = $1 AND t.course_id = $2 AND a.id = t.attachment_id
+		  AND a.user_id = t.user_id AND a.course_id = t.course_id AND a.snapshot_version = $3
+		  AND t.state = 'needs_attention' AND t.last_error_code = $5
+		  AND t.desired_state = 'run'
+		RETURNING t.id::text`, userID, courseID, version, now, snapshotMissingCode)
+	if err != nil {
+		return 0, errServiceUnavailable
+	}
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, errServiceUnavailable
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, errServiceUnavailable
+	}
+	for _, id := range ids {
+		if err := writeOutbox(ctx, tx, outboxEvent{
+			Topic: "task.state_changed", ResourceType: "task", ResourceID: id, UserID: userID,
+			Payload: map[string]any{"state": StatePending, "reason": snapshotMissingCode + "_resolved"},
+		}); err != nil {
+			return 0, err
+		}
+	}
+	return len(ids), nil
+}
+
+// markStaleSnapshotTasks 把附件已不在课程最新完整快照中的待执行任务转为人工。
+// 终态失败保留原分类；已有最终提交事实的测验只回到核验，不重新执行、不取消资金事实。
+func markStaleSnapshotTasks(ctx context.Context, tx pgx.Tx, userID, courseID string, now time.Time) (int, error) {
+	rows, err := tx.Query(ctx, `WITH candidates AS (
+			SELECT t.id, t.user_id,
+			       EXISTS (SELECT 1 FROM public.learning_work_runs w
+			               WHERE w.task_id = t.id
+			                 AND w.state IN ('submitting', 'submitted', 'submission_unknown')) AS has_submission
+			FROM public.learning_tasks t
+			JOIN public.learning_courses c ON c.id = t.course_id AND c.user_id = t.user_id
+			JOIN public.learning_attachments a ON a.id = t.attachment_id
+				AND a.user_id = t.user_id AND a.course_id = t.course_id
+			WHERE ($1::uuid IS NULL OR t.user_id = $1::uuid)
+			  AND ($2::uuid IS NULL OR t.course_id = $2::uuid)
+			  AND t.state = 'pending' AND t.desired_state = 'run'
+			  AND a.snapshot_version <> c.snapshot_version
+			ORDER BY t.updated_at
+			LIMIT 50
+			FOR UPDATE OF t SKIP LOCKED
+		)
+		UPDATE public.learning_tasks t SET
+			state = CASE WHEN candidates.has_submission THEN 'waiting_verification' ELSE 'needs_attention' END,
+			last_error_code = CASE WHEN candidates.has_submission THEN '' ELSE $3::text END,
+			last_error_scope = CASE WHEN candidates.has_submission THEN '' ELSE 'task' END,
+			next_attempt_at = NULL,
+			next_verify_at = CASE WHEN candidates.has_submission THEN $4::timestamptz ELSE NULL END,
+			verification_reason = CASE WHEN candidates.has_submission THEN 'question_submission' ELSE '' END,
+			version = version + 1, updated_at = $4::timestamptz
+		FROM candidates WHERE t.id = candidates.id
+		RETURNING t.id::text, t.user_id::text, t.state, candidates.has_submission`,
+		nullableID(userID), nullableID(courseID), snapshotMissingCode, now)
+	if err != nil {
+		return 0, errServiceUnavailable
+	}
+	type markedTask struct {
+		id, userID, state string
+		hasSubmission     bool
+	}
+	marked := make([]markedTask, 0)
+	for rows.Next() {
+		var item markedTask
+		if err := rows.Scan(&item.id, &item.userID, &item.state, &item.hasSubmission); err != nil {
+			rows.Close()
+			return 0, errServiceUnavailable
+		}
+		marked = append(marked, item)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, errServiceUnavailable
+	}
+	for _, item := range marked {
+		event := outboxEvent{Topic: "task.state_changed", ResourceType: "task",
+			ResourceID: item.id, UserID: item.userID,
+			Payload: map[string]any{"state": item.state, "error_code": snapshotMissingCode}}
+		if item.hasSubmission {
+			event.Topic = "task.recovery_verification"
+			event.Payload = map[string]any{"state": StateWaitingVerification, "reason": snapshotMissingCode}
+		}
+		if err := writeOutbox(ctx, tx, event); err != nil {
+			return 0, err
+		}
+	}
+	return len(marked), nil
+}

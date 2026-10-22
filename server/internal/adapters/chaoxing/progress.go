@@ -19,15 +19,11 @@ import (
 
 var playerFrame = regexp.MustCompile(`(?is)<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["']`)
 var insertedVideo = regexp.MustCompile(`(?i)\bmodule\s*=\s*["']insertvideo["']`)
+var insertedAudio = regexp.MustCompile(`(?i)\bmodule\s*=\s*["']insertaudio["']`)
 
 func (r *httpExecution) prepare(ctx context.Context) error {
 	ref := r.request.Task
-	target, _ := url.Parse(r.executor.platform.options.endpoints.Cards)
-	query := target.Query()
-	for key, value := range map[string]string{"clazzid": ref.Course.ExternalClassID, "courseid": ref.Course.ExternalCourseID, "knowledgeid": ref.ChapterExternalID, "cpi": ref.Course.CPI, "num": "0", "ut": "s", "v": "20190915", "mooc2": "1"} {
-		query.Set(key, value)
-	}
-	target.RawQuery = query.Encode()
+	target, _ := url.Parse(r.executor.platform.cardsURLAtIndex(ref.Course, ref.ChapterExternalID, ref.CardIndex))
 	r.cardsURL = target.String()
 	body, err := r.get(ctx, r.cardsURL, "cards")
 	if err != nil {
@@ -45,13 +41,19 @@ func (r *httpExecution) prepare(ctx context.Context) error {
 	matches := 0
 	for _, raw := range items {
 		item := mapValue(raw)
-		if text(item["objectId"]) == ref.ObjectID && text(item["jobid"]) == ref.TaskPointID {
+		if firstText(item["objectId"], item["objectid"], mapValue(item["property"])["objectid"]) == ref.ObjectID && text(item["jobid"]) == ref.TaskPointID {
 			r.task = item
 			matches++
 		}
 	}
-	if matches != 1 || text(r.task["type"]) != "video" {
-		return learning.Fail(learning.FailureInvalidTask, "任务卡片中没有唯一匹配的视频任务点")
+	kind := attachmentKind(r.task)
+	if matches != 1 || (kind != "video" && kind != "audio") || r.request.TaskKind != "" && kind != r.request.TaskKind {
+		return learning.Fail(learning.FailureInvalidTask, "任务卡片中没有唯一匹配的音视频任务点")
+	}
+	r.mediaType = "Video"
+	module := "video"
+	if kind == "audio" {
+		r.mediaType, module = "Audio", "audio"
 	}
 	for key, expected := range map[string]string{"courseid": ref.Course.ExternalCourseID, "clazzId": ref.Course.ExternalClassID, "cpi": ref.Course.CPI} {
 		if text(r.defaults[key]) != expected {
@@ -83,12 +85,12 @@ func (r *httpExecution) prepare(ctx context.Context) error {
 			continue
 		}
 		resolved := target.ResolveReference(relative)
-		if r.executor.platform.factory.allowedURL(resolved) && strings.HasPrefix(resolved.Path, "/ananas/modules/video/") && strings.HasSuffix(resolved.Path, "/index.html") {
+		if r.executor.platform.factory.allowedURL(resolved) && strings.HasPrefix(resolved.Path, "/ananas/modules/"+module+"/") && strings.HasSuffix(resolved.Path, "/index.html") {
 			r.player = resolved.String()
 		}
 	}
-	if r.player == "" && insertedVideo.Match(body) {
-		r.player = target.Scheme + "://" + target.Host + "/ananas/modules/video/index.html"
+	if r.player == "" && (module == "video" && insertedVideo.Match(body) || module == "audio" && insertedAudio.Match(body)) {
+		r.player = target.Scheme + "://" + target.Host + "/ananas/modules/" + module + "/index.html"
 	}
 	if r.player == "" {
 		return learning.Fail(learning.FailureCapabilityMissing, "任务卡片未提供可核对的播放器文档")
@@ -229,7 +231,7 @@ func (r *httpExecution) report(ctx context.Context, position, event int) (bool, 
 	// 平台协议公开使用的固定签名常量，不能替代登录身份或用户授权。
 	signature := fmt.Sprintf("[%s][%s][%s][%s][%d][d_yHJ!$pdA~5][%d][%s]", r.request.Task.Course.ExternalClassID, text(r.defaults["userid"]), r.request.Task.TaskPointID, r.request.Task.ObjectID, position*1000, r.duration*1000, clip)
 	digest := md5.Sum([]byte(signature))
-	values := url.Values{"clazzId": {r.request.Task.Course.ExternalClassID}, "userid": {text(r.defaults["userid"])}, "jobid": {r.request.Task.TaskPointID}, "objectId": {r.request.Task.ObjectID}, "courseId": {r.request.Task.Course.ExternalCourseID}, "playingTime": {strconv.Itoa(position)}, "duration": {strconv.Itoa(r.duration)}, "clipTime": {clip}, "otherInfo": {r.other}, "rt": {r.rt}, "dtype": {"Video"}, "view": {"pc"}, "_t": {strconv.FormatInt(r.executor.options.now().UnixMilli(), 10)}, "attDuration": {text(r.task["attDuration"])}, "attDurationEnc": {text(r.task["attDurationEnc"])}, "videoFaceCaptureEnc": {text(r.task["videoFaceCaptureEnc"])}, "enc": {hex.EncodeToString(digest[:])}, "isdrag": {strconv.Itoa(event)}}
+	values := url.Values{"clazzId": {r.request.Task.Course.ExternalClassID}, "userid": {text(r.defaults["userid"])}, "jobid": {r.request.Task.TaskPointID}, "objectId": {r.request.Task.ObjectID}, "courseId": {r.request.Task.Course.ExternalCourseID}, "playingTime": {strconv.Itoa(position)}, "duration": {strconv.Itoa(r.duration)}, "clipTime": {clip}, "otherInfo": {r.other}, "rt": {r.rt}, "dtype": {r.mediaType}, "view": {"pc"}, "_t": {strconv.FormatInt(r.executor.options.now().UnixMilli(), 10)}, "attDuration": {text(r.task["attDuration"])}, "attDurationEnc": {text(r.task["attDurationEnc"])}, "videoFaceCaptureEnc": {text(r.task["videoFaceCaptureEnc"])}, "enc": {hex.EncodeToString(digest[:])}, "isdrag": {strconv.Itoa(event)}}
 	if r.engine != nil {
 		values.Set("courseEngineInfo", strconv.FormatBool(*r.engine))
 	}

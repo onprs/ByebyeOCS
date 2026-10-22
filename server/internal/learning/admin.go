@@ -18,6 +18,7 @@ type RuntimeCapabilities struct {
 	ExecutionEnabled bool     `json:"execution_enabled"`
 	Executor         string   `json:"executor"`
 	ExecutorEnabled  bool     `json:"executor_enabled"`
+	TaskKinds        []string `json:"task_kinds"`
 	MediaEvidence    bool     `json:"media_evidence"`
 	BillingConnected bool     `json:"billing_connected"`
 	SessionResolver  bool     `json:"session_resolver"`
@@ -29,6 +30,7 @@ func (s *Service) Capabilities() RuntimeCapabilities {
 		SessionResolver:  s.opts.Sessions != nil,
 		BillingConnected: s.opts.Billing != nil,
 		DisabledReasons:  []string{},
+		TaskKinds:        []string{},
 	}
 	verificationReady := s.verifier() != nil
 	if s.opts.Platform != nil {
@@ -46,6 +48,7 @@ func (s *Service) Capabilities() RuntimeCapabilities {
 		executor := s.opts.Executor.Capabilities()
 		capabilities.Executor = executor.Name
 		capabilities.ExecutorEnabled = executor.Enabled
+		capabilities.TaskKinds = append(capabilities.TaskKinds, executor.TaskKinds...)
 		capabilities.MediaEvidence = executor.ProducesMediaEvidence
 		if !executor.Enabled && executor.DisabledReason != "" {
 			capabilities.DisabledReasons = append(capabilities.DisabledReasons, executor.DisabledReason)

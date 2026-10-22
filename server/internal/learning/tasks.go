@@ -133,6 +133,7 @@ type taskRecord struct {
 	CycleKey           string
 	CPI                string
 	ObjectID           string
+	CardIndex          int
 	VerificationReason string
 	Desired            string
 	FenceToken         int64
@@ -150,7 +151,7 @@ const taskSelect = `SELECT t.id::text, t.user_id::text, t.state, t.desired_state
 	t.last_error_code, t.next_attempt_at, t.confirmed_at, t.platform_status, t.platform_checked_at,
 	t.observation, t.platform_check, t.media_evidence, t.lease_attempt_id::text, t.billing_state,
 	t.billing_quote, t.billing_hold_id, t.billing_error, t.course_external_id, t.chapter_external_id,
-	t.cycle_key, c.external_cpi, a.external_object_id, t.fence_token, t.class_external_id,
+	t.cycle_key, c.external_cpi, a.external_object_id, a.card_index, t.fence_token, t.class_external_id,
 	t.verification_reason, t.pre_completed_no_charge, t.confirmation_reason
 	FROM public.learning_tasks t
 	JOIN public.learning_courses c ON c.id = t.course_id AND c.user_id = t.user_id
@@ -167,7 +168,7 @@ func scanTask(row pgx.Row) (taskRecord, error) {
 		&item.ConfirmedAt, &item.Platform.Status, &item.Platform.CheckedAt, &item.ObservationRaw,
 		&item.PlatformRaw, &item.MediaRaw, &lease, &item.Billing.State, &item.BillingQuote,
 		&item.BillingHoldID, &item.Billing.ErrorCode, &item.CourseExternal, &item.ChapterExternal,
-		&item.CycleKey, &item.CPI, &item.ObjectID, &item.FenceToken, &item.ClassExternal,
+		&item.CycleKey, &item.CPI, &item.ObjectID, &item.CardIndex, &item.FenceToken, &item.ClassExternal,
 		&item.VerificationReason, &item.PreCompletedNoCharge, &item.ConfirmationReason)
 	if err != nil {
 		return item, err
@@ -509,6 +510,27 @@ func (s *Service) ControlTask(ctx context.Context, actor Actor, taskID, idempote
 				StopRequested: storedResult == "stop_requested", ResultCode: storedResult}
 			return nil
 		}
+		// 不在最新完整快照中的任务不能再进入待执行；已有最终提交事实的任务
+		// 只回到核验，保留“只核验、不重交”的既有保证。
+		staleSnapshot, hasSubmission := false, false
+		if action == "resume" || action == "redispatch" {
+			if err := tx.QueryRow(ctx, `SELECT
+					NOT EXISTS (SELECT 1 FROM public.learning_attachments a
+						JOIN public.learning_courses c ON c.id = a.course_id AND c.user_id = a.user_id
+						WHERE a.id = t.attachment_id AND a.user_id = t.user_id
+						  AND a.snapshot_version = c.snapshot_version),
+					EXISTS (SELECT 1 FROM public.learning_work_runs w
+						WHERE w.task_id = t.id
+						  AND w.state IN ('submitting', 'submitted', 'submission_unknown'))
+				FROM public.learning_tasks t WHERE t.id = $1 AND t.user_id = $2`,
+				taskID, record.UserID).Scan(&staleSnapshot, &hasSubmission); err != nil {
+				return errServiceUnavailable
+			}
+			if staleSnapshot && !hasSubmission &&
+				(action == "redispatch" || (action == "resume" && record.State == StatePaused)) {
+				return conflict("任务已不在最新课程快照中，请重新同步课程后再操作")
+			}
+		}
 		now := s.now()
 		active := record.LeaseAttempt != nil && (record.State == StatePreparing || record.State == StateRunning)
 		desired := record.DesiredState
@@ -616,6 +638,20 @@ func (s *Service) ControlTask(ctx context.Context, actor Actor, taskID, idempote
 		}
 		if tag.RowsAffected() != 1 {
 			return errNotFound
+		}
+		if staleSnapshot && hasSubmission && state == StatePending {
+			tag, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
+				state = 'waiting_verification', next_attempt_at = NULL, next_verify_at = $2,
+				verification_reason = 'question_submission', last_error_code = '',
+				last_error_scope = '', version = version + 1, updated_at = $2
+				WHERE id = $1`, taskID, now)
+			if err != nil {
+				return errServiceUnavailable
+			}
+			if tag.RowsAffected() != 1 {
+				return errNotFound
+			}
+			state = StateWaitingVerification
 		}
 		if active {
 			_, err = tx.Exec(ctx, `UPDATE public.learning_task_attempts SET cancel_requested = true
@@ -980,6 +1016,10 @@ func (s *Service) processAccountCommandItem(ctx context.Context, actor Actor, co
 			if _, err := tx.Exec(ctx, `UPDATE public.learning_plans SET status = 'active', updated_at = $2
 				WHERE user_id = $1 AND status = 'paused'`, userID, now); err != nil {
 				return errServiceUnavailable
+			}
+			// 暂停期间同步发现的任务需要在恢复后按当前版本补齐关联。
+			if err := bindMatchingTasks(ctx, tx, userID); err != nil {
+				return err
 			}
 		case "block":
 			if err := s.blockAccount(ctx, tx, userID, "admin_blocked", reason, nil); err != nil {

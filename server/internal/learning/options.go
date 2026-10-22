@@ -42,7 +42,7 @@ type Options struct {
 	RecoveryRetry bool
 	// CourseSnapshotTTL 仅用于展示快照新鲜度，不阻止读取旧快照。
 	CourseSnapshotTTL time.Duration
-	// SyncBatch 是单次课程同步最多处理的课程数，0 表示不额外限制。
+	// SyncBatch 是单次课程同步允许的课程数上限；超过时拒绝不完整同步，0 表示不限制。
 	SyncBatch int
 }
 

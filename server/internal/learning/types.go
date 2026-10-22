@@ -122,6 +122,7 @@ type PlatformCourseRef struct {
 
 // PlatformAttachment 是平台附件。TaskPointID 为空表示普通学习资料，不计未完成。
 type PlatformAttachment struct {
+	CardIndex       int
 	ObjectID        string
 	TaskPointID     string
 	Kind            string
@@ -154,6 +155,7 @@ type PlatformCourseSnapshot struct {
 
 // PlatformTaskRef 是只读核验所需的稳定任务引用。
 type PlatformTaskRef struct {
+	CardIndex         int
 	Course            PlatformCourseRef
 	ChapterExternalID string
 	ObjectID          string

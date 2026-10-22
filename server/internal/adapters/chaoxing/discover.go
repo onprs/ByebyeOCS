@@ -21,7 +21,6 @@ var (
 	courseNamePattern = regexp.MustCompile(`class="course-name[^"]*"[^>]*title="([^"]*)"`)
 	knowledgePattern  = regexp.MustCompile(`toOld\(\s*'(\d+)'\s*,\s*'(\d+)'\s*,\s*'(\d+)'`)
 	cardsPattern      = regexp.MustCompile(`\bmArg\s*=\s*`)
-	embedPattern      = regexp.MustCompile(`(?i)\bmodule\s*=\s*["']insertvideo["']`)
 )
 
 func text(value any) string {
@@ -55,11 +54,11 @@ func (p *Platform) do(ctx context.Context, session Session, method, rawURL strin
 	if err != nil || !p.factory.allowedURL(target) {
 		return nil, learning.Fail(learning.FailureCapabilityMissing, "上游地址不在允许范围")
 	}
-	jar, err := sessionJar(session)
+	client, cleanup, err := p.requestClient(ctx, session)
 	if err != nil {
-		return nil, learning.Fail(learning.FailureIdentityInvalid, "平台会话无法建立 Cookie 容器")
+		return nil, err
 	}
-	client := p.factory.client(jar)
+	defer cleanup()
 	if err := p.factory.limiter.wait(ctx, p.options.MinRequestInterval); err != nil {
 		return nil, learning.Fail(learning.FailureTransient, "上游请求等待被取消")
 	}
@@ -90,7 +89,10 @@ func (p *Platform) do(ctx context.Context, session Session, method, rawURL strin
 		return nil, learning.Fail(learning.FailureTransient, "上游请求未完成")
 	}
 	defer response.Body.Close()
-	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+	if response.StatusCode == http.StatusUnauthorized {
+		return nil, learning.Fail(learning.FailureIdentityInvalid, "平台身份已失效，需要重新验证")
+	}
+	if response.StatusCode == http.StatusForbidden {
 		return nil, learning.Fail(learning.FailureForbidden, "平台拒绝访问，可能需要重新验证身份")
 	}
 	if response.StatusCode == http.StatusTooManyRequests {
@@ -185,27 +187,23 @@ func (p *Platform) catalog(ctx context.Context, session Session, course learning
 		order = append(order, knowledge)
 	}
 	if len(order) > p.options.MaxChapters {
-		order = order[:p.options.MaxChapters]
+		return nil, nil, learning.Fail(learning.FailureCapabilityMissing, "课程章节数量超出同步上限，未保存不完整目录")
 	}
-	pending := map[string]int{}
-	for _, knowledge := range order {
-		pattern := regexp.MustCompile(`id="cur` + regexp.QuoteMeta(knowledge) + `"(?s).*?catalog_points_yi">(\d+)<`)
-		if match := pattern.FindStringSubmatch(page); len(match) == 2 {
-			if value, err := strconv.Atoi(match[1]); err == nil {
-				pending[knowledge] = value
-			}
-		}
-	}
+	pending := chapterPendingCounts(payload, order)
 	return order, pending, nil
 }
 
 func (p *Platform) cardsURL(course learning.PlatformCourseRef, knowledge string) string {
+	return p.cardsURLAtIndex(course, knowledge, 0)
+}
+
+func (p *Platform) cardsURLAtIndex(course learning.PlatformCourseRef, knowledge string, index int) string {
 	parsed, _ := url.Parse(p.options.endpoints.Cards)
 	query := parsed.Query()
 	query.Set("clazzid", course.ExternalClassID)
 	query.Set("courseid", course.ExternalCourseID)
 	query.Set("knowledgeid", knowledge)
-	query.Set("num", "0")
+	query.Set("num", strconv.Itoa(index))
 	query.Set("ut", "s")
 	query.Set("cpi", course.CPI)
 	query.Set("v", "20190915")
@@ -215,10 +213,39 @@ func (p *Platform) cardsURL(course learning.PlatformCourseRef, knowledge string)
 }
 
 func (p *Platform) readCards(ctx context.Context, session Session, course learning.PlatformCourseRef, knowledge string) ([]learning.PlatformAttachment, int, error) {
-	payload, err := p.do(ctx, session, http.MethodGet, p.cardsURL(course, knowledge), nil, "course_cards")
+	indexes, err := p.chapterCardIndexes(ctx, session, course, knowledge)
 	if err != nil {
 		return nil, 0, err
 	}
+	var result []learning.PlatformAttachment
+	skipped := 0
+	seen := map[string]learning.PlatformAttachment{}
+	for _, cardIndex := range indexes {
+		attachments, count, err := p.readCardsAtIndex(ctx, session, course, knowledge, cardIndex)
+		if err != nil {
+			return nil, 0, err
+		}
+		skipped += count
+		for _, attachment := range attachments {
+			key := attachment.TaskPointID
+			if key == "" {
+				key = "resource/" + strconv.Itoa(cardIndex) + "/" + attachment.ObjectID
+			}
+			if previous, exists := seen[key]; exists {
+				if previous.ObjectID != attachment.ObjectID || previous.Kind != attachment.Kind || previous.PassedKnown != attachment.PassedKnown || previous.Passed != attachment.Passed {
+					return nil, 0, learning.Fail(learning.FailureCapabilityMissing, "章节卡片含相互冲突的任务点标识")
+				}
+				continue
+			}
+			seen[key] = attachment
+			attachment.SortOrder = len(result)
+			result = append(result, attachment)
+		}
+	}
+	return result, skipped, nil
+}
+
+func parseAttachments(payload []byte) ([]learning.PlatformAttachment, int, error) {
 	config, err := parseCards(payload)
 	if err != nil {
 		return nil, 0, learning.Fail(learning.FailureCapabilityMissing, "任务卡片结构未识别")
@@ -232,7 +259,7 @@ func (p *Platform) readCards(ctx context.Context, session Session, course learni
 	for index, raw := range rawAttachments {
 		item := mapValue(raw)
 		taskPoint := text(item["jobid"])
-		kind := normalizeAttachmentKind(text(item["type"]))
+		kind := attachmentKind(item)
 		objectID := attachmentObjectID(item, kind, taskPoint)
 		if objectID == "" {
 			skipped++
@@ -256,63 +283,32 @@ func (p *Platform) readCards(ctx context.Context, session Session, course learni
 			Passed:          passed, PassedKnown: passedKnown, SortOrder: index,
 		})
 	}
-	if len(attachments) == 0 {
-		return nil, skipped, learning.Fail(learning.FailureCapabilityMissing, "任务卡片附件结构变化")
-	}
-	if embedPattern.Match(payload) {
-		// 嵌入视频由页面脚本生成；只记录来源上下文，不据此推断完成。
-	}
 	return attachments, skipped, nil
 }
 
-// readAttachments 读取章节附件，并用目录页待完成任务点数补足缺少 isPassed 的卡片。
-// 该结果只是平台读取事实，不改变平台状态。
-func (p *Platform) readAttachments(ctx context.Context, session Session, course learning.PlatformCourseRef, knowledge string) ([]learning.PlatformAttachment, map[string]int, error) {
-	attachments, _, err := p.readCards(ctx, session, course, knowledge)
-	if err != nil {
-		return nil, nil, err
-	}
-	pending := map[string]int{}
-	missing := false
-	for _, attachment := range attachments {
-		if !attachment.PassedKnown {
-			missing = true
-			break
-		}
-	}
-	if missing {
-		if value, known, err := p.chapterPending(ctx, session, course, knowledge); err == nil && known {
-			pending[knowledge] = value
-		}
-	}
-	return attachments, pending, nil
-}
-
-// attachmentObjectID 复用同一套资源标识规则：测验的 workid 经常没有 objectId，
-// 此时使用任务点编号作为稳定对象标识；其他类型缺少对象标识时仍按普通附件跳过。
+// attachmentObjectID 保留平台对象标识；没有对象编号的有效任务点使用稳定jobid，
+// 执行器仍须按任务类型核对真正需要的原始资源字段。
 func attachmentObjectID(item map[string]any, kind, taskPoint string) string {
 	objectID := firstText(item["objectId"], item["objectid"], mapValue(item["property"])["objectid"])
-	if objectID == "" && kind == "quiz" && taskPoint != "" {
+	if objectID == "" && taskPoint != "" {
 		return taskPoint
 	}
 	return objectID
 }
 
-// normalizeAttachmentKind 把平台卡片类型映射为项目内任务种类。
-// 章节测验在卡片里使用 workid/work，统一记为 quiz；其他未知类型保持原值。
+// normalizeAttachmentKind 保留公开任务分类，未知平台类型进入other供查看与处理。
 func normalizeAttachmentKind(raw string) string {
 	kind := strings.ToLower(strings.TrimSpace(raw))
 	switch kind {
 	case "workid", "work", "quiz":
 		return "quiz"
-	}
-	if kind == "" {
+	case "video", "audio":
+		return kind
+	case "document", "read", "ppt", "pdf", "pptx":
+		return "document"
+	default:
 		return "other"
 	}
-	if len(kind) > 32 {
-		return "other"
-	}
-	return kind
 }
 
 func nonNegative(value float64) float64 {
@@ -366,6 +362,11 @@ func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, cour
 	if err != nil {
 		return learning.PlatformCourseSnapshot{}, learning.Fail(learning.FailureIdentityInvalid, "平台会话格式无效")
 	}
+	ctx, cleanup, err := p.withSessionClient(ctx, session)
+	if err != nil {
+		return learning.PlatformCourseSnapshot{}, err
+	}
+	defer cleanup()
 	order, pending, err := p.catalog(ctx, session, course)
 	if err != nil {
 		return learning.PlatformCourseSnapshot{}, err

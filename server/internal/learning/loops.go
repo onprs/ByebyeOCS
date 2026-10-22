@@ -32,6 +32,31 @@ func (s *Service) recoverOnce(ctx context.Context) {
 			break
 		}
 	}
+	for range 20 {
+		handled, err := s.repairMissingSnapshotTask(ctx)
+		if err != nil {
+			s.opts.Logger.Warn("标记已消失快照任务失败", "code", describe(err))
+			return
+		}
+		if !handled {
+			break
+		}
+	}
+}
+
+// repairMissingSnapshotTask 处理同步之外重新进入待执行、但附件已不在最新
+// 完整快照中的任务，避免它们静默停留。已有最终提交事实的任务只回到核验。
+func (s *Service) repairMissingSnapshotTask(ctx context.Context) (bool, error) {
+	handled := false
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		count, err := markStaleSnapshotTasks(ctx, tx, "", "", s.now())
+		if err != nil {
+			return err
+		}
+		handled = count > 0
+		return nil
+	})
+	return handled, err
 }
 
 func (s *Service) recoverOneExpired(ctx context.Context) (bool, error) {
@@ -328,7 +353,7 @@ func (s *Service) runVerification(ctx context.Context, verifier Verifier, taskID
 		Task: PlatformTaskRef{
 			Course: PlatformCourseRef{ExternalCourseID: record.CourseExternal,
 				ExternalClassID: record.ClassExternal, CPI: record.CPI, CycleKey: record.CycleKey},
-			ChapterExternalID: record.ChapterExternal, ObjectID: record.ObjectID,
+			CardIndex: record.CardIndex, ChapterExternalID: record.ChapterExternal, ObjectID: record.ObjectID,
 			TaskPointID: record.TaskPointID,
 		},
 		Verification: record.VerificationAttempts,
@@ -666,7 +691,9 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		return
 	}
 	if s.opts.SyncBatch > 0 && len(courses) > s.opts.SyncBatch {
-		courses = courses[:s.opts.SyncBatch]
+		// 不把被截断的目录记为成功；当前生产默认为 0，不额外限制课程数。
+		s.finishSyncFailure(ctx, job, syncResult{status: "needs_attention", errorCode: "sync_batch_exceeded"})
+		return
 	}
 	var snapshotVersion int64
 	for _, course := range courses {

@@ -1757,13 +1757,16 @@ func ptrString(value string) *string { return &value }
 func ptrBool(value bool) *bool       { return &value }
 
 type stateBilling struct {
-	quote        BillingQuote
-	reserveCalls int
-	settleCalls  int
-	releaseCalls int
+	quote         BillingQuote
+	quoteCalls    int
+	reserveCalls  int
+	settleCalls   int
+	releaseCalls  int
+	settleAmounts []int64
 }
 
 func (b *stateBilling) Quote(ctx context.Context, tx pgx.Tx, userID, taskID, taskKind string) (BillingQuote, error) {
+	b.quoteCalls++
 	return b.quote, nil
 }
 func (b *stateBilling) Reserve(ctx context.Context, tx pgx.Tx, userID, taskID, key string, quote BillingQuote) (string, error) {
@@ -1772,6 +1775,7 @@ func (b *stateBilling) Reserve(ctx context.Context, tx pgx.Tx, userID, taskID, k
 }
 func (b *stateBilling) Settle(ctx context.Context, tx pgx.Tx, userID, taskID, holdID, key string, amountMinor int64) error {
 	b.settleCalls++
+	b.settleAmounts = append(b.settleAmounts, amountMinor)
 	return nil
 }
 func (b *stateBilling) Release(ctx context.Context, tx pgx.Tx, userID, taskID, holdID, key, reason string) error {
