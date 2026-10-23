@@ -2312,6 +2312,54 @@ paths:
           application/json:
             schema:
               $ref: '#/components/schemas/RefundInput'
+  /admin/api/v1/refunds/{id}/resolve:
+    post:
+      operationId: resolveRefund
+      tags:
+      - admin-finance
+      summary: 记录已核实的退款复核结果（新鲜验证）
+      description: 需要wallet.refund权限及近期验证。记录管理员核实的已退款或未退款结果，结清或释放既有退款资金，不重新向渠道发起退款。
+      security:
+      - adminCookie: []
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/IdempotencyKey'
+      - $ref: '#/components/parameters/AdminCsrf'
+      - $ref: '#/components/parameters/AdminOrigin'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefundReviewInput'
+      responses:
+        '200':
+          description: 已复核的退款记录或相同复核结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Refund'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+        '500':
+          $ref: '#/components/responses/InternalError'
   /admin/api/v1/settings/billing:
     get:
       operationId: getBillingSettings
@@ -7086,6 +7134,22 @@ components:
       - kind
       - amount_minor
       - reason
+    RefundReviewInput:
+      type: object
+      additionalProperties: false
+      required:
+      - outcome
+      - reason
+      properties:
+        outcome:
+          type: string
+          enum:
+          - succeeded
+          - failed
+        reason:
+          type: string
+          minLength: 5
+          maxLength: 500
     Refund:
       type: object
       properties:

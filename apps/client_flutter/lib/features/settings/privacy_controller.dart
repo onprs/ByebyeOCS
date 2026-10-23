@@ -64,8 +64,18 @@ class PrivacyState {
 }
 
 class PrivacyController extends AsyncNotifier<PrivacyState> {
+  /// 账户代次：重建后旧账户的在途响应不得写入新用户状态。
+  int _accountEpoch = 0;
+
+  /// 列表代次与翻页锁：刷新后旧游标结果必须丢弃，重复点击只加载一次。
+  int _listEpoch = 0;
+  bool _loadingExports = false;
+  bool _loadingDeletions = false;
+
   @override
   Future<PrivacyState> build() async {
+    ++_accountEpoch;
+    ++_listEpoch;
     ref.watch(sessionEpochProvider);
     final user = ref.watch(currentUserProvider);
     if (user == null) return const PrivacyState();
@@ -91,6 +101,8 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
       return;
     }
     if (current.refreshing) return;
+    final epoch = _accountEpoch;
+    ++_listEpoch;
     state = AsyncData(
       current.copyWith(refreshing: true, clearError: true, clearNotice: true),
     );
@@ -98,6 +110,7 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
     try {
       final exports = await repository.fetchExports();
       final deletions = await repository.fetchDeletions();
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -110,11 +123,13 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
         ),
       );
     } on ApiException catch (error) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(refreshing: false, error: error.userMessage),
       );
     } catch (_) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(refreshing: false, error: '数据请求状态暂时无法刷新'),
@@ -124,11 +139,17 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
 
   Future<void> loadMoreExports() async {
     final current = state.valueOrNull;
-    if (current == null || current.exportsCursor == null) return;
+    if (current == null || current.exportsCursor == null || _loadingExports) {
+      return;
+    }
+    final epoch = _accountEpoch;
+    final listEpoch = _listEpoch;
+    _loadingExports = true;
     try {
       final page = await ref.read(privacyRepositoryProvider).fetchExports(
             cursor: current.exportsCursor,
           );
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -137,18 +158,29 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
         ),
       );
     } catch (_) {
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(latest.copyWith(error: '更多导出记录暂时无法加载'));
+    } finally {
+      _loadingExports = false;
     }
   }
 
   Future<void> loadMoreDeletions() async {
     final current = state.valueOrNull;
-    if (current == null || current.deletionsCursor == null) return;
+    if (current == null ||
+        current.deletionsCursor == null ||
+        _loadingDeletions) {
+      return;
+    }
+    final epoch = _accountEpoch;
+    final listEpoch = _listEpoch;
+    _loadingDeletions = true;
     try {
       final page = await ref.read(privacyRepositoryProvider).fetchDeletions(
             cursor: current.deletionsCursor,
           );
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -157,14 +189,18 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
         ),
       );
     } catch (_) {
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(latest.copyWith(error: '更多删除申请暂时无法加载'));
+    } finally {
+      _loadingDeletions = false;
     }
   }
 
   Future<void> requestExport() async {
     final current = state.valueOrNull;
     if (current == null || current.requestingExport) return;
+    final epoch = _accountEpoch;
     state = AsyncData(
       current.copyWith(
         requestingExport: true,
@@ -174,6 +210,7 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
     );
     try {
       final created = await ref.read(privacyRepositoryProvider).requestExport();
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -184,11 +221,13 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
         ),
       );
     } on ApiException catch (error) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(requestingExport: false, error: error.userMessage),
       );
     } catch (_) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(requestingExport: false, error: '导出申请未完成，请稍后重试'),
@@ -199,6 +238,7 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
   Future<DataRequest?> requestDeletion() async {
     final current = state.valueOrNull;
     if (current == null || current.requestingDeletion) return null;
+    final epoch = _accountEpoch;
     state = AsyncData(
       current.copyWith(
         requestingDeletion: true,
@@ -209,6 +249,7 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
     try {
       final created =
           await ref.read(privacyRepositoryProvider).requestDeletion();
+      if (epoch != _accountEpoch) return created;
       ref.read(deletionReceiptProvider.notifier).set(created);
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
@@ -223,12 +264,14 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
       );
       return created;
     } on ApiException catch (error) {
+      if (epoch != _accountEpoch) return null;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(requestingDeletion: false, error: error.userMessage),
       );
       return null;
     } catch (_) {
+      if (epoch != _accountEpoch) return null;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(requestingDeletion: false, error: '删除申请未完成，请稍后重试'),
@@ -242,6 +285,7 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
     if (current == null || current.downloadingId != null || !request.isReady) {
       return;
     }
+    final epoch = _accountEpoch;
     state = AsyncData(
       current.copyWith(
         downloadingId: request.id,
@@ -256,6 +300,7 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
         filename: download.filename,
         bytes: download.bytes,
       );
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -264,6 +309,7 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
         ),
       );
     } on ApiException catch (error) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -272,6 +318,7 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
         ),
       );
     } catch (_) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(

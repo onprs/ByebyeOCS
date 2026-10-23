@@ -348,20 +348,21 @@ func (s *Service) FinanceSummary(ctx context.Context, actor web.Actor, from, to 
 	var payoutCount, payoutAmount int64
 	var manualCreditCount, manualCreditAmount int64
 	var manualDebitCount, manualDebitAmount int64
+	// WHERE 只取这四项统计涉及的 kind 与时间范围；其余 kind（hold、release、充值等）
+	// 在任何 FILTER 中都不计入。该条件与 FILTER 等价，同时使 journals(kind, created_at) 索引可用，
+	// 避免仍按整表 journals 扫描后再过滤。
 	if err := s.pool.QueryRow(ctx, `SELECT
-		count(*) FILTER (WHERE kind = 'capture' AND created_at >= $1 AND created_at < $2),
-		coalesce(sum(amount_minor) FILTER (WHERE kind = 'capture'
-			AND created_at >= $1 AND created_at < $2), 0)::bigint,
-		count(*) FILTER (WHERE kind = 'refund_payout' AND created_at >= $1 AND created_at < $2),
-		coalesce(sum(amount_minor) FILTER (WHERE kind = 'refund_payout'
-			AND created_at >= $1 AND created_at < $2), 0)::bigint,
-		count(*) FILTER (WHERE kind = 'manual_credit' AND created_at >= $1 AND created_at < $2),
-		coalesce(sum(amount_minor) FILTER (WHERE kind = 'manual_credit'
-			AND created_at >= $1 AND created_at < $2), 0)::bigint,
-		count(*) FILTER (WHERE kind = 'manual_debit' AND created_at >= $1 AND created_at < $2),
-		coalesce(sum(amount_minor) FILTER (WHERE kind = 'manual_debit'
-			AND created_at >= $1 AND created_at < $2), 0)::bigint
-		FROM public.journals`, fromTime, toTime).Scan(&capturedCount, &capturedAmount,
+		count(*) FILTER (WHERE kind = 'capture'),
+		coalesce(sum(amount_minor) FILTER (WHERE kind = 'capture'), 0)::bigint,
+		count(*) FILTER (WHERE kind = 'refund_payout'),
+		coalesce(sum(amount_minor) FILTER (WHERE kind = 'refund_payout'), 0)::bigint,
+		count(*) FILTER (WHERE kind = 'manual_credit'),
+		coalesce(sum(amount_minor) FILTER (WHERE kind = 'manual_credit'), 0)::bigint,
+		count(*) FILTER (WHERE kind = 'manual_debit'),
+		coalesce(sum(amount_minor) FILTER (WHERE kind = 'manual_debit'), 0)::bigint
+		FROM public.journals
+		WHERE kind IN ('capture', 'refund_payout', 'manual_credit', 'manual_debit')
+		  AND created_at >= $1 AND created_at < $2`, fromTime, toTime).Scan(&capturedCount, &capturedAmount,
 		&payoutCount, &payoutAmount, &manualCreditCount, &manualCreditAmount,
 		&manualDebitCount, &manualDebitAmount); err != nil {
 		return nil, fault.New("service_unavailable", "无法聚合账本财务汇总")

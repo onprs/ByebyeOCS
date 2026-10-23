@@ -336,20 +336,24 @@ func (s *Service) listTasks(ctx context.Context, actor Actor, filter TaskFilter,
 	if err := rows.Err(); err != nil {
 		return Page[TaskSummary]{}, errServiceUnavailable
 	}
-	items := make([]TaskSummary, 0, len(records))
-	for _, record := range records {
-		refs, err := s.taskPlanRefs(ctx, s.pool, record.ID)
-		if err != nil {
-			return Page[TaskSummary]{}, err
-		}
-		record.PlanRefs = refs
-		items = append(items, record.TaskSummary)
-	}
-	page := Page[TaskSummary]{Items: items}
-	if len(items) > limit {
-		page.Items = items[:limit]
+	page := Page[TaskSummary]{}
+	if len(records) > limit {
+		records = records[:limit]
 		last := records[limit-1]
 		page.NextCursor = encodeCursor(last.CreatedAt, last.ID)
+	}
+	ids := make([]string, len(records))
+	for i := range records {
+		ids[i] = records[i].ID
+	}
+	refs, err := s.taskPlanRefsBatch(ctx, ids)
+	if err != nil {
+		return Page[TaskSummary]{}, err
+	}
+	page.Items = make([]TaskSummary, 0, len(records))
+	for _, record := range records {
+		record.PlanRefs = refs[record.ID]
+		page.Items = append(page.Items, record.TaskSummary)
 	}
 	return page, nil
 }

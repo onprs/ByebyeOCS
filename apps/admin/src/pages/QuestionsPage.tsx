@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Check,
   ChevronRight,
@@ -182,6 +182,7 @@ export function QuestionsPage() {
   const canManage = hasPermission(me, 'question:manage')
   const { notify } = useToast()
   const [modelCursor, setModelCursor] = useState<string | null>(null)
+  const modelsRequestRef = useRef(0)
   const [models, setModels] = useState<QuestionModel[]>([])
   const [modelsLoading, setModelsLoading] = useState(true)
   const [modelsError, setModelsError] = useState<unknown | null>(null)
@@ -212,16 +213,20 @@ export function QuestionsPage() {
   })
 
   const loadModels = async (cursor: string | null = null, append = false) => {
+    // 模型目录可能被初次加载、手动刷新与保存回调同时请求；只允许最后一次结果写入。
+    const request = ++modelsRequestRef.current
     setModelsLoading(true)
     setModelsError(null)
     try {
       const response = await listQuestionModels({ cursor, limit: 100 })
+      if (request !== modelsRequestRef.current) return
       setModels(current => (append ? [...current, ...response.data.items] : response.data.items))
       setModelCursor(response.data.next_cursor)
     } catch (error) {
+      if (request !== modelsRequestRef.current) return
       setModelsError(error)
     } finally {
-      setModelsLoading(false)
+      if (request === modelsRequestRef.current) setModelsLoading(false)
     }
   }
 

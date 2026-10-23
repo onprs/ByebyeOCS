@@ -424,7 +424,7 @@ function TaskDetailDrawer({
   const detail = useAsync(
     () => (id ? getTask(id).then(response => response.data) : Promise.resolve(null)),
     [id],
-    { enabled: Boolean(id) },
+    { enabled: Boolean(id), resetOnDepsChange: true },
   )
 
   return (

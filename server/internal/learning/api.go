@@ -1,6 +1,7 @@
 package learning
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -48,11 +49,12 @@ func (s *Service) Register(mux *http.ServeMux) {
 
 func (s *Service) route(mux *http.ServeMux, pattern, audience, permission string, handler func(http.ResponseWriter, *http.Request, Actor)) {
 	mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
-		ctx := r.Context()
+		ctx, cancel := context.WithTimeout(r.Context(), s.opts.RequestTimeout)
+		defer cancel()
 		if web.RequestID(ctx) == "" {
 			ctx = web.WithRequestID(ctx, web.NewRequestID())
-			r = r.WithContext(ctx)
 		}
+		r = r.WithContext(ctx)
 		actor, ok := web.Require(w, r, audience, permission)
 		if !ok {
 			return

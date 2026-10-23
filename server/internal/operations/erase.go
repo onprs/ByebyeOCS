@@ -93,7 +93,7 @@ func (s *Service) decideDeletion(ctx context.Context, actor web.Actor, requestID
 	if err != nil {
 		return "", blockers, fault.New("service_unavailable", "暂时无法处理删除复核")
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 
 	var userID, current string
 	if err := tx.QueryRow(ctx, `SELECT user_id::text, status FROM public.data_requests

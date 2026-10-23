@@ -34,8 +34,12 @@ class HomeTasksState {
 class HomeTasksController extends AsyncNotifier<HomeTasksState> {
   StreamSubscription<RealtimeEvent>? _events;
 
+  /// 账户代次：重建后旧账户的在途刷新不得写入新用户状态。
+  int _accountEpoch = 0;
+
   @override
   Future<HomeTasksState> build() async {
+    ++_accountEpoch;
     ref.watch(sessionEpochProvider);
     final user = ref.watch(currentUserProvider);
     _events = ref.watch(realtimeServiceProvider).events.listen(_onEvent);
@@ -78,20 +82,24 @@ class HomeTasksController extends AsyncNotifier<HomeTasksState> {
       return;
     }
     if (current.refreshing) return;
+    final epoch = _accountEpoch;
     state = AsyncData(current.copyWith(refreshing: true, error: null));
     try {
       final page =
           await ref.read(learningRepositoryProvider).fetchTasks(limit: 30);
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(tasks: page.items, refreshing: false, error: null),
       );
     } on ApiException catch (error) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(refreshing: false, error: error.userMessage),
       );
     } catch (_) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(refreshing: false, error: '任务摘要暂时无法刷新'),

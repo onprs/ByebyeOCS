@@ -515,6 +515,21 @@ export async function createRefund(input: {
   return normalizeRefund(pickObject(data, ['refund']) ?? data)
 }
 
+// 手动复核历史退款时只记录管理员核实的结果；服务端不会向支付渠道发起退款请求。
+export async function resolveRefund(
+  id: string,
+  input: { outcome: 'succeeded' | 'failed'; reason: string },
+  idempotencyKey?: string,
+): Promise<Refund> {
+  const response = await apiRequest<unknown>(`/refunds/${encodeURIComponent(id)}/resolve`, {
+    method: 'POST',
+    idempotencyKey: idempotencyKey ?? newIdempotencyKey(),
+    body: { outcome: input.outcome, reason: input.reason },
+  })
+  const data = asObject(unwrapData(response.data)) ?? {}
+  return normalizeRefund(pickObject(data, ['refund']) ?? data)
+}
+
 
 export async function getAdminUserWallet(userId: string): Promise<ApiResponse<AdminUserWallet>> {
   const response = await apiGet<unknown>(`/users/${encodeURIComponent(userId)}/wallet`)

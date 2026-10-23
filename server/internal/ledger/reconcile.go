@@ -531,16 +531,12 @@ func (s *Service) ListReconciliations(ctx context.Context, actor web.Actor, stat
 	}
 	defer rows.Close()
 	items := make([]Reconciliation, 0, limit+1)
-	var lastCreated time.Time
-	lastID := ""
 	for rows.Next() {
 		record, err := scanReconciliation(rows)
 		if err != nil {
 			return ReconciliationPage{}, err
 		}
 		items = append(items, *record)
-		lastCreated = record.createdAtValue
-		lastID = record.ID
 	}
 	if err := rows.Err(); err != nil {
 		return ReconciliationPage{}, fault.New("service_unavailable", "无法读取对账记录")
@@ -548,7 +544,9 @@ func (s *Service) ListReconciliations(ctx context.Context, actor web.Actor, stat
 	page := ReconciliationPage{Items: items}
 	if len(items) > limit {
 		page.Items = items[:limit]
-		page.NextCursor = encodeCursor(cursorValue{createdAt: lastCreated, id: lastID})
+		// 游标必须指向本页最后一条已返回记录；指向多取的探测行会让下一页跳过一条。
+		last := items[limit-1]
+		page.NextCursor = encodeCursor(cursorValue{createdAt: last.createdAtValue, id: last.ID})
 	}
 	return page, nil
 }

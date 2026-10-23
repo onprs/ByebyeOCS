@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/onprs/ByebyeOCS/server/internal/platform/fault"
@@ -51,6 +52,8 @@ var ErrInvalidCredentials = errors.New("auth: 外部凭据无效")
 var errIdentityRace = errors.New("auth: 外部身份并发写入")
 
 // sanitizeDisplay 去除控制字符并限制长度，展示字段不作为身份键。
+// 长度按字符（rune）计数，与数据库 CHECK 的 length() 语义一致；
+// 不能按字节截断：长中文被切开会产生无效 UTF-8，使整个登录事务写入失败。
 func sanitizeDisplay(value string, limit int) string {
 	cleaned := strings.Map(func(r rune) rune {
 		if r == '\n' || r == '\t' || r == '\r' {
@@ -62,8 +65,8 @@ func sanitizeDisplay(value string, limit int) string {
 		return r
 	}, value)
 	cleaned = strings.TrimSpace(cleaned)
-	if len(cleaned) > limit {
-		cleaned = cleaned[:limit]
+	if utf8.RuneCountInString(cleaned) > limit {
+		cleaned = string([]rune(cleaned)[:limit])
 	}
 	return cleaned
 }

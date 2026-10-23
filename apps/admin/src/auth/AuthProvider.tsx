@@ -28,6 +28,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [sessionExpired, setSessionExpired] = useState(false)
   const [bootstrapNonce, setBootstrapNonce] = useState(0)
   const mounted = useRef(true)
+  // 引导代次与当前在途引导：同一轮只运行一个请求，退出/登录后旧响应不得写回。
+  const bootstrapRun = useRef(0)
+  const activeBootstrap = useRef(0)
 
   useEffect(() => {
     mounted.current = true
@@ -37,34 +40,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   const bootstrap = useCallback(async () => {
+    // 已有同一轮引导在途时去重；已被退出/登录作废的旧引导允许被新引导取代。
+    if (activeBootstrap.current !== 0 && activeBootstrap.current === bootstrapRun.current) return
+    const run = ++bootstrapRun.current
+    activeBootstrap.current = run
+    const isCurrent = () => mounted.current && run === bootstrapRun.current
     setPhase('boot')
     setCapabilitiesError(null)
     setMe(null)
     clearSessionMemory()
+    try {
+      const capabilityResult = await getCapabilities()
+        .then(response => ({ ok: true as const, data: response.data }))
+        .catch(error => ({ ok: false as const, error }))
+      if (!isCurrent()) return
+      if (capabilityResult.ok) setCapabilities(capabilityResult.data)
 
-    const capabilityResult = await getCapabilities()
-      .then(response => ({ ok: true as const, data: response.data }))
-      .catch(error => ({ ok: false as const, error }))
-    if (!mounted.current) return
-    if (capabilityResult.ok) setCapabilities(capabilityResult.data)
+      const sessionResult = await getAuthSession()
+        .then(response => ({ ok: true as const, data: response.data }))
+        .catch(error => ({ ok: false as const, error }))
+      if (!isCurrent()) return
 
-    const sessionResult = await getAuthSession()
-      .then(response => ({ ok: true as const, data: response.data }))
-      .catch(error => ({ ok: false as const, error }))
-    if (!mounted.current) return
+      if (sessionResult.ok) {
+        const session = sessionResult.data
+        if (session.authenticated) {
+          try {
+            const meResponse = await getMe()
+            if (!isCurrent()) return
+            setMe(meResponse.data)
+            setPhase('authenticated')
+            setSessionExpired(false)
+            return
+          } catch (error) {
+            if (!isCurrent()) return
+            const status = (error as { status?: number }).status
+            if (status === 401 || status === 403) {
+              setPhase('unauthenticated')
+            } else {
+              setCapabilitiesError(error)
+              setPhase('error')
+            }
+            return
+          }
+        }
+        if (session.capabilities.adminMethods.length > 0 || capabilityResult.ok && capabilityResult.data.authentication.enabled) {
+          setPhase('unauthenticated')
+          return
+        }
+        setPhase('authentication_disabled')
+        return
+      }
 
-    if (sessionResult.ok) {
-      const session = sessionResult.data
-      if (session.authenticated) {
+      // 兼容尚未挂载 /auth/session 的旧入口：仅在能力声明认证已启用时探测 /me。
+      if (capabilityResult.ok && capabilityResult.data.authentication.enabled) {
         try {
           const meResponse = await getMe()
-          if (!mounted.current) return
+          if (!isCurrent()) return
           setMe(meResponse.data)
           setPhase('authenticated')
           setSessionExpired(false)
-          return
         } catch (error) {
-          if (!mounted.current) return
+          if (!isCurrent()) return
           const status = (error as { status?: number }).status
           if (status === 401 || status === 403) {
             setPhase('unauthenticated')
@@ -72,45 +108,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             setCapabilitiesError(error)
             setPhase('error')
           }
-          return
         }
-      }
-      if (session.capabilities.adminMethods.length > 0 || capabilityResult.ok && capabilityResult.data.authentication.enabled) {
-        setPhase('unauthenticated')
         return
       }
-      setPhase('authentication_disabled')
-      return
-    }
 
-    // 兼容尚未挂载 /auth/session 的旧入口：仅在能力声明认证已启用时探测 /me。
-    if (capabilityResult.ok && capabilityResult.data.authentication.enabled) {
-      try {
-        const meResponse = await getMe()
-        if (!mounted.current) return
-        setMe(meResponse.data)
-        setPhase('authenticated')
-        setSessionExpired(false)
-      } catch (error) {
-        if (!mounted.current) return
-        const status = (error as { status?: number }).status
-        if (status === 401 || status === 403) {
-          setPhase('unauthenticated')
-        } else {
-          setCapabilitiesError(error)
-          setPhase('error')
-        }
+      if (capabilityResult.ok) {
+        setPhase('authentication_disabled')
+        return
       }
-      return
-    }
 
-    if (capabilityResult.ok) {
-      setPhase('authentication_disabled')
-      return
+      setCapabilitiesError(sessionResult.error ?? capabilityResult.error)
+      setPhase('error')
+    } finally {
+      if (activeBootstrap.current === run) activeBootstrap.current = 0
     }
-
-    setCapabilitiesError(sessionResult.error ?? capabilityResult.error)
-    setPhase('error')
   }, [])
 
   useEffect(() => {
@@ -120,6 +131,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(
     () =>
       subscribeUnauthorized(() => {
+        // 会话失效后，任何尚未返回的引导结果都不能再把管理员置回已登录。
+        bootstrapRun.current += 1
         setMe(null)
         setSessionExpired(true)
         setPhase('unauthenticated')
@@ -129,6 +142,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(
     async (input: { username: string; password: string; totp: string }) => {
+      // 本次登录取代在途引导，防止旧响应覆盖登录结果。
+      bootstrapRun.current += 1
       const result = await loginRequest(input)
       setMe(result.me)
       setSessionExpired(false)
@@ -145,6 +160,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const logout = useCallback(async () => {
+    bootstrapRun.current += 1
     try {
       await logoutRequest()
     } finally {

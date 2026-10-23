@@ -8,6 +8,12 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 source "$SCRIPT_DIR/common.sh"
 
 PREFIX=$DEFAULT_PREFIX
+CONFIG_DIR=$DEFAULT_CONFIG_DIR
+DATA_DIR=$DEFAULT_DATA_DIR
+TIKU_CONFIG_DIR=$DEFAULT_TIKU_CONFIG_DIR
+SERVICE_USER=$DEFAULT_SERVICE_USER
+TIKU_USER=$DEFAULT_TIKU_USER
+SKIP_TIKU=0
 TARGET_VERSION=""
 NO_SYSTEMD=0
 NO_RESTART=0
@@ -44,13 +50,27 @@ safe_version "$TARGET_VERSION"
 if [[ "$NO_SYSTEMD" != 1 && $EUID -ne 0 ]]; then
   die "回滚需要 root；隔离测试可使用 --no-systemd"
 fi
-for cmd in install cp mv ln readlink realpath sha256sum find sed; do require_cmd "$cmd"; done
+for cmd in install cp mv ln readlink realpath sha256sum find sed mktemp chmod chown flock basename; do require_cmd "$cmd"; done
 
 load_install_state "$PREFIX"
-[[ -L "$PREFIX/current" ]] || die "未发现 current 符号链接"
+require_install_state "$PREFIX"
+validate_user_name "$SERVICE_USER"
+validate_user_name "$TIKU_USER"
+current_version=$(basename "$(current_release_dir "$PREFIX")")
 target="$PREFIX/releases/$TARGET_VERSION"
+
+lock_prefix "$PREFIX"
+cleanup() {
+  restore_replaced_releases "$PREFIX"
+  cleanup_temp_paths
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+cleanup_stale_prefix_artifacts "$PREFIX"
+# 在锁内复核目标版本，避免与并发强制重装交错。
 verify_installed_release "$target"
-current_version=$(basename "$(readlink -f "$PREFIX/current")")
 switch_current "$PREFIX" "$TARGET_VERSION"
 install_units
 restart_active_services

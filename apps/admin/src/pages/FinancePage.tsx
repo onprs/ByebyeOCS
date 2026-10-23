@@ -23,7 +23,9 @@ import {
   listOrders,
   listReconciliations,
   listRefunds,
+  resolveRefund,
 } from '../api/endpoints'
+import { ApiError } from '../api/client'
 import type {
   Order,
   Reconciliation,
@@ -314,7 +316,16 @@ export function FinancePage() {
             canAdjust={canAdjust}
           />
         ) : null}
-        {tab === 'refunds' ? <RefundsPanel refreshToken={refundRefresh} /> : null}
+        {tab === 'refunds' ? (
+          <RefundsPanel
+            refreshToken={refundRefresh}
+            canRefund={canRefund}
+            onResolved={() => {
+              summary.reload()
+              setRefundRefresh(value => value + 1)
+            }}
+          />
+        ) : null}
         {canReadAudit && tab === 'audit' ? (
           <AuditPanel onAdjust={() => { setAdjustTarget(null); setAdjustOpen(true) }} canAdjust={canAdjust} />
         ) : null}
@@ -566,7 +577,7 @@ function WalletPanel({
   const { notify } = useToast()
   const [input, setInput] = useState(target?.walletId ?? '')
   const [walletId, setWalletId] = useState(target?.walletId ?? '')
-  const [snapshot, setSnapshot] = useState<WalletSnapshot | null>(null)
+  const [snapshot, setSnapshot] = useState<{ walletId: string; wallet: WalletSnapshot } | null>(null)
   const cursor = useCursorStack(walletId)
   const entries = useAsync(
     () =>
@@ -574,7 +585,7 @@ function WalletPanel({
         ? getWalletEntries(walletId, { cursor: cursor.cursor, limit: 25 }).then(response => response)
         : Promise.resolve(null),
     [walletId, cursor.cursor],
-    { enabled: Boolean(walletId) },
+    { enabled: Boolean(walletId), resetOnDepsChange: true },
   )
 
   useEffect(() => {
@@ -585,8 +596,11 @@ function WalletPanel({
   }, [target?.walletId])
 
   useEffect(() => {
-    if (entries.data?.wallet) setSnapshot(entries.data.wallet)
-  }, [entries.data?.wallet])
+    const wallet = entries.data?.wallet
+    if (wallet) setSnapshot({ walletId, wallet })
+  }, [entries.data?.wallet, walletId])
+
+  const activeSnapshot = snapshot && snapshot.walletId === walletId ? snapshot.wallet : null
 
   const load = () => {
     const value = input.trim()
@@ -647,13 +661,13 @@ function WalletPanel({
         </div>
       ) : null}
 
-      {walletId && snapshot ? (
+      {walletId && activeSnapshot ? (
         <div className="wallet-context">
           <span>用户编号 <b className="mono">{target?.userId ?? '未提供'}</b></span>
-          <span>可用余额 <b>{formatMoneyMinor(snapshot.available_minor)}</b></span>
-          <span>预占金额 <b>{formatMoneyMinor(snapshot.reserved_minor)}</b></span>
-          <span>题库计费尾差 <b>{formatPriceMicros(snapshot.tiku_accrued_micros)}</b></span>
-          <span>钱包状态 <b>{snapshot.frozen === null ? '未提供' : snapshot.frozen ? `已冻结${snapshot.frozen_reason ? ` · ${snapshot.frozen_reason}` : ''}` : '正常'}</b></span>
+          <span>可用余额 <b>{formatMoneyMinor(activeSnapshot.available_minor)}</b></span>
+          <span>预占金额 <b>{formatMoneyMinor(activeSnapshot.reserved_minor)}</b></span>
+          <span>题库计费尾差 <b>{formatPriceMicros(activeSnapshot.tiku_accrued_micros)}</b></span>
+          <span>钱包状态 <b>{activeSnapshot.frozen === null ? '未提供' : activeSnapshot.frozen ? `已冻结${activeSnapshot.frozen_reason ? ` · ${activeSnapshot.frozen_reason}` : ''}` : '正常'}</b></span>
         </div>
       ) : null}
 
@@ -715,10 +729,19 @@ function WalletPanel({
   )
 }
 
-function RefundsPanel({ refreshToken }: { refreshToken: number }) {
+function RefundsPanel({
+  refreshToken,
+  canRefund,
+  onResolved,
+}: {
+  refreshToken: number
+  canRefund: boolean
+  onResolved: () => void
+}) {
   const [status, setStatus] = useState('')
   const [orderId, setOrderId] = useState('')
   const [userId, setUserId] = useState('')
+  const [reviewing, setReviewing] = useState<Refund | null>(null)
   const debouncedOrder = useDebouncedValue(orderId, 350)
   const debouncedUser = useDebouncedValue(userId, 350)
   const cursor = useCursorStack(`${status}|${debouncedOrder}|${debouncedUser}`)
@@ -783,6 +806,7 @@ function RefundsPanel({ refreshToken }: { refreshToken: number }) {
                   <th>状态</th>
                   <th>原因</th>
                   <th>创建 / 完成</th>
+                  <th aria-label="操作" />
                 </tr>
               </thead>
               <tbody>
@@ -798,6 +822,18 @@ function RefundsPanel({ refreshToken }: { refreshToken: number }) {
                     <td className="muted">
                       <div>{formatDateTime(refund.created_at)}</div>
                       <div>{formatDateTime(refund.completed_at)}</div>
+                    </td>
+                    <td>
+                      {canRefund && refundNeedsReview(refund.status) ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          aria-label={`复核退款 ${refund.id}`}
+                          onClick={() => setReviewing(refund)}
+                        >
+                          <FileCheck2 size={12} /> 复核结果
+                        </Button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -818,8 +854,24 @@ function RefundsPanel({ refreshToken }: { refreshToken: number }) {
       ) : (
         <EmptyState title={status || debouncedOrder || debouncedUser ? '没有符合条件的退款' : '暂无退款记录'} description="调整状态、订单或用户筛选后再试。" />
       )}
+      <RefundReviewDialog
+        refund={reviewing}
+        onClose={() => setReviewing(null)}
+        onResolved={() => onResolved()}
+      />
     </>
   )
+}
+
+const refundReviewStatuses = new Set(['reserved', 'submitted', 'unknown'])
+
+function refundNeedsReview(status: string): boolean {
+  return refundReviewStatuses.has(status)
+}
+
+function requiresReauth(error: unknown): boolean {
+  // 账本近期验证失败按既有财务口径统一返回 403；沿用其他资金操作的重新验证提示。
+  return error instanceof ApiError && error.status === 403
 }
 
 function refundTone(status: string): 'green' | 'amber' | 'red' | 'neutral' | 'violet' {
@@ -828,6 +880,156 @@ function refundTone(status: string): 'green' | 'amber' | 'red' | 'neutral' | 'vi
   if (status === 'requested' || status === 'reserved' || status === 'submitted') return 'amber'
   if (status === 'cancelled') return 'neutral'
   return 'violet'
+}
+
+function RefundReviewDialog({
+  refund,
+  onClose,
+  onResolved,
+}: {
+  refund: Refund | null
+  onClose: () => void
+  onResolved: () => void
+}) {
+  const { notify } = useToast()
+  const [outcome, setOutcome] = useState<'succeeded' | 'failed' | null>(null)
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<unknown | null>(null)
+  const [result, setResult] = useState<Refund | null>(null)
+  const [stepUpOpen, setStepUpOpen] = useState(false)
+  const idempotency = useIdempotencyKey()
+
+  useEffect(() => {
+    if (refund) {
+      idempotency.reset()
+      setOutcome(null)
+      setReason('')
+      setError(null)
+      setResult(null)
+      setStepUpOpen(false)
+    }
+    // refund 变化代表打开另一笔退款，仅此时重置输入。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refund])
+
+  if (!refund) return null
+
+  const submit = async () => {
+    if (!outcome) {
+      setError(new Error('请选择退款核实结果：已退款或未退款。'))
+      return
+    }
+    const trimmed = reason.trim()
+    if (trimmed.length < 5) {
+      setError(new Error('请填写至少 5 个字符的核实依据。'))
+      return
+    }
+    setSaving(true)
+    setError(null)
+    try {
+      const payload = { refundId: refund.id, outcome, reason: trimmed }
+      const updated = await resolveRefund(
+        refund.id,
+        { outcome, reason: trimmed },
+        idempotency.keyFor(payload),
+      )
+      setResult(updated)
+      notify(outcome === 'succeeded' ? '已记录为已退款。' : '已记录为未退款。', 'success')
+      onResolved()
+    } catch (reasonValue) {
+      setError(reasonValue)
+      if (requiresReauth(reasonValue)) setStepUpOpen(true)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const statusLabel = (status: string) =>
+    refundStatusOptions.find(option => option.value === status)?.label ?? status
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="复核退款结果"
+      description={`退款 ${refund.id} · 订单 ${refund.order_id}`}
+      wide
+      actions={
+        result ? (
+          <Button variant="primary" onClick={onClose}>关闭</Button>
+        ) : (
+          <>
+            <Button onClick={onClose} disabled={saving}>取消</Button>
+            <Button variant="primary" onClick={() => void submit()} loading={saving}>提交复核结果</Button>
+          </>
+        )
+      }
+    >
+      {result ? (
+        <div className="callout callout-success" role="status">
+          <CheckCircle2 size={16} />
+          <div>
+            {result.status === 'succeeded' ? '已记录为已退款。' : '已记录为未退款。'}
+            <div className="form-hint" style={{ marginTop: 6 }}>退款状态：{statusLabel(result.status)}</div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="callout callout-warning">
+            <CircleAlert size={15} />
+            <div>请先核对支付渠道的实际退款结果。这里只登记核实结果，不会再次发起渠道退款。</div>
+          </div>
+          <div className="privacy-actions" role="group" aria-label="选择退款核实结果" style={{ marginTop: 14 }}>
+            <button
+              type="button"
+              className={`privacy-action ${outcome === 'succeeded' ? 'selected' : ''}`}
+              aria-pressed={outcome === 'succeeded'}
+              onClick={() => { setOutcome('succeeded'); setError(null) }}
+            >
+              <CheckCircle2 size={15} />
+              <b>已退款</b>
+              <span>渠道已确认退款成功，记录退款支出并完成本次退款。</span>
+            </button>
+            <button
+              type="button"
+              className={`privacy-action ${outcome === 'failed' ? 'selected' : ''}`}
+              aria-pressed={outcome === 'failed'}
+              onClick={() => { setOutcome('failed'); setError(null) }}
+            >
+              <CircleAlert size={15} />
+              <b>未退款</b>
+              <span>渠道没有退款，预占金额退回可用余额并结束本次退款。</span>
+            </button>
+          </div>
+          <Field label="核实依据" required hint="填写渠道账单或交易号等核实依据，至少 5 个字符；会写入审计。">
+            <textarea
+              rows={4}
+              value={reason}
+              onChange={event => { setReason(event.target.value); if (error) setError(null) }}
+              maxLength={500}
+              placeholder="填写本次核实的渠道结果与依据…"
+            />
+          </Field>
+          {error ? (
+            <div style={{ marginTop: 12 }}>
+              <ErrorState error={error} compact />
+              {requiresReauth(error) ? (
+                <div style={{ marginTop: 8 }}>
+                  <Button size="sm" onClick={() => setStepUpOpen(true)}>重新验证管理员身份</Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </>
+      )}
+      <StepUpDialog
+        open={stepUpOpen}
+        onClose={() => setStepUpOpen(false)}
+        onSuccess={() => { void submit() }}
+      />
+    </Modal>
+  )
 }
 
 function WalletSearchBox({

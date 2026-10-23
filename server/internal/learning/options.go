@@ -33,6 +33,10 @@ type Options struct {
 	HeartbeatInterval    time.Duration
 	PollInterval         time.Duration
 	VerificationInterval time.Duration
+	// ShutdownTimeout 限制循环与在途执行的退出等待。
+	ShutdownTimeout time.Duration
+	// RequestTimeout 限制学习业务接口的数据库与锁等待，不约束后台任务实际时长。
+	RequestTimeout time.Duration
 	// PreflightTimeout 限制外部执行前的只读平台核验。
 	PreflightTimeout time.Duration
 	RetryBase        time.Duration
@@ -64,6 +68,12 @@ func (o *Options) withDefaults() {
 	}
 	if o.VerificationInterval <= 0 {
 		o.VerificationInterval = 5 * time.Second
+	}
+	if o.ShutdownTimeout <= 0 {
+		o.ShutdownTimeout = 15 * time.Second
+	}
+	if o.RequestTimeout <= 0 {
+		o.RequestTimeout = 15 * time.Second
 	}
 	if o.RetryBase <= 0 {
 		o.RetryBase = 30 * time.Second
@@ -100,6 +110,12 @@ func (o *Options) validate() error {
 	}
 	if o.HeartbeatInterval >= o.LeaseTTL {
 		return validation("心跳间隔必须小于租约时长")
+	}
+	if o.RequestTimeout < 50*time.Millisecond || o.RequestTimeout > 2*time.Minute {
+		return validation("学习接口超时必须在50毫秒至2分钟之间")
+	}
+	if o.ShutdownTimeout > 2*time.Minute {
+		return validation("执行退出等待时间过长")
 	}
 	if o.PreflightTimeout > 2*time.Minute {
 		return validation("执行前核验超时过长")

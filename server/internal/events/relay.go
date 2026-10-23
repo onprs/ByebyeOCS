@@ -19,7 +19,7 @@ func (s *Service) RelayLearning(ctx context.Context, limit int) error {
 	if err != nil {
 		return fault.New("service_unavailable", "事件桥接暂不可用")
 	}
-	defer tx.Rollback(context.Background())
+	defer rollback(tx)
 	rows, err := tx.Query(ctx, `SELECT event_id::text,COALESCE(user_id::text,''),resource_type,resource_id::text,resource_version,topic,payload FROM public.learning_outbox WHERE published_at IS NULL ORDER BY created_at,event_id LIMIT $1 FOR UPDATE SKIP LOCKED`, limit)
 	if err != nil {
 		return fault.New("service_unavailable", "无法读取课程事件")
@@ -43,22 +43,33 @@ func (s *Service) RelayLearning(ctx context.Context, limit int) error {
 	if err != nil {
 		return fault.New("service_unavailable", "课程事件暂不可读")
 	}
+	entries := make([]encodedEvent, 0, len(batch)*2)
+	ids := make([]string, 0, len(batch))
 	for _, entry := range batch {
 		var payload map[string]any
 		if json.Unmarshal(entry.data, &payload) != nil {
 			return fault.New("service_unavailable", "课程事件载荷无效")
 		}
 		if entry.user != "" {
-			if err := Record(ctx, tx, Event{Audience: "user", UserID: entry.user, Type: entry.kind, ResourceID: entry.resource, Version: entry.version, Data: payload}); err != nil {
+			item, err := encodeEvent(Event{Audience: "user", UserID: entry.user, Type: entry.kind, ResourceID: entry.resource, Version: entry.version, Data: payload})
+			if err != nil {
 				return err
 			}
+			entries = append(entries, item)
 		}
-		if err := Record(ctx, tx, Event{Audience: "admin", Type: entry.kind, ResourceID: entry.resource, Version: entry.version, Data: map[string]any{"user_id": entry.user, "resource_type": entry.resourceType}}); err != nil {
+		item, err := encodeEvent(Event{Audience: "admin", Type: entry.kind, ResourceID: entry.resource, Version: entry.version, Data: map[string]any{"user_id": entry.user, "resource_type": entry.resourceType}})
+		if err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE public.learning_outbox SET published_at=now() WHERE event_id=$1`, entry.id); err != nil {
-			return fault.New("service_unavailable", "无法确认课程事件桥接")
-		}
+		entries = append(entries, item)
+		ids = append(ids, entry.id)
+	}
+	// 整批聚合写入并一次性确认已桥接，语句数不随事件数量增长。
+	if err := insertEvents(ctx, tx, entries); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE public.learning_outbox SET published_at=now() WHERE event_id=ANY($1::uuid[])`, ids); err != nil {
+		return fault.New("service_unavailable", "无法确认课程事件桥接")
 	}
 	if tx.Commit(ctx) != nil {
 		return fault.New("service_unavailable", "课程事件桥接结果待核对")

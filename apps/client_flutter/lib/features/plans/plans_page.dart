@@ -416,13 +416,16 @@ class _PlansPageState extends ConsumerState<PlansPage> {
         _PlanTaskFilter.attention => ('没有需要人工处理的任务', '身份过期、平台限制或资源不可用时会在这里提示。'),
         _PlanTaskFilter.history => ('暂无历史任务', '平台确认或取消后的任务会保留在这里。'),
       };
-      return EmptyState(
-        icon: _filter == _PlanTaskFilter.attention
-            ? Icons.check_circle_outline
-            : Icons.inbox_outlined,
-        title: title,
-        message: message,
-        compact: true,
+      return _withTaskPager(
+        data,
+        EmptyState(
+          icon: _filter == _PlanTaskFilter.attention
+              ? Icons.check_circle_outline
+              : Icons.inbox_outlined,
+          title: title,
+          message: message,
+          compact: true,
+        ),
       );
     }
     if (_filter == _PlanTaskFilter.current) {
@@ -455,33 +458,65 @@ class _PlansPageState extends ConsumerState<PlansPage> {
               .toList(growable: false),
         ),
       ];
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          for (final group in groups)
-            if (group.tasks.isNotEmpty) ...[
-              Padding(
-                padding: const EdgeInsets.only(top: 6, bottom: 7),
-                child: Text(
-                  '${group.title} · ${group.tasks.length}',
-                  style: TextStyle(
-                    color: context.colors.textSecondary,
-                    fontSize: 11.5,
-                    fontWeight: FontWeight.w600,
-                    letterSpacing: 0.4,
+      return _withTaskPager(
+        data,
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            for (final group in groups)
+              if (group.tasks.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.only(top: 6, bottom: 7),
+                  child: Text(
+                    '${group.title} · ${group.tasks.length}',
+                    style: TextStyle(
+                      color: context.colors.textSecondary,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.4,
+                    ),
                   ),
                 ),
-              ),
-              for (final task in group.tasks)
-                _TaskRow(task: task, onTap: () => _openTask(task)),
-            ],
-        ],
+                for (final task in group.tasks)
+                  _TaskRow(task: task, onTap: () => _openTask(task)),
+              ],
+          ],
+        ),
       );
     }
+    return _withTaskPager(
+      data,
+      Column(
+        children: [
+          for (final task in tasks)
+            _TaskRow(task: task, onTap: () => _openTask(task)),
+        ],
+      ),
+    );
+  }
+
+  Widget _withTaskPager(PlansState data, Widget content) {
+    if (data.refreshingTasks ||
+        (!data.tasksHasMore && !data.loadingMoreTasks)) {
+      return content;
+    }
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        for (final task in tasks)
-          _TaskRow(task: task, onTap: () => _openTask(task)),
+        content,
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Center(
+            child: TextButton(
+              onPressed: data.loadingMoreTasks
+                  ? null
+                  : () => ref
+                      .read(plansControllerProvider.notifier)
+                      .loadMoreTasks(),
+              child: Text(data.loadingMoreTasks ? '加载中…' : '加载更多'),
+            ),
+          ),
+        ),
       ],
     );
   }

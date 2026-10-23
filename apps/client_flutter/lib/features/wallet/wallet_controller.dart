@@ -119,11 +119,29 @@ class WalletState {
   }
 }
 
+class _WalletSection<T> {
+  const _WalletSection(this.value, this.error);
+
+  final T? value;
+  final String? error;
+}
+
 class WalletController extends AsyncNotifier<WalletState> {
   StreamSubscription<RealtimeEvent>? _events;
 
+  /// 账户代次：重建后旧账户的在途响应不得写入新用户状态。
+  int _accountEpoch = 0;
+
+  /// 列表代次与翻页锁：刷新后旧游标结果必须丢弃，重复点击只加载一次。
+  int _listEpoch = 0;
+  bool _loadingEntries = false;
+  bool _loadingOrders = false;
+  bool _loadingUsage = false;
+
   @override
   Future<WalletState> build() async {
+    ++_accountEpoch;
+    _listEpoch++;
     ref.watch(sessionEpochProvider);
     final user = ref.watch(currentUserProvider);
     _events = ref.watch(realtimeServiceProvider).events.listen(_onEvent);
@@ -140,76 +158,52 @@ class WalletController extends AsyncNotifier<WalletState> {
     }
     final repository = ref.watch(walletRepositoryProvider);
     final wallet = await repository.fetchWallet();
-    PricingInfo? pricing;
-    String? pricingError;
-    try {
-      pricing = await repository.fetchPricing();
-    } on ApiException catch (error) {
-      pricingError = error.userMessage;
-    }
-    List<WalletEntry> entries = const [];
-    String? entriesCursor;
-    String? entriesError;
-    try {
-      final page = await repository.fetchEntries();
-      entries = page.items;
-      entriesCursor = page.nextCursor;
-    } on ApiException catch (error) {
-      entriesError = error.userMessage;
-    }
-    List<RechargeOrder> orders = const [];
-    String? ordersCursor;
-    String? ordersError;
-    try {
-      final page = await repository.fetchOrders();
-      orders = page.items;
-      ordersCursor = page.nextCursor;
-    } on ApiException catch (error) {
-      ordersError = error.userMessage;
-    }
-    List<UsageRecord> usage = const [];
-    String? usageCursor;
-    String? usageError;
-    try {
-      final page = await repository.fetchUsage();
-      usage = page.items;
-      usageCursor = page.nextCursor;
-    } on ApiException catch (error) {
-      usageError = error.userMessage;
-    }
-    List<QuestionQuery> queries = const [];
-    String? queriesCursor;
-    bool queryDetailsAvailable = true;
-    try {
-      final page = await ref.read(questionRepositoryProvider).fetchQueries();
-      queries = page.items;
-      queriesCursor = page.nextCursor;
-    } on ApiException catch (error) {
-      if (error.isNotFound) {
-        queryDetailsAvailable = false;
-      } else {
-        queryDetailsAvailable = false;
-      }
-    } catch (_) {
-      queryDetailsAvailable = false;
-    }
+    // 钱包、价格、流水、订单、用量与查询互不依赖；并行读取避免串行等待多个往返。
+    final pricingFuture = _loadSection(repository.fetchPricing, '价格暂时无法加载');
+    final entriesFuture = _loadSection(repository.fetchEntries, '流水暂时无法加载');
+    final ordersFuture = _loadSection(repository.fetchOrders, '订单暂时无法加载');
+    final usageFuture = _loadSection(repository.fetchUsage, '用量暂时无法加载');
+    final queriesFuture = _loadSection(
+      () => ref.read(questionRepositoryProvider).fetchQueries(),
+      '题库查询记录暂时无法获取',
+    );
+    final (pricing, entries, orders, usage, queries) = await (
+      pricingFuture,
+      entriesFuture,
+      ordersFuture,
+      usageFuture,
+      queriesFuture,
+    ).wait;
     return WalletState(
       wallet: wallet,
-      pricing: pricing,
-      entries: entries,
-      orders: orders,
-      usage: usage,
-      queries: queries,
-      entriesCursor: entriesCursor,
-      ordersCursor: ordersCursor,
-      usageCursor: usageCursor,
-      queriesCursor: queriesCursor,
-      queryDetailsAvailable: queryDetailsAvailable,
-      pricingError: pricingError,
-      entriesError: entriesError,
-      ordersError: ordersError,
-      usageError: usageError,
+      pricing: pricing.value,
+      entries: entries.value?.items ?? const <WalletEntry>[],
+      orders: orders.value?.items ?? const <RechargeOrder>[],
+      usage: usage.value?.items ?? const <UsageRecord>[],
+      queries: queries.value?.items ?? const <QuestionQuery>[],
+      entriesCursor: entries.value?.nextCursor,
+      ordersCursor: orders.value?.nextCursor,
+      usageCursor: usage.value?.nextCursor,
+      queriesCursor: queries.value?.nextCursor,
+      queryDetailsAvailable: queries.value != null,
+      pricingError: pricing.error,
+      entriesError: entries.error,
+      ordersError: orders.error,
+      usageError: usage.error,
     );
+  }
+
+  Future<_WalletSection<T>> _loadSection<T>(
+    Future<T> Function() run,
+    String fallback,
+  ) async {
+    try {
+      return _WalletSection(await run(), null);
+    } on ApiException catch (error) {
+      return _WalletSection(null, error.userMessage);
+    } catch (_) {
+      return _WalletSection(null, fallback);
+    }
   }
 
   void _onEvent(RealtimeEvent event) {
@@ -238,86 +232,58 @@ class WalletController extends AsyncNotifier<WalletState> {
       return;
     }
     if (current.refreshing) return;
+    final epoch = _accountEpoch;
+    ++_listEpoch;
     state = AsyncData(
       current.copyWith(refreshing: true, clearActionError: true),
     );
     final repository = ref.read(walletRepositoryProvider);
     try {
       final wallet = await repository.fetchWallet();
-      PricingInfo? pricing;
-      String? pricingError;
-      try {
-        pricing = await repository.fetchPricing();
-      } on ApiException catch (error) {
-        pricingError = error.userMessage;
-      }
-      List<WalletEntry> entries = current.entries;
-      String? entriesCursor = current.entriesCursor;
-      String? entriesError;
-      try {
-        final page = await repository.fetchEntries();
-        entries = page.items;
-        entriesCursor = page.nextCursor;
-      } on ApiException catch (error) {
-        entriesError = error.userMessage;
-      }
-      List<RechargeOrder> orders = current.orders;
-      String? ordersCursor = current.ordersCursor;
-      String? ordersError;
-      try {
-        final page = await repository.fetchOrders();
-        orders = page.items;
-        ordersCursor = page.nextCursor;
-      } on ApiException catch (error) {
-        ordersError = error.userMessage;
-      }
-      List<UsageRecord> usage = current.usage;
-      String? usageCursor = current.usageCursor;
-      String? usageError;
-      try {
-        final page = await repository.fetchUsage();
-        usage = page.items;
-        usageCursor = page.nextCursor;
-      } on ApiException catch (error) {
-        usageError = error.userMessage;
-      }
-      List<QuestionQuery> queries = current.queries;
-      String? queriesCursor = current.queriesCursor;
-      bool queryDetailsAvailable = current.queryDetailsAvailable;
-      try {
-        final page = await ref.read(questionRepositoryProvider).fetchQueries();
-        queries = page.items;
-        queriesCursor = page.nextCursor;
-        queryDetailsAvailable = true;
-      } catch (_) {
-        queryDetailsAvailable = false;
-      }
+      if (epoch != _accountEpoch) return;
+      final pricingFuture = _loadSection(repository.fetchPricing, '价格暂时无法加载');
+      final entriesFuture = _loadSection(repository.fetchEntries, '流水暂时无法加载');
+      final ordersFuture = _loadSection(repository.fetchOrders, '订单暂时无法加载');
+      final usageFuture = _loadSection(repository.fetchUsage, '用量暂时无法加载');
+      final queriesFuture = _loadSection(
+        () => ref.read(questionRepositoryProvider).fetchQueries(),
+        '题库查询记录暂时无法获取',
+      );
+      final (pricing, entries, orders, usage, queries) = await (
+        pricingFuture,
+        entriesFuture,
+        ordersFuture,
+        usageFuture,
+        queriesFuture,
+      ).wait;
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
           wallet: wallet,
-          pricing: pricing,
-          entries: entries,
-          orders: orders,
-          usage: usage,
-          queries: queries,
-          entriesCursor: entriesCursor,
-          ordersCursor: ordersCursor,
-          usageCursor: usageCursor,
-          queriesCursor: queriesCursor,
-          queryDetailsAvailable: queryDetailsAvailable,
+          pricing: pricing.value,
+          entries: entries.value?.items,
+          orders: orders.value?.items,
+          usage: usage.value?.items,
+          queries: queries.value?.items,
+          entriesCursor: entries.value?.nextCursor,
+          ordersCursor: orders.value?.nextCursor,
+          usageCursor: usage.value?.nextCursor,
+          queriesCursor: queries.value?.nextCursor,
           refreshing: false,
-          pricingError: pricingError,
-          entriesError: entriesError,
-          ordersError: ordersError,
-          usageError: usageError,
-          clearPricingError: pricingError == null,
-          clearEntriesError: entriesError == null,
-          clearOrdersError: ordersError == null,
-          clearUsageError: usageError == null,
+          queryDetailsAvailable: queries.value != null,
+          pricingError: pricing.error,
+          entriesError: entries.error,
+          ordersError: orders.error,
+          usageError: usage.error,
+          clearPricingError: pricing.error == null,
+          clearEntriesError: entries.error == null,
+          clearOrdersError: orders.error == null,
+          clearUsageError: usage.error == null,
         ),
       );
     } on ApiException catch (error) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -326,6 +292,7 @@ class WalletController extends AsyncNotifier<WalletState> {
         ),
       );
     } catch (_) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -343,6 +310,7 @@ class WalletController extends AsyncNotifier<WalletState> {
   }) async {
     final current = state.valueOrNull;
     if (current == null || current.creatingOrder) return null;
+    final epoch = _accountEpoch;
     state = AsyncData(
       current.copyWith(
         creatingOrder: true,
@@ -356,6 +324,7 @@ class WalletController extends AsyncNotifier<WalletState> {
             channel: channel,
             idempotencyKey: idempotencyKey,
           );
+      if (epoch != _accountEpoch) return order;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -369,6 +338,7 @@ class WalletController extends AsyncNotifier<WalletState> {
       );
       return order;
     } on ApiException catch (error) {
+      if (epoch != _accountEpoch) return null;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -378,6 +348,7 @@ class WalletController extends AsyncNotifier<WalletState> {
       );
       return null;
     } catch (_) {
+      if (epoch != _accountEpoch) return null;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -392,8 +363,10 @@ class WalletController extends AsyncNotifier<WalletState> {
   Future<RechargeOrder?> refreshOrder(String id) async {
     final current = state.valueOrNull;
     if (current == null) return null;
+    final epoch = _accountEpoch;
     try {
       final order = await ref.read(walletRepositoryProvider).fetchOrder(id);
+      if (epoch != _accountEpoch) return order;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -409,12 +382,14 @@ class WalletController extends AsyncNotifier<WalletState> {
       }
       return order;
     } on ApiException catch (error) {
+      if (epoch != _accountEpoch) return null;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(actionError: error.userMessage),
       );
       return null;
     } catch (_) {
+      if (epoch != _accountEpoch) return null;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(actionError: '订单状态暂时无法查询'),
@@ -437,11 +412,17 @@ class WalletController extends AsyncNotifier<WalletState> {
 
   Future<void> loadEntries() async {
     final current = state.valueOrNull;
-    if (current == null || current.entriesCursor == null) return;
+    if (current == null || current.entriesCursor == null || _loadingEntries) {
+      return;
+    }
+    final epoch = _accountEpoch;
+    final listEpoch = _listEpoch;
+    _loadingEntries = true;
     try {
       final page = await ref.read(walletRepositoryProvider).fetchEntries(
             cursor: current.entriesCursor,
           );
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -450,20 +431,29 @@ class WalletController extends AsyncNotifier<WalletState> {
         ),
       );
     } catch (_) {
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(entriesError: '更多流水暂时无法加载'),
       );
+    } finally {
+      _loadingEntries = false;
     }
   }
 
   Future<void> loadOrders() async {
     final current = state.valueOrNull;
-    if (current == null || current.ordersCursor == null) return;
+    if (current == null || current.ordersCursor == null || _loadingOrders) {
+      return;
+    }
+    final epoch = _accountEpoch;
+    final listEpoch = _listEpoch;
+    _loadingOrders = true;
     try {
       final page = await ref.read(walletRepositoryProvider).fetchOrders(
             cursor: current.ordersCursor,
           );
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -472,20 +462,29 @@ class WalletController extends AsyncNotifier<WalletState> {
         ),
       );
     } catch (_) {
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(ordersError: '更多订单暂时无法加载'),
       );
+    } finally {
+      _loadingOrders = false;
     }
   }
 
   Future<void> loadUsage() async {
     final current = state.valueOrNull;
-    if (current == null || current.usageCursor == null) return;
+    if (current == null || current.usageCursor == null || _loadingUsage) {
+      return;
+    }
+    final epoch = _accountEpoch;
+    final listEpoch = _listEpoch;
+    _loadingUsage = true;
     try {
       final page = await ref.read(walletRepositoryProvider).fetchUsage(
             cursor: current.usageCursor,
           );
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -494,10 +493,13 @@ class WalletController extends AsyncNotifier<WalletState> {
         ),
       );
     } catch (_) {
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(usageError: '更多用量记录暂时无法加载'),
       );
+    } finally {
+      _loadingUsage = false;
     }
   }
 

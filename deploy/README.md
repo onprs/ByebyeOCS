@@ -3,6 +3,8 @@
 这些脚本面向公开的 Linux + systemd + PostgreSQL 16 部署环境，不依赖维护者主机、SSH
 别名、代理或固定私有路径。任务通过原生HTTP执行，不需要浏览器、播放器、媒体解码器、Docker或Flutter运行环境。
 
+部署脚本需要Bash、GNU coreutils、findutils、tar及util-linux提供的`flock`。同一安装目录上的安装、升级、回滚和卸载会互斥执行。
+
 ## 1. 构建发布目录
 
 在源码根目录使用明确版本号：
@@ -89,7 +91,8 @@ sudo ./deploy/uninstall.sh
 - 回滚前要人工确认旧程序能读取当前 schema；脚本不会自动降级数据库。
 - 卸载默认保留 `/etc/byebyeocs`、`/etc/ocs-tiku`、`/var/lib/byebyeocs` 和数据库。只有显式
   `--purge --yes` 才删除配置/密钥/数据目录；PostgreSQL 数据库始终不由脚本删除。
-- 安装状态记录在 `/opt/byebyeocs/install.env`（0600），供升级/回滚/卸载沿用自定义路径。
+- 安装状态记录在 `/opt/byebyeocs/install.env`（0600），升级和回滚需要该文件可读，以沿用原安装路径与服务用户。
+- `--purge --yes`清除自定义配置或数据路径时需要有效安装记录；系统级目录会被拒绝。
 
 ## 5. 备份
 
@@ -122,6 +125,8 @@ sudo ./deploy/backup.sh
 - `last_recoverable_at` 是第一个 dump 开始时间，属于保守值。
 - `status=ok` 只代表异机校验通过；`restore_drill_verified=false` 表示尚未完成恢复演练。
 - 远端失败、本地复制、缺少 age/SSH 配置都不会写成功状态。
+- 归档先以临时名写入，完整加密、上传和校验后才成为正式归档；中断产生的半成品不计入可恢复备份。
+- 备份在暂存目录的私有工作目录内处理明文dump与配置，需预留磁盘空间；暂存目录不能位于被备份的配置目录内部。正常退出会清理明文工作目录，下次持锁运行会清理中断残留。
 - DSN 通过 Python ctypes 调用 libpq 官方解析器，写入临时 0600 service file 和
   `PGPASSFILE`；DSN/密码不出现在 `pg_dump` argv。解析失败只输出固定文案，不转发可能含
   DSN 片段的 parser 原文。多 host DSN 生成对齐的逐 host pgpass；host/port 数量不一致或
@@ -152,7 +157,7 @@ sudo ./deploy/backup.sh
 ```
 
 脚本创建临时 `initdb` 集群和临时数据库，分别恢复主库/题库 dump，执行最小连通查询，然后
-停止并删除临时集群。它不连接真实数据库，不使用应用账号，不要求应用账号有 CREATEDB；报告
+停止并删除临时集群。大型归档需要为`TMPDIR`指定有足够空间的专用目录。它不连接真实数据库，不使用应用账号，不要求应用账号有 CREATEDB；报告
 是独立文件，不写入生产 `backup-status.json`。报告通过只证明本次隔离恢复成功，不等于已完成
 生产恢复演练审批。
 

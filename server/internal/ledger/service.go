@@ -153,12 +153,25 @@ func (s *Service) checkChargingGate(ctx context.Context) error {
 	return nil
 }
 
+// txRollbackTimeout 限制回滚等待时间。调用方上下文可能已被取消，回滚仍必须执行；
+// 但网络失联时 pgx 会一直等待服务器应答，未加期限的回滚会占住连接池槽位。
+// 超时后 pgx 关闭该连接，服务器在连接断开时回滚未提交事务；已提交分录与账本耐久性不变。
+// 变量形式仅便于测试缩短等待，生产不修改。
+var txRollbackTimeout = 5 * time.Second
+
+// rollbackTx 在独立且有限的期限内回滚事务；已提交或已回滚的事务立即返回。
+func rollbackTx(tx pgx.Tx) {
+	ctx, cancel := context.WithTimeout(context.Background(), txRollbackTimeout)
+	defer cancel()
+	_ = tx.Rollback(ctx)
+}
+
 func (s *Service) inTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fault.New("service_unavailable", "无法开启账本事务")
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	if err := fn(tx); err != nil {
 		return err
 	}

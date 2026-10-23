@@ -30,6 +30,7 @@ class _WalletPageState extends ConsumerState<WalletPage> {
   _WalletTab _tab = _WalletTab.orders;
   String? _selectedChannel;
   String? _idempotencyKey;
+  String? _idempotencySignature;
   String? _activeOrderId;
   String? _amountError;
   bool _returnHandled = false;
@@ -62,29 +63,76 @@ class _WalletPageState extends ConsumerState<WalletPage> {
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(walletControllerProvider);
-    return RefreshIndicator(
-      onRefresh: () =>
-          ref.read(walletControllerProvider.notifier).refresh(silent: true),
-      child: SingleChildScrollView(
-        controller: _scrollController,
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
-        child: ResponsiveContent(
-          child: async.when(
-            loading: () => const LoadingList(rows: 3, height: 160),
-            error: (error, _) => ErrorPanel(
-              message: error is ApiException ? error.userMessage : '钱包暂时无法加载',
-              requestId: error is ApiException ? error.requestId : null,
-              onRetry: () => ref.invalidate(walletControllerProvider),
+    final data = async.valueOrNull;
+    if (data == null) {
+      return RefreshIndicator(
+        onRefresh: () =>
+            ref.read(walletControllerProvider.notifier).refresh(silent: true),
+        child: SingleChildScrollView(
+          controller: _scrollController,
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
+          child: ResponsiveContent(
+            child: async.when(
+              loading: () => const LoadingList(rows: 3, height: 160),
+              error: (error, _) => ErrorPanel(
+                message: error is ApiException ? error.userMessage : '钱包暂时无法加载',
+                requestId: error is ApiException ? error.requestId : null,
+                onRetry: () => ref.invalidate(walletControllerProvider),
+              ),
+              data: (_) => const SizedBox.shrink(),
             ),
-            data: (data) => _buildData(context, data),
           ),
         ),
-      ),
+      );
+    }
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final narrow = context.isNarrow;
+        // 与 ResponsiveContent 保持一致：窄屏 18、宽屏 28，超过 1180 居中。
+        final baseInset = narrow ? 18.0 : 28.0;
+        final centering = constraints.maxWidth > 1180
+            ? (constraints.maxWidth - 1180) / 2
+            : 0.0;
+        final inset = baseInset + centering;
+        // 原 SingleChildScrollView 底部 12/28 加 ResponsiveContent 底部 16/22。
+        final bottom = narrow ? 28.0 : 50.0;
+        return RefreshIndicator(
+          onRefresh: () =>
+              ref.read(walletControllerProvider.notifier).refresh(silent: true),
+          child: CustomScrollView(
+            controller: _scrollController,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(
+                  inset,
+                  narrow ? 16 : 22,
+                  inset,
+                  0,
+                ),
+                sliver: SliverToBoxAdapter(
+                  child: _buildSummary(context, data),
+                ),
+              ),
+              SliverPadding(
+                padding: EdgeInsets.symmetric(horizontal: inset),
+                sliver: _buildLedgerSection(context, data),
+              ),
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(inset, 16, inset, bottom),
+                sliver: SliverToBoxAdapter(
+                  child: _buildPricingNotice(data),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
-  Widget _buildData(BuildContext context, WalletState data) {
+  Widget _buildSummary(BuildContext context, WalletState data) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -172,59 +220,263 @@ class _WalletPageState extends ConsumerState<WalletPage> {
           onChanged: (value) => setState(() => _tab = value),
         ),
         const SizedBox(height: 12),
-        SectionCard(
-          padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
-          title: switch (_tab) {
-            _WalletTab.orders => '充值订单',
-            _WalletTab.entries => '资金流水',
-            _WalletTab.usage => '用量记录',
-          },
-          subtitle: switch (_tab) {
-            _WalletTab.orders => '支付成功与到账状态分别展示。',
-            _WalletTab.entries => '充值、预占、结算与释放都会记入账户流水。',
-            _WalletTab.usage => '题库按 token 记录；未定价时不显示虚假金额。',
-          },
-          action: switch (_tab) {
-            _WalletTab.orders => data.ordersCursor == null
-                ? null
-                : TextButton(
-                    onPressed: () => ref
-                        .read(walletControllerProvider.notifier)
-                        .loadOrders(),
-                    child: const Text('加载更多'),
-                  ),
-            _WalletTab.entries => data.entriesCursor == null
-                ? null
-                : TextButton(
-                    onPressed: () => ref
-                        .read(walletControllerProvider.notifier)
-                        .loadEntries(),
-                    child: const Text('加载更多'),
-                  ),
-            _WalletTab.usage => data.usageCursor == null
-                ? null
-                : TextButton(
-                    onPressed: () =>
-                        ref.read(walletControllerProvider.notifier).loadUsage(),
-                    child: const Text('加载更多'),
-                  ),
-          },
-          child: switch (_tab) {
-            _WalletTab.orders => _buildOrders(context, data),
-            _WalletTab.entries => _buildEntries(context, data),
-            _WalletTab.usage => _buildUsage(context, data),
-          },
-        ),
-        const SizedBox(height: 16),
-        InlineNotice(
-          icon: Icons.lock_outline,
-          message: data.pricing == null
-              ? '计费信息暂不可用。余额和订单仍以实际记录为准。'
-              : data.pricing!.automaticCharging
-                  ? '服务按平台确认的有效任务点计量，题库按 token 单独记录。'
-                  : '单价尚未全部公布，当前未启用自动扣费。',
-        ),
       ],
+    );
+  }
+
+  Widget _buildLedgerSection(BuildContext context, WalletState data) {
+    final colors = context.colors;
+    return DecoratedSliver(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: colors.cardRadius,
+        border: Border.all(color: colors.border),
+      ),
+      sliver: SliverMainAxisGroup(
+        slivers: [
+          SliverToBoxAdapter(
+            child: SectionCardHeader(
+              title: switch (_tab) {
+                _WalletTab.orders => '充值订单',
+                _WalletTab.entries => '资金流水',
+                _WalletTab.usage => '用量记录',
+              },
+              subtitle: switch (_tab) {
+                _WalletTab.orders => '支付成功与到账状态分别展示。',
+                _WalletTab.entries => '充值、预占、结算与释放都会记入账户流水。',
+                _WalletTab.usage => '题库按 token 记录；未定价时不显示虚假金额。',
+              },
+              action: _ledgerAction(data),
+            ),
+          ),
+          _buildLedgerSliver(context, data),
+        ],
+      ),
+    );
+  }
+
+  Widget? _ledgerAction(WalletState data) {
+    return switch (_tab) {
+      _WalletTab.orders => data.ordersCursor == null
+          ? null
+          : TextButton(
+              onPressed: () =>
+                  ref.read(walletControllerProvider.notifier).loadOrders(),
+              child: const Text('加载更多'),
+            ),
+      _WalletTab.entries => data.entriesCursor == null
+          ? null
+          : TextButton(
+              onPressed: () =>
+                  ref.read(walletControllerProvider.notifier).loadEntries(),
+              child: const Text('加载更多'),
+            ),
+      _WalletTab.usage => data.usageCursor == null
+          ? null
+          : TextButton(
+              onPressed: () =>
+                  ref.read(walletControllerProvider.notifier).loadUsage(),
+              child: const Text('加载更多'),
+            ),
+    };
+  }
+
+  Widget _buildLedgerSliver(BuildContext context, WalletState data) {
+    switch (_tab) {
+      case _WalletTab.orders:
+        return _listSectionSliver(
+          error: data.ordersError,
+          empty: data.orders.isEmpty,
+          emptyState: const EmptyState(
+            icon: Icons.receipt_long_outlined,
+            title: '还没有充值订单',
+            message: '创建充值订单后，可在这里查看到账进度。',
+            compact: true,
+          ),
+          count: data.orders.length,
+          itemBuilder: (context, index) {
+            final order = data.orders[index];
+            return _OrderTile(
+              key: ValueKey('wallet-order-${order.id}'),
+              order: order,
+              active: order.id == _activeOrderId,
+              onOpen: () => _showOrder(order.id),
+              onQuery: () => _refreshOrder(order.id),
+              onPay: () => _openPayment(order),
+            );
+          },
+        );
+      case _WalletTab.entries:
+        return _listSectionSliver(
+          error: data.entriesError,
+          empty: data.entries.isEmpty,
+          emptyState: const EmptyState(
+            icon: Icons.swap_vert_outlined,
+            title: '还没有资金流水',
+            message: '充值到账、任务消费与预占释放会记录在这里。',
+            compact: true,
+          ),
+          count: data.entries.length,
+          itemBuilder: (context, index) => _EntryTile(
+            key: ValueKey(
+              'wallet-entry-${data.entries[index].id}',
+            ),
+            entry: data.entries[index],
+          ),
+        );
+      case _WalletTab.usage:
+        return _buildUsageSliver(context, data);
+    }
+  }
+
+  Widget _listSectionSliver({
+    required String? error,
+    required bool empty,
+    required Widget emptyState,
+    required int count,
+    required NullableIndexedWidgetBuilder itemBuilder,
+  }) {
+    final Widget content;
+    if (error != null) {
+      content = SliverToBoxAdapter(
+        child: ErrorPanel(
+          message: error,
+          compact: true,
+          onRetry: () => ref.read(walletControllerProvider.notifier).refresh(),
+        ),
+      );
+    } else if (empty) {
+      content = SliverToBoxAdapter(child: emptyState);
+    } else {
+      content = SliverList(
+        delegate: SliverChildBuilderDelegate(itemBuilder, childCount: count),
+      );
+    }
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      sliver: content,
+    );
+  }
+
+  Widget _buildUsageSliver(BuildContext context, WalletState data) {
+    final colors = context.colors;
+    final cacheHits = data.queries.where((query) => query.cacheHit).length;
+    final totalTokens = data.queries.fold<int>(
+      0,
+      (sum, query) => sum + query.usage.totalTokens,
+    );
+    final slivers = <Widget>[
+      SliverToBoxAdapter(
+        child: Wrap(
+          spacing: 10,
+          runSpacing: 10,
+          children: [
+            _UsageMetric(label: '查询记录', value: '${data.queries.length}'),
+            _UsageMetric(label: '缓存命中', value: '$cacheHits'),
+            _UsageMetric(label: '合计 token', value: formatCount(totalTokens)),
+          ],
+        ),
+      ),
+      const SliverToBoxAdapter(child: SizedBox(height: 16)),
+    ];
+    if (data.queries.isNotEmpty) {
+      slivers.addAll([
+        SliverToBoxAdapter(
+          child: Text(
+            '题库查询',
+            style: TextStyle(
+              color: colors.text,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) => _QueryUsageTile(
+              key: ValueKey(
+                'wallet-query-${data.queries[index].id}',
+              ),
+              query: data.queries[index],
+            ),
+            childCount: data.queries.length,
+          ),
+        ),
+      ]);
+    } else if (data.queryDetailsAvailable) {
+      slivers.add(
+        SliverToBoxAdapter(
+          child: Text(
+            '还没有题库查询记录。',
+            style: TextStyle(color: colors.textSecondary, fontSize: 12.5),
+          ),
+        ),
+      );
+    } else {
+      slivers.add(
+        const SliverToBoxAdapter(
+          child: InlineNotice(
+            icon: Icons.info_outline,
+            message: '详细的题库查询记录暂不可用；已结算用量仍会在下方显示。',
+          ),
+        ),
+      );
+    }
+    if (data.usage.isNotEmpty) {
+      slivers.addAll([
+        const SliverToBoxAdapter(child: SizedBox(height: 16)),
+        SliverToBoxAdapter(
+          child: Text(
+            '计费用量',
+            style: TextStyle(
+              color: colors.text,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+        const SliverToBoxAdapter(child: SizedBox(height: 8)),
+        SliverList(
+          delegate: SliverChildBuilderDelegate(
+            (context, index) => _LedgerUsageTile(
+              key: ValueKey(
+                'wallet-usage-${data.usage[index].id}',
+              ),
+              usage: data.usage[index],
+            ),
+            childCount: data.usage.length,
+          ),
+        ),
+      ]);
+    }
+    if (data.usageError != null) {
+      slivers.addAll([
+        const SliverToBoxAdapter(child: SizedBox(height: 10)),
+        SliverToBoxAdapter(
+          child: ErrorPanel(
+            message: data.usageError!,
+            compact: true,
+            onRetry: () =>
+                ref.read(walletControllerProvider.notifier).refresh(),
+          ),
+        ),
+      ]);
+    }
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
+      sliver: SliverMainAxisGroup(slivers: slivers),
+    );
+  }
+
+  Widget _buildPricingNotice(WalletState data) {
+    return InlineNotice(
+      icon: Icons.lock_outline,
+      message: data.pricing == null
+          ? '计费信息暂不可用。余额和订单仍以实际记录为准。'
+          : data.pricing!.automaticCharging
+              ? '服务按平台确认的有效任务点计量，题库按 token 单独记录。'
+              : '单价尚未全部公布，当前未启用自动扣费。',
     );
   }
 
@@ -265,7 +517,13 @@ class _WalletPageState extends ConsumerState<WalletPage> {
     setState(() {
       _amountError = null;
       _selectedChannel = channel;
-      _idempotencyKey ??= newIdempotencyKey();
+      // 幂等键只能代表同一金额与支付方式；输入变化后必须生成新键，
+      // 否则服务端会把重试视为“同一键对应不同请求”而拒绝。
+      final signature = '$minor|$channel';
+      if (_idempotencySignature != signature || _idempotencyKey == null) {
+        _idempotencySignature = signature;
+        _idempotencyKey = newIdempotencyKey();
+      }
     });
     final order = await ref.read(walletControllerProvider.notifier).createOrder(
           amountMinor: minor,
@@ -277,6 +535,7 @@ class _WalletPageState extends ConsumerState<WalletPage> {
       setState(() {
         _activeOrderId = order.id;
         _idempotencyKey = null;
+        _idempotencySignature = null;
       });
       final message = order.hasCheckout
           ? '订单已创建，请完成支付后回到本页查询到账状态。'
@@ -310,126 +569,6 @@ class _WalletPageState extends ConsumerState<WalletPage> {
     if (order != null) {
       showAppMessage(context, order.stageLabel);
     }
-  }
-
-  Widget _buildOrders(BuildContext context, WalletState data) {
-    if (data.ordersError != null) {
-      return ErrorPanel(
-        message: data.ordersError!,
-        compact: true,
-        onRetry: () => ref.read(walletControllerProvider.notifier).refresh(),
-      );
-    }
-    if (data.orders.isEmpty) {
-      return const EmptyState(
-        icon: Icons.receipt_long_outlined,
-        title: '还没有充值订单',
-        message: '创建充值订单后，可在这里查看到账进度。',
-        compact: true,
-      );
-    }
-    return Column(
-      children: [
-        for (final order in data.orders)
-          _OrderTile(
-            order: order,
-            active: order.id == _activeOrderId,
-            onOpen: () => _showOrder(order.id),
-            onQuery: () => _refreshOrder(order.id),
-            onPay: () => _openPayment(order),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildEntries(BuildContext context, WalletState data) {
-    if (data.entriesError != null) {
-      return ErrorPanel(
-        message: data.entriesError!,
-        compact: true,
-        onRetry: () => ref.read(walletControllerProvider.notifier).refresh(),
-      );
-    }
-    if (data.entries.isEmpty) {
-      return const EmptyState(
-        icon: Icons.swap_vert_outlined,
-        title: '还没有资金流水',
-        message: '充值到账、任务消费与预占释放会记录在这里。',
-        compact: true,
-      );
-    }
-    return Column(
-      children: [
-        for (final entry in data.entries) _EntryTile(entry: entry),
-      ],
-    );
-  }
-
-  Widget _buildUsage(BuildContext context, WalletState data) {
-    final colors = context.colors;
-    final cacheHits = data.queries.where((query) => query.cacheHit).length;
-    final totalTokens = data.queries.fold<int>(
-      0,
-      (sum, query) => sum + query.usage.totalTokens,
-    );
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Wrap(
-          spacing: 10,
-          runSpacing: 10,
-          children: [
-            _UsageMetric(label: '查询记录', value: '${data.queries.length}'),
-            _UsageMetric(label: '缓存命中', value: '$cacheHits'),
-            _UsageMetric(label: '合计 token', value: formatCount(totalTokens)),
-          ],
-        ),
-        const SizedBox(height: 16),
-        if (data.queries.isNotEmpty) ...[
-          Text(
-            '题库查询',
-            style: TextStyle(
-              color: colors.text,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          for (final query in data.queries) _QueryUsageTile(query: query),
-        ] else if (data.queryDetailsAvailable)
-          Text(
-            '还没有题库查询记录。',
-            style: TextStyle(color: colors.textSecondary, fontSize: 12.5),
-          )
-        else
-          const InlineNotice(
-            icon: Icons.info_outline,
-            message: '详细的题库查询记录暂不可用；已结算用量仍会在下方显示。',
-          ),
-        if (data.usage.isNotEmpty) ...[
-          const SizedBox(height: 16),
-          Text(
-            '计费用量',
-            style: TextStyle(
-              color: colors.text,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 8),
-          for (final usage in data.usage) _LedgerUsageTile(usage: usage),
-        ],
-        if (data.usageError != null) ...[
-          const SizedBox(height: 10),
-          ErrorPanel(
-            message: data.usageError!,
-            compact: true,
-            onRetry: () =>
-                ref.read(walletControllerProvider.notifier).refresh(),
-          ),
-        ],
-      ],
-    );
   }
 
   Future<void> _showOrder(String orderId) async {
@@ -897,6 +1036,7 @@ class _TabButton extends StatelessWidget {
 
 class _OrderTile extends StatelessWidget {
   const _OrderTile({
+    super.key,
     required this.order,
     required this.active,
     required this.onOpen,
@@ -988,7 +1128,7 @@ class _OrderTile extends StatelessWidget {
 }
 
 class _EntryTile extends StatelessWidget {
-  const _EntryTile({required this.entry});
+  const _EntryTile({super.key, required this.entry});
 
   final WalletEntry entry;
 
@@ -1091,7 +1231,7 @@ class _EntryTile extends StatelessWidget {
 }
 
 class _QueryUsageTile extends StatelessWidget {
-  const _QueryUsageTile({required this.query});
+  const _QueryUsageTile({super.key, required this.query});
 
   final QuestionQuery query;
 
@@ -1151,7 +1291,7 @@ class _QueryUsageTile extends StatelessWidget {
 }
 
 class _LedgerUsageTile extends StatelessWidget {
-  const _LedgerUsageTile({required this.usage});
+  const _LedgerUsageTile({super.key, required this.usage});
 
   final UsageRecord usage;
 

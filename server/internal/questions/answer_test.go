@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -434,7 +435,9 @@ func (*idempotentFork) TestModel(context.Context, string, string, bool) (ForkTes
 	return ForkTestResult{}, nil
 }
 
-func (*idempotentFork) InvalidateCache(context.Context, string, string) error { return nil }
+func (*idempotentFork) InvalidateCache(context.Context, string, string) (bool, error) {
+	return true, nil
+}
 
 func (f *idempotentFork) counts() (httpCalls, modelCalls int) {
 	f.mu.Lock()
@@ -747,5 +750,241 @@ func TestAnswerAcceptsShortAnswerType(t *testing.T) {
 	env.fork.mu.Unlock()
 	if len(requests) == 0 || requests[0].Question.Type != "shortanswer" {
 		t.Fatalf("fork 请求未保留简答题类型：%#v", requests)
+	}
+}
+
+// 多图题在 fork 侧按图片逐张转述，再产生一次回答调用；这类完整用量仍应正常结算，
+// 不能因调用条数超过单图假设而降级为待复核。
+func TestAnswerMultiImageCaptionUsageSettles(t *testing.T) {
+	const tinyPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	fork := &fakeFork{answer: func(request ForkAnswerRequest) (ForkAnswerResponse, error) {
+		calls := make([]Call, 0, len(request.Question.Images)+1)
+		var input, output, total int64
+		for range request.Question.Images {
+			in, out, sum := int64(100), int64(10), int64(110)
+			calls = append(calls, Call{Slot: "caption", InputTokens: &in, OutputTokens: &out, TotalTokens: &sum, Status: "ok"})
+			input, output, total = input+in, output+out, total+sum
+		}
+		in, out, sum := int64(200), int64(20), int64(220)
+		calls = append(calls, Call{Slot: "answer", InputTokens: &in, OutputTokens: &out, TotalTokens: &sum, Status: "ok"})
+		input, output, total = input+in, output+out, total+sum
+		return ForkAnswerResponse{
+			RequestID: request.RequestID, Status: "answered", Question: request.Question.Title, Answer: "A",
+			Model: ForkModel{OfferingID: request.ModelOfferingID, DisplayName: "多图模型"},
+			Mode:  request.Mode, Cache: ForkCache{Hit: false},
+			Usage: Usage{InputTokens: &input, OutputTokens: &output, TotalTokens: &total, Complete: true, Calls: calls},
+		}, nil
+	}}
+	env := newTestEnv(t, envOptions{auto: true, billing: true, fork: fork})
+	env.createOffering(t, "多图模型", "internal-multi-image", testPricing(10_000_000, 20_000_000, 10000), true)
+
+	input := queryBody("四图题[图片1][图片2][图片3][图片4]", "cache_first")
+	input.Question.Images = []string{tinyPNG, tinyPNG, tinyPNG, tinyPNG}
+	view := mustAnswer(t, env, "answer-multi-image-0001", input)
+	if view.Status != "answered" || view.Answer != "A" {
+		t.Fatalf("多图完整用量不应降级为待复核：%#v", view)
+	}
+	if view.Pricing.State != "quoted" || !view.Pricing.Charged || view.Pricing.AmountMinor != "1" {
+		t.Fatalf("多图完整用量应按实际 token 结算：%#v", view.Pricing)
+	}
+	if reserves, settles, _, _, _ := env.billing.counts(); reserves != 1 || settles != 1 {
+		t.Fatalf("多图查询应只预占并结算一次：%d/%d", reserves, settles)
+	}
+}
+
+// 调用方取消时上游可能已产生费用：应保留待复核事实并释放预占，
+// 不能因为请求上下文已取消而让清理与事实提交一起丢失。
+func TestAnswerCancellationFinalizesAndReleasesHold(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce, releaseOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v2/answers" {
+			http.NotFound(w, r)
+			return
+		}
+		// 请求体读完后服务端才会检测客户端断开；夹具先读空 body，避免等待空间挂住。
+		_, _ = io.Copy(io.Discard, r.Body)
+		startOnce.Do(func() { close(started) })
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		server.Close()
+	})
+	fork, err := NewHTTPFork(server.URL, "fork-test-token-0123456789", 30*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := newTestEnv(t, envOptions{auto: true, billing: true, fork: fork})
+	env.createOffering(t, "取消模型", "internal-cancel", testPricing(10_000_000, 20_000_000, 10000), true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := env.service.Answer(ctx, env.userID, "answer-cancel-0001", queryBody("取消题", "cache_first"))
+		result <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(10 * time.Second):
+		t.Fatal("未进入 fork 调用")
+	}
+	cancel()
+	select {
+	case <-result:
+	case <-time.After(10 * time.Second):
+		t.Fatal("取消后 Answer 未结束")
+	}
+
+	var status, errorCode, billingState string
+	if err := env.pool.QueryRow(context.Background(), `SELECT status, COALESCE(error_code, ''), billing_state
+		FROM public.question_queries WHERE user_id = $1 AND idempotency_key = 'answer-cancel-0001'`,
+		env.userID).Scan(&status, &errorCode, &billingState); err != nil {
+		t.Fatal(err)
+	}
+	if status != "needs_review" || errorCode != "request_cancelled" {
+		t.Fatalf("取消应保留待复核事实：%s/%s", status, errorCode)
+	}
+	if billingState != "released" {
+		t.Fatalf("取消后应释放预占：%s", billingState)
+	}
+	if reserves, settles, releases, _, _ := env.billing.counts(); reserves != 1 || settles != 0 || releases != 1 {
+		t.Fatalf("取消后账本应为预占1/结算0/释放1，实际：%d/%d/%d", reserves, settles, releases)
+	}
+}
+
+// 结果事实写入失败时不能把预占留在账户上：补偿释放必须在回滚之后完成。
+// 用只拦截题库事件的触发器制造确定性失败，并验证真实账本余额。
+func TestAnswerEventFailureReleasesReservation(t *testing.T) {
+	env := newTestEnv(t, envOptions{auto: true})
+	book := attachedLedger(t, env)
+	fundWallet(t, book, env, "1000")
+	env.createOffering(t, "事件失败模型", "internal-event-fail", testPricing(10_000_000, 20_000_000, 10000), true)
+	ctx := context.Background()
+	if _, err := env.pool.Exec(ctx, `CREATE FUNCTION public.block_question_events() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN
+			IF NEW.event_type = 'question.query.updated' THEN
+				RAISE EXCEPTION 'blocked question event';
+			END IF;
+			RETURN NEW;
+		END $body$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := env.pool.Exec(ctx, `CREATE TRIGGER block_question_events BEFORE INSERT ON public.outbox_events
+		FOR EACH ROW EXECUTE FUNCTION public.block_question_events()`); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := env.service.Answer(ctx, env.userID, "answer-event-fail-0001", queryBody("事件失败题", "cache_first"))
+	requireQueryError(t, err, "service_unavailable", 503)
+	if env.fork.callCount() != 1 {
+		t.Fatalf("事件失败发生在调用之后，实际 fork 调用 %d 次", env.fork.callCount())
+	}
+
+	var status, billingState string
+	if err := env.pool.QueryRow(ctx, `SELECT status, billing_state FROM public.question_queries
+		WHERE user_id = $1 AND idempotency_key = 'answer-event-fail-0001'`, env.userID).Scan(&status, &billingState); err != nil {
+		t.Fatal(err)
+	}
+	if status != "needs_review" || billingState != "finalize_failed" {
+		t.Fatalf("事实写入失败应待复核：%s/%s", status, billingState)
+	}
+	wallet, err := book.GetWallet(ctx, env.userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wallet.AvailableMinor != "1000" || wallet.ReservedMinor != "0" {
+		t.Fatalf("预占必须回滚后释放，余额应为 1000/0，实际 %s/%s", wallet.AvailableMinor, wallet.ReservedMinor)
+	}
+	var holdStatus string
+	var releasedMinor int64
+	if err := env.pool.QueryRow(ctx, `SELECT h.status, h.released_minor FROM public.holds h
+		JOIN public.question_queries q ON h.business_key = 'question-query:' || q.id
+		WHERE q.user_id = $1 AND q.idempotency_key = 'answer-event-fail-0001'`, env.userID).
+		Scan(&holdStatus, &releasedMinor); err != nil {
+		t.Fatal(err)
+	}
+	if holdStatus != "released" || releasedMinor == 0 {
+		t.Fatalf("预占应已释放并保留释放事实：%s/%d", holdStatus, releasedMinor)
+	}
+}
+
+// 永久性 fork 4xx 必须按不可重试分类保存并返回：同键重放不再调用 fork、不重复预占或结算。
+func TestPermanentForkErrorDoesNotRetryOrCharge(t *testing.T) {
+	cases := []struct {
+		forkCode   string
+		forkStatus int
+		wantCode   string
+		wantStatus int
+	}{
+		{"invalid_request", 400, "validation_failed", 422},
+		{"shared_cache_disabled", 409, "shared_cache_not_allowed", 422},
+		{"idempotency_conflict", 409, "idempotency_conflict", 409},
+		{"not_found", 404, "not_found", 404},
+		{"unauthenticated", 401, "provider_unavailable", 503},
+	}
+	for _, item := range cases {
+		t.Run(item.forkCode, func(t *testing.T) {
+			fork := &fakeFork{answer: func(ForkAnswerRequest) (ForkAnswerResponse, error) {
+				return ForkAnswerResponse{}, &ForkError{Code: item.forkCode, Message: "上游原始细节 secret", Status: item.forkStatus}
+			}}
+			env := newTestEnv(t, envOptions{auto: true, billing: true, fork: fork})
+			env.createOffering(t, "永久错误模型", "internal-permanent", testPricing(10_000_000, 20_000_000, 10000), true)
+			key := "permanent-" + item.forkCode
+			_, err := env.service.Answer(context.Background(), env.userID, key, queryBody("永久错误题", "cache_first"))
+			queryErr := requireQueryError(t, err, item.wantCode, item.wantStatus)
+			if queryErr.Retryable {
+				t.Fatalf("永久错误不应标记可重试：%#v", queryErr)
+			}
+			if strings.Contains(queryErr.Message, "secret") {
+				t.Fatalf("错误泄露 fork 原始响应：%s", queryErr.Message)
+			}
+
+			// 同键重放必须返回同一不可重试分类，且不再次调用 fork 或账本。
+			_, err = env.service.Answer(context.Background(), env.userID, key, queryBody("永久错误题", "cache_first"))
+			replayErr := requireQueryError(t, err, item.wantCode, item.wantStatus)
+			if replayErr.Retryable {
+				t.Fatalf("重放分类仍应为不可重试：%#v", replayErr)
+			}
+			if env.fork.callCount() != 1 {
+				t.Fatalf("永久错误不得重试 fork，实际 %d", env.fork.callCount())
+			}
+			if reserves, settles, releases, _, _ := env.billing.counts(); reserves != 1 || settles != 0 || releases != 1 {
+				t.Fatalf("永久错误不得重复收费：%d/%d/%d", reserves, settles, releases)
+			}
+			var status string
+			if err := env.pool.QueryRow(context.Background(), `SELECT status FROM public.question_queries
+				WHERE user_id = $1 AND idempotency_key = $2`, env.userID, key).Scan(&status); err != nil || status != "failed" {
+				t.Fatalf("永久错误应保存失败事实：%s/%v", status, err)
+			}
+		})
+	}
+}
+
+// 不可重试的 503 必须如实回传 retryable=false，而不是按状态码推断。
+func TestQueryErrorHTTPRetryableContract(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/question-queries", nil)
+	writeQueryError(recorder, request, newQueryError("provider_unavailable", "题库服务凭据无效，请人工核对", http.StatusServiceUnavailable, false))
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("应返回 503：%d", recorder.Code)
+	}
+	var body struct {
+		Error struct {
+			Code      string `json:"code"`
+			Retryable bool   `json:"retryable"`
+			Scope     string `json:"scope"`
+			RequestID string `json:"request_id"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error.Code != "provider_unavailable" || body.Error.Retryable || body.Error.Scope != "service" || body.Error.RequestID == "" {
+		t.Fatalf("不可重试 503 封套不符：%#v", body.Error)
 	}
 }

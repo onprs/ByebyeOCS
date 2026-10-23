@@ -40,6 +40,7 @@ func (s *Service) RegisterAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/api/v1/reconciliations", s.handleListReconciliations)
 	mux.HandleFunc("POST /admin/api/v1/reconciliations", s.handleCreateReconciliation)
 	mux.HandleFunc("POST /admin/api/v1/refunds", s.handleCreateRefund)
+	mux.HandleFunc("POST /admin/api/v1/refunds/{id}/resolve", s.handleResolveRefund)
 	mux.HandleFunc("GET /admin/api/v1/settings/billing", s.handleGetBillingSettings)
 	mux.HandleFunc("PATCH /admin/api/v1/settings/billing", s.handlePatchBillingSettings)
 }
@@ -454,6 +455,34 @@ func (s *Service) handleCreateRefund(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	web.JSON(w, r, http.StatusCreated, refund)
+}
+
+type refundReviewRequest struct {
+	Outcome string `json:"outcome"`
+	Reason  string `json:"reason"`
+}
+
+// handleResolveRefund 记录管理员人工复核的退款结果；不调用渠道，不依赖退款开关。
+func (s *Service) handleResolveRefund(w http.ResponseWriter, r *http.Request) {
+	actor, ok := requireAdmin(w, r, PermWalletRefund)
+	if !ok {
+		return
+	}
+	key, ok := idempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	var request refundReviewRequest
+	if !web.DecodeLimit(w, r, &request, 64*1024) {
+		return
+	}
+	refund, err := s.ResolveRefund(r.Context(), actor, key, r.PathValue("id"),
+		RefundReviewInput{Outcome: request.Outcome, Reason: request.Reason})
+	if err != nil {
+		web.Fail(w, r, err)
+		return
+	}
+	web.JSON(w, r, http.StatusOK, refund)
 }
 
 func (s *Service) handleGetBillingSettings(w http.ResponseWriter, r *http.Request) {

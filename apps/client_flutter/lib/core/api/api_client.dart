@@ -205,14 +205,17 @@ class ApiClient {
     try {
       final streamed = await _http.send(request).timeout(timeout);
       final bytes = await streamed.stream.toBytes().timeout(timeout);
-      final text = utf8.decode(bytes, allowMalformed: true);
       Object? data;
       final shouldParse = parseJson || streamed.statusCode >= 400;
-      if (shouldParse && text.trim().isNotEmpty) {
-        try {
-          data = jsonDecode(text);
-        } on FormatException {
-          data = null;
+      // 二进制下载不需要解码为文本，避免额外复制整个响应体。
+      if (shouldParse) {
+        final text = utf8.decode(bytes, allowMalformed: true);
+        if (text.trim().isNotEmpty) {
+          try {
+            data = jsonDecode(text);
+          } on FormatException {
+            data = null;
+          }
         }
       }
       final headers = <String, String>{};

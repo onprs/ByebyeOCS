@@ -74,6 +74,10 @@ const (
 	maxReencryptBatchSize        = 1000
 	passwordBusyRetryAfter       = 2 * time.Second
 	sessionTouchInterval         = time.Minute
+	// platformSessionTouchInterval 限制平台会话 last_used_at 的回写频率。
+	// 这个时间只用于运维观察，不参与鉴权；每次读取都回写会让高频任务产生
+	// 无意义的 WAL 与行锁开销。
+	platformSessionTouchInterval = 5 * time.Minute
 )
 
 // uuidPattern 只用于校验外部传入的编号，避免无效值触发数据库类型错误。
@@ -519,13 +523,26 @@ func deriveKey(master []byte, label string) []byte {
 
 func (s *Service) clock() time.Time { return s.now().UTC() }
 
+// txRollbackTimeout 限制回滚等待时间。请求上下文可能已被取消或已超时，回滚仍必须执行；
+// 但网络失联时 pgx 会一直等待服务器应答，未加期限的回滚与会话请求会占住连接池槽位。
+// 超时后 pgx 关闭该连接，服务器在连接断开时回滚未提交事务，已提交数据与账本耐久性不受影响。
+// 变量形式仅便于测试缩短等待，生产不修改。
+var txRollbackTimeout = 5 * time.Second
+
+// rollbackTx 在独立且有限的期限内回滚事务；已提交或已回滚的事务立即返回。
+func rollbackTx(tx pgx.Tx) {
+	ctx, cancel := context.WithTimeout(context.Background(), txRollbackTimeout)
+	defer cancel()
+	_ = tx.Rollback(ctx)
+}
+
 // inTx 在显式事务中执行写入；失败时整批回滚。
 func (s *Service) inTx(ctx context.Context, run func(pgx.Tx) error) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return fault.New("service_unavailable", "数据库事务无法开启，请稍后重试")
 	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
+	defer rollbackTx(tx)
 	if err := run(tx); err != nil {
 		return err
 	}
@@ -582,9 +599,12 @@ func (s *Service) PlatformSession(ctx context.Context, userID string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	// 使用时间只作运维观察，不参与鉴权判断；更新失败不影响本次读取。
-	_, _ = s.pool.Exec(ctx, `UPDATE public.platform_sessions SET last_used_at = $2, updated_at = $2
-		WHERE id = $1 AND status = 'active'`, recordID, now)
+	// 使用时间只作运维观察，不参与鉴权判断；按固定窗口节流回写，失败不影响本次读取。
+	_, _ = s.pool.Exec(ctx, `UPDATE public.platform_sessions
+		SET last_used_at = $2, updated_at = $2
+		WHERE id = $1 AND status = 'active'
+		  AND (last_used_at IS NULL OR last_used_at < $3)`,
+		recordID, now, now.Add(-platformSessionTouchInterval))
 	return plaintext, nil
 }
 

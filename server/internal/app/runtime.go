@@ -74,7 +74,13 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 			exportKeys = append(exportKeys, deriveKey(key, "privacy-export"))
 		}
 	}
-	ops, err := operations.New(db.Pool(), operations.Options{DataDir: cfg.Storage.DataDir, Key: deriveKey(cfg.Auth.EncryptionKey, "privacy-export"), DecryptionKeys: exportKeys, ExportMaxBytes: cfg.Operations.ExportMaxBytes, RetentionInterval: cfg.Operations.RetentionInterval, DiskProtection: cfg.Operations.DiskProtection, RequireFreshBackup: cfg.Operations.RequireFreshBackup, BackupStatusFile: cfg.Operations.BackupStatusFile, BackupMaxAge: cfg.Operations.BackupMaxAge, QuestionConcurrency: cfg.Questions.Concurrency, Runtime: map[string]any{"mode": cfg.Mode, "global_concurrency": cfg.Learning.GlobalConcurrency, "account_concurrency": cfg.Learning.AccountConcurrency, "source_configured": deps.Platform != nil, "executor_configured": deps.Executor != nil, "payments_configured": cfg.Payments.Enabled, "question_service_configured": cfg.Questions.Enabled}})
+	ops, err := operations.New(db.Pool(), operations.Options{Logger: logger, RequestTimeout: cfg.Database.QueryTimeout, QuestionCleanup: func(ctx context.Context) error {
+		if runtime.Questions == nil {
+			return nil
+		}
+		_, err := runtime.Questions.RunCleanup(ctx)
+		return err
+	}, DataDir: cfg.Storage.DataDir, Key: deriveKey(cfg.Auth.EncryptionKey, "privacy-export"), DecryptionKeys: exportKeys, ExportMaxBytes: cfg.Operations.ExportMaxBytes, RetentionInterval: cfg.Operations.RetentionInterval, DiskProtection: cfg.Operations.DiskProtection, RequireFreshBackup: cfg.Operations.RequireFreshBackup, BackupStatusFile: cfg.Operations.BackupStatusFile, BackupMaxAge: cfg.Operations.BackupMaxAge, QuestionConcurrency: cfg.Questions.Concurrency, Runtime: map[string]any{"mode": cfg.Mode, "global_concurrency": cfg.Learning.GlobalConcurrency, "account_concurrency": cfg.Learning.AccountConcurrency, "source_configured": deps.Platform != nil, "executor_configured": deps.Executor != nil, "payments_configured": cfg.Payments.Enabled, "question_service_configured": cfg.Questions.Enabled}})
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +127,7 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 			}
 		}
 	}
-	learn, err := learning.New(db.Pool(), &learning.Options{Sessions: identity, Platform: deps.Platform, Executor: executor, ExecutionEnabled: cfg.Learning.ExecutionEnabled, RecoveryRetry: true, Logger: logger, Billing: &taskBilling{book: book}, BillingConfirmationRecorder: &taskBilling{book: book}, BillingSettlementReporter: &taskBilling{book: book}, QuestionsPolicyValidator: learning.QuestionsPolicyValidatorFunc(func(ctx context.Context, modelID, mode string) error {
+	learn, err := learning.New(db.Pool(), &learning.Options{Sessions: identity, Platform: deps.Platform, Executor: executor, ExecutionEnabled: cfg.Learning.ExecutionEnabled, ShutdownTimeout: cfg.Server.ShutdownTimeout, RequestTimeout: cfg.Database.QueryTimeout, RecoveryRetry: true, Logger: logger, Billing: &taskBilling{book: book}, BillingConfirmationRecorder: &taskBilling{book: book}, BillingSettlementReporter: &taskBilling{book: book}, QuestionsPolicyValidator: learning.QuestionsPolicyValidatorFunc(func(ctx context.Context, modelID, mode string) error {
 		if runtime.Questions == nil {
 			return fault.New("service_unavailable", "题库模型服务尚未准备好")
 		}
@@ -153,6 +159,7 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 	runtime.Questions = answers
 	automaticAnswers.questions = answers
 	stream := events.New(db.Pool())
+	stream.SetLogger(logger)
 	if err := stream.SetMaxStreams(cfg.Operations.MaxEventStreams); err != nil {
 		return nil, err
 	}

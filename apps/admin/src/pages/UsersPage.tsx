@@ -376,7 +376,7 @@ function UserDetailDrawer({
   const detail = useAsync(
     () => (id ? getUser(id).then(response => response.data) : Promise.resolve(null)),
     [id],
-    { enabled: Boolean(id) },
+    { enabled: Boolean(id), resetOnDepsChange: true },
   )
 
   return (
@@ -414,7 +414,7 @@ function UserDetailContent({
   const wallet = useAsync(
     () => (canReadBilling ? getAdminUserWallet(user.id).then(response => response.data) : Promise.resolve(null)),
     [user.id, canReadBilling],
-    { enabled: canReadBilling },
+    { enabled: canReadBilling, resetOnDepsChange: true },
   )
   const walletSnapshot = wallet.data?.wallet ?? null
   return (

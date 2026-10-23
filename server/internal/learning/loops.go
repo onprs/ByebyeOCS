@@ -63,9 +63,10 @@ func (s *Service) recoverOneExpired(ctx context.Context) (bool, error) {
 	handled := false
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		var attemptID, taskID string
-		err := tx.QueryRow(ctx, `SELECT id::text, task_id::text FROM public.learning_task_attempts
-			WHERE ended_at IS NULL AND lease_expires_at <= now()
-			ORDER BY lease_expires_at LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&attemptID, &taskID)
+		err := tx.QueryRow(ctx, `SELECT a.id::text, a.task_id::text FROM public.learning_task_attempts a
+			JOIN public.learning_tasks t ON t.id = a.task_id
+			WHERE a.ended_at IS NULL AND a.lease_expires_at <= now()
+			ORDER BY a.lease_expires_at LIMIT 1 FOR UPDATE OF t SKIP LOCKED`).Scan(&attemptID, &taskID)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -192,10 +193,17 @@ func (s *Service) extendLeases(ctx context.Context) (map[string]bool, error) {
 	now := s.now()
 	result := map[string]bool{}
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
-		rows, err := tx.Query(ctx, `UPDATE public.learning_task_attempts
+		rows, err := tx.Query(ctx, `WITH owned AS MATERIALIZED (
+			SELECT t.id AS task_id, a.id AS attempt_id
+			FROM public.learning_tasks t JOIN public.learning_task_attempts a
+				ON a.id = t.lease_attempt_id AND a.task_id = t.id AND a.fence_token = t.fence_token
+			WHERE a.owner = $1 AND a.ended_at IS NULL AND a.lease_expires_at > $3
+			ORDER BY t.id FOR UPDATE OF t
+		)
+		UPDATE public.learning_task_attempts a
 			SET lease_expires_at = $2, heartbeat_at = $3
-			WHERE owner = $1 AND ended_at IS NULL AND lease_expires_at > $3
-			RETURNING id::text, task_id::text`, s.opts.InstanceID, now.Add(s.opts.LeaseTTL), now)
+			FROM owned WHERE a.id = owned.attempt_id
+			RETURNING a.id::text, a.task_id::text`, s.opts.InstanceID, now.Add(s.opts.LeaseTTL), now)
 		if err != nil {
 			return errServiceUnavailable
 		}
@@ -667,6 +675,8 @@ type syncResult struct {
 }
 
 func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
+	ctx, stopLease := s.courseSyncLeaseContext(ctx, job)
+	defer stopLease()
 	capabilities := s.opts.Platform.Capabilities()
 	if !capabilities.CourseRead {
 		s.finishSyncFailure(ctx, job, syncResult{status: "needs_attention", errorCode: "external_disabled"})
@@ -678,7 +688,7 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 	}
 	session, err := s.resolveSession(ctx, job.UserID)
 	if err != nil {
-		s.finishSyncFailure(ctx, job, syncResult{status: "needs_attention", errorCode: "identity_invalid", blockAccount: true})
+		s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 		return
 	}
 	courses, err := s.opts.Platform.ListCourses(ctx, session)

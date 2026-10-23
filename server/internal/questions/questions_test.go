@@ -26,8 +26,10 @@ type fakeFork struct {
 	calls        int
 	requests     []ForkAnswerRequest
 	invalidation string
-	answer       func(ForkAnswerRequest) (ForkAnswerResponse, error)
-	testResult   ForkTestResult
+	// invalidationMiss 模拟 fork 未实际失效（条目已失效或已过期）。
+	invalidationMiss bool
+	answer           func(ForkAnswerRequest) (ForkAnswerResponse, error)
+	testResult       ForkTestResult
 }
 
 func (f *fakeFork) Answer(_ context.Context, request ForkAnswerRequest, _ string) (ForkAnswerResponse, error) {
@@ -57,11 +59,11 @@ func (f *fakeFork) TestModel(_ context.Context, providerRef, kind string, _ bool
 	return f.testResult, nil
 }
 
-func (f *fakeFork) InvalidateCache(_ context.Context, entryID, _ string) error {
+func (f *fakeFork) InvalidateCache(_ context.Context, entryID, _ string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.invalidation = entryID
-	return nil
+	return !f.invalidationMiss, nil
 }
 
 func (f *fakeFork) callCount() int {
@@ -906,6 +908,100 @@ func TestInsufficientBalanceBlocksFork(t *testing.T) {
 	}
 	if status != "failed" || billingState != "reserve_failed" {
 		t.Fatalf("预占失败应保留失败事实：%s/%s", status, billingState)
+	}
+}
+
+// 不可用模型不能被设为默认：默认条目会被用户查询跳过，且唯一默认索引会阻止其他条目接管。
+func TestUnavailableModelCannotBeDefault(t *testing.T) {
+	env := newTestEnv(t, envOptions{})
+	create := env.call(t, http.MethodPost, "/admin/api/v1/question-models", map[string]any{
+		"display_name": "不可用默认", "provider_ref": "internal-unavailable",
+		"capabilities": []string{"text"}, "default": true, "health": "unavailable",
+	}, env.admin(), nil)
+	if create.Code != http.StatusUnprocessableEntity || errorCode(create) != "validation_failed" {
+		t.Fatalf("不可用模型不能直接设为默认：%d %s", create.Code, create.Body.String())
+	}
+
+	offering := env.createOffering(t, "可用默认", "internal-available", nil, true)
+	deadDefault := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+offering.ID,
+		map[string]any{"health": "unavailable"}, env.admin(), map[string]string{"If-Match": `"v1"`})
+	if deadDefault.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("默认模型不能单独改为不可用：%d %s", deadDefault.Code, deadDefault.Body.String())
+	}
+	retire := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+offering.ID,
+		map[string]any{"health": "unavailable", "default": false}, env.admin(), map[string]string{"If-Match": `"v1"`})
+	if retire.Code != http.StatusOK {
+		t.Fatalf("同时取消默认并标为不可用应允许：%d %s", retire.Code, retire.Body.String())
+	}
+}
+
+// 缓存失效返回真实结果：fork 未实际失效（已失效/已过期）时不能记为已失效。
+func TestInvalidateCacheReportsActualForkResult(t *testing.T) {
+	env := newTestEnv(t, envOptions{})
+	env.fork.invalidationMiss = true
+	miss := env.call(t, http.MethodPost, "/admin/api/v1/question-cache/invalidations",
+		map[string]any{"cache_entry_id": "entry-gone", "reason": "用户报告错误"}, env.admin(), nil)
+	if miss.Code != http.StatusOK || !strings.Contains(miss.Body.String(), `"invalidated":false`) {
+		t.Fatalf("fork 未失效时应返回真实结果：%d %s", miss.Code, miss.Body.String())
+	}
+	var forkInvalidated bool
+	if err := env.pool.QueryRow(context.Background(), `SELECT fork_invalidated FROM public.question_cache_invalidations
+		WHERE cache_entry_id = 'entry-gone'`).Scan(&forkInvalidated); err != nil || forkInvalidated {
+		t.Fatalf("失效记录必须与 fork 结果一致：%v/%v", forkInvalidated, err)
+	}
+
+	env.fork.mu.Lock()
+	env.fork.invalidationMiss = false
+	env.fork.mu.Unlock()
+	hit := env.call(t, http.MethodPost, "/admin/api/v1/question-cache/invalidations",
+		map[string]any{"cache_entry_id": "entry-live", "reason": "用户报告错误"}, env.admin(), nil)
+	if hit.Code != http.StatusOK || !strings.Contains(hit.Body.String(), `"invalidated":true`) {
+		t.Fatalf("fork 已失效时应返回 true：%d %s", hit.Code, hit.Body.String())
+	}
+	if err := env.pool.QueryRow(context.Background(), `SELECT fork_invalidated FROM public.question_cache_invalidations
+		WHERE cache_entry_id = 'entry-live'`).Scan(&forkInvalidated); err != nil || !forkInvalidated {
+		t.Fatalf("已失效记录应为 true：%v/%v", forkInvalidated, err)
+	}
+}
+
+// fork 返回的失效条目与请求不一致时不能当作成功。
+func TestHTTPForkInvalidateCacheResult(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		status  int
+		want    bool
+		wantErr bool
+	}{
+		{"已失效", `{"invalidated":true,"entry_id":"entry-1"}`, http.StatusOK, true, false},
+		{"未失效", `{"invalidated":false,"entry_id":""}`, http.StatusOK, false, false},
+		{"条目不一致", `{"invalidated":true,"entry_id":"entry-2"}`, http.StatusOK, false, true},
+		{"上游错误", `{"error":{"code":"internal_error","message":"raw detail"}}`, http.StatusInternalServerError, false, true},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/internal/v1/cache/invalidations" {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(item.status)
+				_, _ = w.Write([]byte(item.body))
+			}))
+			defer server.Close()
+			fork, err := NewHTTPFork(server.URL, "fork-test-token-0123456789", 5*time.Second)
+			if err != nil {
+				t.Fatal(err)
+			}
+			invalidated, err := fork.InvalidateCache(context.Background(), "entry-1", "原因")
+			if (err != nil) != item.wantErr || invalidated != item.want {
+				t.Fatalf("失效结果不符：invalidated=%v err=%v", invalidated, err)
+			}
+			if err != nil && strings.Contains(err.Error(), "raw detail") {
+				t.Fatalf("错误不得转发 fork 原始响应：%v", err)
+			}
+		})
 	}
 }
 

@@ -86,13 +86,38 @@ func requestInProgressError() *QueryError {
 	return newQueryError("request_in_progress", "相同请求仍在处理中，请稍后重试", http.StatusConflict, true)
 }
 
-// storedQueryError 把已保存的失败查询映射为稳定错误。未知码不回显内部细节。
-func storedQueryError(code string) *QueryError {
+// permanentForkQueryError 把可确定的永久性 fork 错误映射为稳定错误码与固定文案。
+// 只使用公开错误封套已定义的 code，不回显 fork 原始响应。
+func permanentForkQueryError(code string) *QueryError {
 	switch code {
 	case "model_disabled":
 		return newQueryError(code, "该模型已下架，请重新选择", http.StatusConflict, false)
-	case "vision_unsupported", "budget_exceeded", "invalid_question":
+	case "vision_unsupported", "budget_exceeded", "invalid_question", "invalid_mode", "invalid_scope":
 		return newQueryError(code, "题库请求无法处理", http.StatusUnprocessableEntity, false)
+	case "invalid_request", "invalid_scope_key", "budget_invalid", "idempotency_required", "idempotency_invalid", "validation_failed":
+		return newQueryError("validation_failed", "题库请求无法处理", http.StatusUnprocessableEntity, false)
+	case "shared_cache_disabled":
+		return newQueryError("shared_cache_not_allowed", "该模型未允许共享缓存", http.StatusUnprocessableEntity, false)
+	case "idempotency_conflict":
+		return newQueryError(code, "相同请求对应不同内容，请重新发起", http.StatusConflict, false)
+	case "not_found":
+		return newQueryError(code, "题库模型条目不存在", http.StatusNotFound, false)
+	case "unauthenticated", "forbidden":
+		// fork 服务令牌失效属运维配置问题，重试同一查询不会成功。
+		return newQueryError("provider_unavailable", "题库服务凭据无效，请人工核对", http.StatusServiceUnavailable, false)
+	case "request_cancelled":
+		// 公开错误封套没有独立的取消码；取消等于结果未知。
+		return newQueryError("request_unknown", "题库请求已取消，结果待核对", http.StatusConflict, false)
+	}
+	return nil
+}
+
+// storedQueryError 把已保存的失败查询映射为稳定错误。未知码不回显内部细节。
+func storedQueryError(code string) *QueryError {
+	if permanent := permanentForkQueryError(code); permanent != nil {
+		return permanent
+	}
+	switch code {
 	case "upstream_timeout":
 		return newQueryError(code, "题库服务超时，结果待核对", http.StatusGatewayTimeout, false)
 	case "upstream_rate_limited":
@@ -110,17 +135,17 @@ func storedQueryError(code string) *QueryError {
 func forkQueryError(err error) *QueryError {
 	var forkErr *ForkError
 	if errors.As(err, &forkErr) {
-		switch safeForkCode(forkErr.Code) {
-		case "model_disabled":
-			return newQueryError(forkErr.Code, "该模型已下架，请重新选择", http.StatusConflict, false)
-		case "vision_unsupported", "budget_exceeded", "invalid_question", "invalid_mode", "invalid_scope":
-			return newQueryError(forkErr.Code, "题库请求无法处理", http.StatusUnprocessableEntity, false)
+		code := safeForkCode(forkErr.Code)
+		if permanent := permanentForkQueryError(code); permanent != nil {
+			return permanent
+		}
+		switch code {
 		case "upstream_timeout":
-			return newQueryError(forkErr.Code, "题库服务超时，结果未知；不会自动重试", http.StatusGatewayTimeout, false)
+			return newQueryError(code, "题库服务超时，结果未知；不会自动重试", http.StatusGatewayTimeout, false)
 		case "upstream_rate_limited":
-			return newQueryError(forkErr.Code, "题库服务限流，请稍后重试", http.StatusTooManyRequests, true)
+			return newQueryError(code, "题库服务限流，请稍后重试", http.StatusTooManyRequests, true)
 		case "request_unknown":
-			return newQueryError(forkErr.Code, "题库上游结果未知，已保留待复核事实", http.StatusConflict, false)
+			return newQueryError(code, "题库上游结果未知，已保留待复核事实", http.StatusConflict, false)
 		}
 	}
 	return newQueryError("service_unavailable", "题库服务不可用", http.StatusServiceUnavailable, true)
@@ -137,24 +162,30 @@ func reserveQueryError(code string) *QueryError {
 	}
 }
 
-// writeQueryError 是 HTTP 层唯一的查询错误映射；保留原有状态码和错误码。
+// writeQueryError 是 HTTP 层唯一的查询错误映射；保留原有状态码和错误码，
+// retryable 以分类结果为准，不再只按状态码推断。
 func writeQueryError(w http.ResponseWriter, r *http.Request, err error) {
 	queryErr, ok := AsQueryError(err)
 	if !ok {
 		web.Error(w, r, http.StatusServiceUnavailable, "service_unavailable", "题库查询失败")
 		return
 	}
-	if queryErr.Code == "request_in_progress" {
-		id := web.RequestID(r.Context())
-		if id == "" {
-			id = web.NewRequestID()
-			r = r.WithContext(web.WithRequestID(r.Context(), id))
-		}
-		web.JSON(w, r, queryErr.Status, map[string]any{"error": map[string]any{
-			"code": queryErr.Code, "message": queryErr.Message, "request_id": id,
-			"retryable": true, "scope": "request",
-		}})
+	statusRetryable := queryErr.Status == http.StatusServiceUnavailable || queryErr.Status == http.StatusTooManyRequests
+	if queryErr.Retryable == statusRetryable && queryErr.Code != "request_in_progress" {
+		web.Error(w, r, queryErr.Status, queryErr.Code, queryErr.Message)
 		return
 	}
-	web.Error(w, r, queryErr.Status, queryErr.Code, queryErr.Message)
+	id := web.RequestID(r.Context())
+	if id == "" {
+		id = web.NewRequestID()
+		r = r.WithContext(web.WithRequestID(r.Context(), id))
+	}
+	scope := "request"
+	if queryErr.Status == http.StatusServiceUnavailable {
+		scope = "service"
+	}
+	web.JSON(w, r, queryErr.Status, map[string]any{"error": map[string]any{
+		"code": queryErr.Code, "message": queryErr.Message, "request_id": id,
+		"retryable": queryErr.Retryable, "scope": scope,
+	}})
 }

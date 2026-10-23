@@ -72,18 +72,18 @@ func (s *Service) assertCourseSyncLease(ctx context.Context, job *courseSyncJob)
 
 func (s *Service) finishCourseSync(ctx context.Context, job *courseSyncJob, status, errorCode string, courseCount int, snapshotVersion int64) error {
 	now := s.now()
-	tag, err := s.pool.Exec(ctx, `UPDATE public.learning_course_syncs
-		SET status = $3, error_code = $4, course_count = $5, snapshot_version = $6,
-		    lease_owner = '', lease_expires_at = NULL, finished_at = $7, updated_at = $7
-		WHERE id = $1 AND fence_token = $2 AND status = 'running' AND lease_expires_at > $7`,
-		job.ID, job.FenceToken, status, safeCode(errorCode), courseCount, snapshotVersion, now)
-	if err != nil {
-		return errServiceUnavailable
-	}
-	if tag.RowsAffected() != 1 {
-		return errLeaseLost
-	}
 	return s.withTx(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE public.learning_course_syncs
+			SET status = $3, error_code = $4, course_count = $5, snapshot_version = $6,
+			    lease_owner = '', lease_expires_at = NULL, finished_at = $7, updated_at = $7
+			WHERE id = $1 AND fence_token = $2 AND status = 'running' AND lease_expires_at > $7`,
+			job.ID, job.FenceToken, status, safeCode(errorCode), courseCount, snapshotVersion, now)
+		if err != nil {
+			return errServiceUnavailable
+		}
+		if tag.RowsAffected() != 1 {
+			return errLeaseLost
+		}
 		return writeOutbox(ctx, tx, outboxEvent{
 			Topic: "course.sync_finished", ResourceType: "course_sync", ResourceID: job.ID,
 			UserID: job.UserID, Payload: map[string]any{"status": status, "error_code": safeCode(errorCode)},

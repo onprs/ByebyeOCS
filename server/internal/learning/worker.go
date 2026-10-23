@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/onprs/ByebyeOCS/server/internal/platform/fault"
 	"github.com/onprs/ByebyeOCS/server/internal/web"
 )
 
@@ -66,8 +67,6 @@ func (s *Service) Run(ctx context.Context) error {
 	go func() { defer wait.Done(); s.verificationLoop(runCtx) }()
 	go func() { defer wait.Done(); s.syncLoop(runCtx) }()
 	go func() { defer wait.Done(); s.heartbeatLoop(runCtx) }()
-	finished := make(chan struct{})
-	go func() { wait.Wait(); close(finished) }()
 	<-runCtx.Done()
 	s.mu.Lock()
 	s.closed = true
@@ -75,8 +74,17 @@ func (s *Service) Run(ctx context.Context) error {
 		running.cancel()
 	}
 	s.mu.Unlock()
-	<-finished
-	return nil
+	finished := make(chan struct{})
+	// closed 在同一把锁内阻止新的 Add，随后才能等待所有执行协程结束。
+	go func() { wait.Wait(); s.workers.Wait(); close(finished) }()
+	timer := time.NewTimer(s.opts.ShutdownTimeout)
+	defer timer.Stop()
+	select {
+	case <-finished:
+		return nil
+	case <-timer.C:
+		return fault.New("shutdown_timeout", "学习服务退出等待超时")
+	}
 }
 
 func (s *Service) localRunning() int {
@@ -147,6 +155,10 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 		rows, err := tx.Query(ctx, `SELECT t.id::text, t.user_id::text, t.task_kind, matching_plan.priority
 			FROM public.learning_tasks t
 			JOIN public.learning_accounts a ON a.user_id = t.user_id
+			LEFT JOIN (
+				SELECT user_id, count(*) AS active FROM public.learning_task_attempts
+				WHERE ended_at IS NULL AND lease_expires_at > now() GROUP BY user_id
+			) occupancy ON occupancy.user_id = t.user_id
 			JOIN public.learning_courses course ON course.id = t.course_id AND course.user_id = t.user_id
 			JOIN public.learning_attachments att ON att.id = t.attachment_id
 				AND att.user_id = t.user_id AND att.course_id = t.course_id
@@ -170,13 +182,14 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 			  AND t.stop_requested_at IS NULL
 			  AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= now())
 			  AND t.failure_count < $1
+			  AND COALESCE(occupancy.active, 0) < $2
 			  AND a.blocked_code = ''
 			  AND (a.blocked_until IS NULL OR a.blocked_until <= now())
 			  -- 最新完整快照中已不存在的附件不能再领取。
 			  AND att.snapshot_version = course.snapshot_version
 			ORDER BY COALESCE(a.last_claimed_at, '1970-01-01'::timestamptz),
 				matching_plan.priority DESC, COALESCE(t.next_attempt_at, t.created_at), t.created_at
-			LIMIT 100`, s.opts.MaxAttempts)
+			LIMIT 100`, s.opts.MaxAttempts, s.opts.AccountConcurrency)
 		if err != nil {
 			return errServiceUnavailable
 		}
@@ -405,8 +418,10 @@ func (s *Service) startExecution(parent context.Context, job executionJob) {
 		return
 	}
 	s.running[job.AttemptID] = runningExecution{cancel: cancel, job: job}
+	s.workers.Add(1)
 	s.mu.Unlock()
 	go func() {
+		defer s.workers.Done()
 		defer func() {
 			s.mu.Lock()
 			delete(s.running, job.AttemptID)
@@ -423,7 +438,12 @@ func (s *Service) execute(ctx context.Context, job executionJob) {
 	session, err := s.resolveSession(sessionCtx, job.UserID)
 	cancelSession()
 	if err != nil {
-		s.finish(context.Background(), job, ExecutionResult{}, err, capabilities)
+		if s.runCtx != nil && s.runCtx.Err() != nil {
+			return
+		}
+		finishCtx, cancelFinish := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelFinish()
+		s.finish(finishCtx, job, ExecutionResult{}, err, capabilities)
 		return
 	}
 	preflightCompleted, preflightErr := s.preflight(ctx, job, session)

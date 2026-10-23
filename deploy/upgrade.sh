@@ -9,7 +9,12 @@ source "$SCRIPT_DIR/common.sh"
 
 RELEASE_ROOT=$(cd "$SCRIPT_DIR/.." && pwd)
 PREFIX=$DEFAULT_PREFIX
+CONFIG_DIR=$DEFAULT_CONFIG_DIR
+DATA_DIR=$DEFAULT_DATA_DIR
+TIKU_CONFIG_DIR=$DEFAULT_TIKU_CONFIG_DIR
 SERVICE_USER=$DEFAULT_SERVICE_USER
+TIKU_USER=$DEFAULT_TIKU_USER
+SKIP_TIKU=0
 NO_SYSTEMD=0
 NO_RESTART=0
 FORCE=0
@@ -45,13 +50,27 @@ done
 if [[ "$NO_SYSTEMD" != 1 && $EUID -ne 0 ]]; then
   die "升级需要 root；隔离测试可使用 --no-systemd"
 fi
-for cmd in install cp mv ln readlink realpath sha256sum find sed uname; do require_cmd "$cmd"; done
+for cmd in install cp mv ln readlink realpath sha256sum find sed uname mktemp chmod chown flock basename; do require_cmd "$cmd"; done
 
 load_install_state "$PREFIX"
-[[ -L "$PREFIX/current" ]] || die "未发现已安装的 current 符号链接：$PREFIX/current"
+require_install_state "$PREFIX"
+validate_user_name "$SERVICE_USER"
+validate_user_name "$TIKU_USER"
+current_dir=$(current_release_dir "$PREFIX")
 VERSION=$(verify_release_root "$RELEASE_ROOT")
 safe_version "$VERSION"
-old_version=$(basename "$(readlink -f "$PREFIX/current")")
+old_version=$(basename "$current_dir")
+
+lock_prefix "$PREFIX"
+cleanup() {
+  restore_replaced_releases "$PREFIX"
+  cleanup_temp_paths
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+cleanup_stale_prefix_artifacts "$PREFIX"
 
 install_release_tree "$RELEASE_ROOT" "$PREFIX" "$VERSION" "$FORCE"
 install_units

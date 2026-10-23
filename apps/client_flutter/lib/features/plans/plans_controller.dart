@@ -13,8 +13,10 @@ class PlansState {
     this.plans = const <LearningPlan>[],
     this.selectedPlanId,
     this.tasks = const <LearningTask>[],
+    this.tasksCursor,
     this.refreshingPlans = false,
     this.refreshingTasks = false,
+    this.loadingMoreTasks = false,
     this.controlPendingPlanId,
     this.notice,
     this.error,
@@ -23,8 +25,12 @@ class PlansState {
   final List<LearningPlan> plans;
   final String? selectedPlanId;
   final List<LearningTask> tasks;
+
+  /// 当前安排任务列表的下一页游标；刷新或切换安排后必须重置。
+  final String? tasksCursor;
   final bool refreshingPlans;
   final bool refreshingTasks;
+  final bool loadingMoreTasks;
   final String? controlPendingPlanId;
   final String? notice;
   final String? error;
@@ -35,6 +41,8 @@ class PlansState {
     }
     return plans.isEmpty ? null : plans.first;
   }
+
+  bool get tasksHasMore => tasksCursor != null && tasksCursor!.isNotEmpty;
 
   List<LearningTask> get activeTasks => tasks
       .where((task) =>
@@ -61,12 +69,15 @@ class PlansState {
     List<LearningPlan>? plans,
     String? selectedPlanId,
     List<LearningTask>? tasks,
+    String? tasksCursor,
     bool? refreshingPlans,
     bool? refreshingTasks,
+    bool? loadingMoreTasks,
     String? controlPendingPlanId,
     String? notice,
     String? error,
     bool clearControlPending = false,
+    bool clearTasksCursor = false,
     bool clearNotice = false,
     bool clearError = false,
     bool clearSelected = false,
@@ -76,8 +87,10 @@ class PlansState {
       selectedPlanId:
           clearSelected ? null : selectedPlanId ?? this.selectedPlanId,
       tasks: tasks ?? this.tasks,
+      tasksCursor: clearTasksCursor ? null : tasksCursor ?? this.tasksCursor,
       refreshingPlans: refreshingPlans ?? this.refreshingPlans,
       refreshingTasks: refreshingTasks ?? this.refreshingTasks,
+      loadingMoreTasks: loadingMoreTasks ?? this.loadingMoreTasks,
       controlPendingPlanId: clearControlPending
           ? null
           : controlPendingPlanId ?? this.controlPendingPlanId,
@@ -90,10 +103,28 @@ class PlansState {
 class PlansController extends AsyncNotifier<PlansState> {
   StreamSubscription<RealtimeEvent>? _events;
   String? _preferredPlanId;
-  bool _loadingTasks = false;
+
+  /// 任务列表请求序号与在途计数：切安排时旧响应不得覆盖新选择。
+  int _taskRequestSeq = 0;
+  final Map<String, int> _tasksInFlight = <String, int>{};
+
+  /// 最近一次任务请求所属安排；用于识别切回旧安排时在途请求已过期。
+  String? _latestTaskRequestKey;
+
+  /// 账户代次：重建后旧账户的在途安排请求不得写入新用户状态。
+  int _accountEpoch = 0;
+  bool _disposed = false;
 
   @override
   Future<PlansState> build() async {
+    final epoch = ++_accountEpoch;
+    _disposed = false;
+    ref.onDispose(() {
+      if (epoch == _accountEpoch) _disposed = true;
+    });
+    _taskRequestSeq++;
+    _tasksInFlight.clear();
+    _latestTaskRequestKey = null;
     ref.watch(sessionEpochProvider);
     final user = ref.watch(currentUserProvider);
     _events = ref.watch(realtimeServiceProvider).events.listen(_onEvent);
@@ -110,16 +141,18 @@ class PlansController extends AsyncNotifier<PlansState> {
       selected = plansPage.items.isEmpty ? null : plansPage.items.first.id;
     }
     final tasks = selected == null
-        ? (await repository.fetchTasks()).items
-        : (await repository.fetchTasks(planId: selected)).items;
+        ? await repository.fetchTasks()
+        : await repository.fetchTasks(planId: selected);
     return PlansState(
       plans: plansPage.items,
       selectedPlanId: selected,
-      tasks: tasks,
+      tasks: tasks.items,
+      tasksCursor: tasks.nextCursor,
     );
   }
 
   void _onEvent(RealtimeEvent event) {
+    if (_disposed) return;
     final current = state.valueOrNull;
     if (current == null) return;
     if (event.type == 'client.resume') {
@@ -164,6 +197,8 @@ class PlansController extends AsyncNotifier<PlansState> {
         selectedPlanId: planId,
         tasks: const <LearningTask>[],
         refreshingTasks: true,
+        loadingMoreTasks: false,
+        clearTasksCursor: true,
         clearError: true,
       ),
     );
@@ -184,28 +219,36 @@ class PlansController extends AsyncNotifier<PlansState> {
     final current = state.valueOrNull;
     if (current == null) return;
     if (current.refreshingPlans) return;
+    final epoch = _accountEpoch;
     state = AsyncData(
       current.copyWith(refreshingPlans: true, clearError: true),
     );
     try {
       final page = await ref.read(learningRepositoryProvider).fetchPlans();
+      if (_disposed || epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       var selected = latest.selectedPlanId;
       if (selected == null || page.items.every((plan) => plan.id != selected)) {
         selected = page.items.isEmpty ? null : page.items.first.id;
       }
+      final selectionChanged = selected != latest.selectedPlanId;
       state = AsyncData(
         latest.copyWith(
           plans: page.items,
           selectedPlanId: selected,
+          tasks: selectionChanged ? const <LearningTask>[] : latest.tasks,
+          clearTasksCursor: selectionChanged,
+          refreshingTasks: selected == null ? false : latest.refreshingTasks,
+          loadingMoreTasks: selectionChanged ? false : latest.loadingMoreTasks,
           refreshingPlans: false,
           clearSelected: selected == null,
         ),
       );
-      if (selected != null && selected != current.selectedPlanId) {
+      if (selected != null && selectionChanged) {
         await _refreshTasks(silent: true, targetPlanId: selected);
       }
     } on ApiException catch (error) {
+      if (_disposed || epoch != _accountEpoch) return;
       state = AsyncData(
         (state.valueOrNull ?? current).copyWith(
           refreshingPlans: false,
@@ -213,6 +256,7 @@ class PlansController extends AsyncNotifier<PlansState> {
         ),
       );
     } catch (_) {
+      if (_disposed || epoch != _accountEpoch) return;
       state = AsyncData(
         (state.valueOrNull ?? current).copyWith(
           refreshingPlans: false,
@@ -226,11 +270,19 @@ class PlansController extends AsyncNotifier<PlansState> {
     bool silent = false,
     String? targetPlanId,
   }) async {
-    if (_loadingTasks) return;
     final current = state.valueOrNull;
     if (current == null) return;
     final planId = targetPlanId ?? current.selectedPlanId;
-    _loadingTasks = true;
+    final key = planId ?? '';
+    // 同一安排的重复刷新合并为一次请求；不同安排必须并行发出，
+    // 否则切换安排会被在途请求挡住并显示上一安排的任务。
+    // 若最近一次请求已属于其他安排，当前安排在途请求已过期，必须重新发出。
+    if ((_tasksInFlight[key] ?? 0) > 0 && _latestTaskRequestKey == key) {
+      return;
+    }
+    _tasksInFlight[key] = (_tasksInFlight[key] ?? 0) + 1;
+    _latestTaskRequestKey = key;
+    final seq = ++_taskRequestSeq;
     state = AsyncData(
       (state.valueOrNull ?? current).copyWith(refreshingTasks: true),
     );
@@ -238,28 +290,106 @@ class PlansController extends AsyncNotifier<PlansState> {
       final page = await ref.read(learningRepositoryProvider).fetchTasks(
             planId: planId,
           );
-      final latest = state.valueOrNull ?? current;
+      if (_disposed || seq != _taskRequestSeq) return;
+      final latest = state.valueOrNull;
+      if (latest == null || latest.selectedPlanId != planId) return;
       state = AsyncData(
-        latest.copyWith(tasks: page.items, refreshingTasks: false),
+        latest.copyWith(
+          tasks: page.items,
+          tasksCursor: page.nextCursor,
+          clearTasksCursor: page.nextCursor == null,
+          refreshingTasks: false,
+          loadingMoreTasks: false,
+        ),
       );
     } on ApiException catch (error) {
+      if (_disposed || seq != _taskRequestSeq) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
           refreshingTasks: false,
+          loadingMoreTasks: false,
           error: error.userMessage,
         ),
       );
     } catch (_) {
+      if (_disposed || seq != _taskRequestSeq) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
           refreshingTasks: false,
+          loadingMoreTasks: false,
           error: '任务列表暂时无法刷新',
         ),
       );
     } finally {
-      _loadingTasks = false;
+      final remaining = (_tasksInFlight[key] ?? 1) - 1;
+      if (remaining <= 0) {
+        _tasksInFlight.remove(key);
+      } else {
+        _tasksInFlight[key] = remaining;
+      }
+      if (seq == _taskRequestSeq) {
+        _latestTaskRequestKey = null;
+      }
+    }
+  }
+
+  Future<void> loadMoreTasks() async {
+    final current = state.valueOrNull;
+    if (current == null ||
+        !current.tasksHasMore ||
+        current.refreshingTasks ||
+        current.loadingMoreTasks) {
+      return;
+    }
+    final epoch = _accountEpoch;
+    final seq = _taskRequestSeq;
+    final planId = current.selectedPlanId;
+    final cursor = current.tasksCursor!;
+    state = AsyncData(
+      current.copyWith(loadingMoreTasks: true, clearError: true),
+    );
+    try {
+      final page = await ref.read(learningRepositoryProvider).fetchTasks(
+            planId: planId,
+            cursor: cursor,
+          );
+      if (_disposed || epoch != _accountEpoch || seq != _taskRequestSeq) return;
+      final latest = state.valueOrNull;
+      if (latest == null || latest.selectedPlanId != planId) return;
+      final known = latest.tasks.map((task) => task.id).toSet();
+      final appended = page.items
+          .where((task) => known.add(task.id))
+          .toList(growable: false);
+      // 服务端正常推进游标；若返回同一游标则停止继续加载，避免重复请求。
+      final nextCursor = page.nextCursor == cursor ? null : page.nextCursor;
+      state = AsyncData(
+        latest.copyWith(
+          tasks: [...latest.tasks, ...appended],
+          tasksCursor: nextCursor,
+          clearTasksCursor: nextCursor == null,
+          loadingMoreTasks: false,
+        ),
+      );
+    } on ApiException catch (error) {
+      if (_disposed || epoch != _accountEpoch || seq != _taskRequestSeq) return;
+      final latest = state.valueOrNull ?? current;
+      state = AsyncData(
+        latest.copyWith(
+          loadingMoreTasks: false,
+          error: error.userMessage,
+        ),
+      );
+    } catch (_) {
+      if (_disposed || epoch != _accountEpoch || seq != _taskRequestSeq) return;
+      final latest = state.valueOrNull ?? current;
+      state = AsyncData(
+        latest.copyWith(
+          loadingMoreTasks: false,
+          error: '更多任务暂时无法加载',
+        ),
+      );
     }
   }
 
@@ -269,6 +399,7 @@ class PlansController extends AsyncNotifier<PlansState> {
   }) async {
     final current = state.valueOrNull;
     if (current == null || current.controlPendingPlanId != null) return null;
+    final epoch = _accountEpoch;
     state = AsyncData(
       current.copyWith(
         controlPendingPlanId: planId,
@@ -281,6 +412,7 @@ class PlansController extends AsyncNotifier<PlansState> {
             id: planId,
             action: action,
           );
+      if (_disposed || epoch != _accountEpoch) return result;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -293,6 +425,7 @@ class PlansController extends AsyncNotifier<PlansState> {
       await refreshPlans(silent: true);
       return result;
     } on ApiException catch (error) {
+      if (_disposed || epoch != _accountEpoch) return null;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -302,6 +435,7 @@ class PlansController extends AsyncNotifier<PlansState> {
       );
       return null;
     } catch (_) {
+      if (_disposed || epoch != _accountEpoch) return null;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -314,11 +448,14 @@ class PlansController extends AsyncNotifier<PlansState> {
   }
 
   Future<void> afterPlanSaved(String planId) async {
+    final epoch = _accountEpoch;
     await refreshPlans(silent: true);
+    if (_disposed || epoch != _accountEpoch) return;
     final current = state.valueOrNull;
     if (current != null && current.selectedPlanId != planId) {
       await selectPlan(planId);
     }
+    if (_disposed || epoch != _accountEpoch) return;
     state = AsyncData(
       (state.valueOrNull ?? const PlansState()).copyWith(
         notice: '安排已保存，修改用于后续任务',
@@ -376,8 +513,12 @@ class TaskDetailController
     extends AutoDisposeFamilyAsyncNotifier<TaskDetailState, String> {
   StreamSubscription<RealtimeEvent>? _events;
 
+  /// 账户代次：重建后旧账户的在途响应不得写入新用户状态。
+  int _accountEpoch = 0;
+
   @override
   Future<TaskDetailState> build(String taskId) async {
+    ++_accountEpoch;
     ref.watch(sessionEpochProvider);
     _events = ref.watch(realtimeServiceProvider).events.listen((event) {
       final current = state.valueOrNull;
@@ -413,19 +554,23 @@ class TaskDetailController
       return;
     }
     if (current.refreshing) return;
+    final epoch = _accountEpoch;
     state = AsyncData(current.copyWith(refreshing: true, clearError: true));
     try {
       final detail = await ref.read(learningRepositoryProvider).fetchTask(arg);
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(detail: detail, refreshing: false, clearError: true),
       );
     } on ApiException catch (error) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(refreshing: false, error: error.userMessage),
       );
     } catch (_) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(refreshing: false, error: '任务详情暂时无法刷新'),
@@ -436,6 +581,7 @@ class TaskDetailController
   Future<void> command(String action, {String? reason}) async {
     final current = state.valueOrNull;
     if (current == null || current.commandPending) return;
+    final epoch = _accountEpoch;
     state = AsyncData(
       current.copyWith(
         commandPending: true,
@@ -449,6 +595,7 @@ class TaskDetailController
             action: action,
             reason: reason,
           );
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -458,6 +605,7 @@ class TaskDetailController
       );
       await refresh(silent: true);
     } on ApiException catch (error) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(
@@ -466,6 +614,7 @@ class TaskDetailController
         ),
       );
     } catch (_) {
+      if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
         latest.copyWith(

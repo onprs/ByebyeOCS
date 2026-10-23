@@ -112,7 +112,9 @@ func (f *automaticWorkFork) Answer(ctx context.Context, request questions.ForkAn
 func (*automaticWorkFork) TestModel(context.Context, string, string, bool) (questions.ForkTestResult, error) {
 	return questions.ForkTestResult{}, nil
 }
-func (*automaticWorkFork) InvalidateCache(context.Context, string, string) error { return nil }
+func (*automaticWorkFork) InvalidateCache(context.Context, string, string) (bool, error) {
+	return true, nil
+}
 
 type automaticVideoFallback struct{}
 

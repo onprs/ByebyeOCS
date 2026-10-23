@@ -1,7 +1,6 @@
 package questions
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -124,7 +123,8 @@ func (s *Service) adminInvalidateCache(w http.ResponseWriter, r *http.Request) {
 		web.Fail(w, r, err)
 		return
 	}
-	if err := s.fork.InvalidateCache(r.Context(), input.CacheEntryID, input.Reason); err != nil {
+	invalidated, err := s.fork.InvalidateCache(r.Context(), input.CacheEntryID, input.Reason)
+	if err != nil {
 		web.Error(w, r, 503, "service_unavailable", "题库缓存失效未完成")
 		return
 	}
@@ -138,10 +138,10 @@ func (s *Service) adminInvalidateCache(w http.ResponseWriter, r *http.Request) {
 		web.Error(w, r, 503, "service_unavailable", "缓存已失效，但平台记录失败，请人工核对")
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	if _, err := tx.Exec(r.Context(), `INSERT INTO public.question_cache_invalidations
 		(id, offering_id, cache_entry_id, reason, actor_admin_id, fork_invalidated)
-		VALUES ($1,$2,$3,$4,$5,true)`, id, offering, input.CacheEntryID, input.Reason, actor.ID); err != nil {
+		VALUES ($1,$2,$3,$4,$5,$6)`, id, offering, input.CacheEntryID, input.Reason, actor.ID, invalidated); err != nil {
 		web.Error(w, r, 503, "service_unavailable", "缓存已失效，但平台记录失败，请人工核对")
 		return
 	}
@@ -154,5 +154,5 @@ func (s *Service) adminInvalidateCache(w http.ResponseWriter, r *http.Request) {
 		web.Error(w, r, 503, "service_unavailable", "缓存失效记录结果待核对")
 		return
 	}
-	web.JSON(w, r, http.StatusOK, map[string]any{"invalidated": true, "cache_entry_id": input.CacheEntryID})
+	web.JSON(w, r, http.StatusOK, map[string]any{"invalidated": invalidated, "cache_entry_id": input.CacheEntryID})
 }

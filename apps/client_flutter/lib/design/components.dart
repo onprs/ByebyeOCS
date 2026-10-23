@@ -263,47 +263,12 @@ class SectionCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           if (title != null)
-            Padding(
+            SectionCardHeader(
+              title: title!,
+              subtitle: subtitle,
+              action: action,
               padding:
                   headerPadding ?? const EdgeInsets.fromLTRB(20, 18, 18, 0),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Semantics(
-                          header: true,
-                          child: Text(
-                            title!,
-                            style: TextStyle(
-                              color: colors.text,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ),
-                        if (subtitle != null) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            subtitle!,
-                            style: TextStyle(
-                              color: colors.textSecondary,
-                              fontSize: 12.5,
-                              height: 1.5,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
-                  ),
-                  if (action != null) ...[
-                    const SizedBox(width: 12),
-                    action!,
-                  ],
-                ],
-              ),
             ),
           Padding(
             padding: title == null
@@ -316,6 +281,68 @@ class SectionCard extends StatelessWidget {
                   ),
             child: child,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 独立的分区标题，供普通卡片与 sliver 卡片复用同一排版。
+class SectionCardHeader extends StatelessWidget {
+  const SectionCardHeader({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.action,
+    this.padding = const EdgeInsets.fromLTRB(20, 18, 18, 0),
+  });
+
+  final String title;
+  final String? subtitle;
+  final Widget? action;
+  final EdgeInsets padding;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Padding(
+      padding: padding,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Semantics(
+                  header: true,
+                  child: Text(
+                    title,
+                    style: TextStyle(
+                      color: colors.text,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (subtitle != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle!,
+                    style: TextStyle(
+                      color: colors.textSecondary,
+                      fontSize: 12.5,
+                      height: 1.5,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (action != null) ...[
+            const SizedBox(width: 12),
+            action!,
+          ],
         ],
       ),
     );

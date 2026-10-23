@@ -11,9 +11,10 @@ export interface AsyncState<T> {
 export function useAsync<T>(
   loader: () => Promise<T>,
   deps: unknown[],
-  options: { enabled?: boolean } = {},
+  options: { enabled?: boolean; resetOnDepsChange?: boolean } = {},
 ): AsyncState<T> {
   const enabled = options.enabled ?? true
+  const resetOnDepsChange = options.resetOnDepsChange ?? false
   const [data, setData] = useState<T | null>(null)
   const [error, setError] = useState<unknown | null>(null)
   const [loading, setLoading] = useState(enabled)
@@ -21,13 +22,20 @@ export function useAsync<T>(
   const loaderRef = useRef(loader)
   loaderRef.current = loader
   const depsKey = JSON.stringify(deps ?? [])
+  const depsKeyRef = useRef(depsKey)
 
   useEffect(() => {
+    // 依赖代表另一份实体或查询时，先丢弃旧结果，避免在新实体下展示并操作旧数据。
+    // reload 不改变 depsKey，因此手动刷新仍保留已在屏幕上的数据。
+    const depsChanged = depsKeyRef.current !== depsKey
+    depsKeyRef.current = depsKey
     if (!enabled) {
+      if (depsChanged && resetOnDepsChange) setData(null)
       setLoading(false)
       return
     }
     let cancelled = false
+    if (depsChanged && resetOnDepsChange) setData(null)
     setLoading(true)
     setError(null)
     loaderRef
@@ -48,7 +56,7 @@ export function useAsync<T>(
     }
     // depsKey 由调用方显式描述依赖，避免匿名 loader 每次渲染触发请求。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [depsKey, enabled, nonce])
+  }, [depsKey, enabled, nonce, resetOnDepsChange])
 
   const reload = useCallback(() => setNonce(value => value + 1), [])
 

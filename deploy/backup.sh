@@ -71,15 +71,44 @@ AGE_RECIPIENT=${BYEBYEOCS_AGE_RECIPIENT:-}
 OFFSITE_SSH=${BYEBYEOCS_OFFSITE_SSH:-}
 OFFSITE_DIR=${BYEBYEOCS_OFFSITE_DIR:-}
 STATUS_OWNER=${BYEBYEOCS_BACKUP_STATUS_OWNER:-}
+STATUS_GROUP=""
+if [[ -n "$STATUS_OWNER" && $EUID -eq 0 ]]; then
+  # 提前校验状态所有者，避免完成 dump/上传后才发现配置错误。
+  STATUS_GROUP=$(id -gn "$STATUS_OWNER" 2>/dev/null || true)
+  [[ -n "$STATUS_GROUP" ]] || die "恢复点状态所有者用户不存在：$STATUS_OWNER"
+fi
 
 [[ -d "$CONFIG_DIR" ]] || die "配置目录不存在：$CONFIG_DIR"
-[[ "$CONFIG_DIR" != "/" && "$STATUS_FILE" != "/" && "$STAGING" != "/" ]] || die "备份路径不能是根目录"
+reject_wide_path "配置目录" "$CONFIG_DIR"
+reject_wide_path "备份临时目录" "$STAGING"
+[[ "$STATUS_FILE" != "/" ]] || die "恢复点状态文件不能是根目录"
 [[ ! -L "$STATUS_FILE" ]] || die "恢复点状态文件不能是符号链接"
 validate_private_file "$DSN_FILE" "主数据库 DSN 文件"
 [[ -s "$DSN_FILE" ]] || die "主数据库 DSN 文件为空：$DSN_FILE"
-if [[ -n "$TIKU_CONFIG_DIR" && -f "$TIKU_CONFIG_DIR/ocs-tiku-fork.json" && -z "$TIKU_DSN_FILE" ]]; then
+if [[ -n "$TIKU_CONFIG_DIR" && ! -d "$TIKU_CONFIG_DIR" ]]; then
+  die "题库配置目录不存在：$TIKU_CONFIG_DIR"
+fi
+TIKU_CONFIG_ACTIVE=0
+if [[ -n "$TIKU_CONFIG_DIR" && -f "$TIKU_CONFIG_DIR/ocs-tiku-fork.json" ]]; then
+  TIKU_CONFIG_ACTIVE=1
+fi
+if [[ "$TIKU_CONFIG_ACTIVE" == 1 && -z "$TIKU_DSN_FILE" ]]; then
   die "题库活动配置存在但未设置 BYEBYEOCS_TIKU_DSN_FILE，拒绝生成不完整备份"
 fi
+if [[ -n "$TIKU_DSN_FILE" && "$TIKU_CONFIG_ACTIVE" != 1 ]]; then
+  if [[ -z "$TIKU_CONFIG_DIR" ]]; then
+    die "题库数据库 DSN 已设置，但未设置 BYEBYEOCS_TIKU_CONFIG_DIR；拒绝生成不完整备份"
+  fi
+  die "题库数据库 DSN 已设置，但未找到 $TIKU_CONFIG_DIR/ocs-tiku-fork.json；拒绝生成不完整备份"
+fi
+# 本地归档不能放进被整体备份的配置目录，否则后续备份会递归打包旧归档。
+protected_dirs=("$CONFIG_DIR")
+if [[ -n "$TIKU_CONFIG_DIR" ]]; then
+  protected_dirs+=("$TIKU_CONFIG_DIR")
+fi
+for protected in "${protected_dirs[@]}"; do
+  [[ "$STAGING" != "$protected" && "$STAGING" != "$protected/"* ]] || die "备份临时目录不能位于配置目录内：$protected"
+done
 [[ -n "$AGE_RECIPIENT" ]] || die "未设置 BYEBYEOCS_AGE_RECIPIENT；不使用未加密的数据库备份"
 [[ "$AGE_RECIPIENT" =~ ^age1[0-9a-z]{20,}$ ]] || die "age recipient 格式无效"
 if [[ "$LOCAL_ONLY" != 1 ]]; then
@@ -88,7 +117,7 @@ if [[ "$LOCAL_ONLY" != 1 ]]; then
   [[ "$OFFSITE_DIR" =~ ^/[A-Za-z0-9._/-]+$ && "$OFFSITE_DIR" != *"/../"* && "$OFFSITE_DIR" != *".." ]] || die "异机目录必须为安全绝对路径"
 fi
 
-for cmd in pg_dump age tar sha256sum find sort xargs flock date mktemp install stat tr python3; do require_cmd "$cmd"; done
+for cmd in pg_dump age tar sha256sum find sort xargs flock date mktemp install stat tr python3 grep; do require_cmd "$cmd"; done
 SSH_OPTIONS=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 -o ServerAliveCountMax=2)
 if [[ "$LOCAL_ONLY" != 1 ]]; then
   for cmd in scp ssh getent hostname awk; do require_cmd "$cmd"; done
@@ -150,18 +179,36 @@ install -d -m 0700 "$STAGING"
 LOCK_FILE="$STAGING/.backup.lock"
 exec 9>"$LOCK_FILE"
 flock -n 9 || die "已有备份在运行"
+# 锁已独占：清理被 SIGKILL/断电中断的旧明文工作目录、.partial 和半成品。
+find "$STAGING" -maxdepth 1 -type d -name '.work.*' -exec rm -rf -- {} + 2>/dev/null || true
+find "$STAGING" -maxdepth 1 -type f -name 'byebyeocs-backup-*.tar.age.partial' -delete 2>/dev/null || true
 
-TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/byebyeocs-backup.XXXXXXXX")
+# 明文 dump/配置只写 staging 内的独立 0700 工作目录，使磁盘暂存预算与实际使用一致。
+TMP_ROOT=$(mktemp -d "$STAGING/.work.XXXXXXXX")
+chmod 0700 "$TMP_ROOT"
 TMP_CONTENT="$TMP_ROOT/content"
 ARCHIVE=""
+ARCHIVE_PARTIAL=""
+STATUS_TMP=""
 KEEP_ARCHIVE=0
 cleanup() {
   rm -rf -- "$TMP_ROOT"
-  if [[ -f "${ARCHIVE:-}" && "${KEEP_ARCHIVE:-0}" != 1 ]]; then
-    rm -f -- "$ARCHIVE"
+  if [[ -n "${STATUS_TMP:-}" ]]; then
+    rm -f -- "$STATUS_TMP"
+  fi
+  if [[ "${KEEP_ARCHIVE:-0}" != 1 ]]; then
+    if [[ -n "${ARCHIVE_PARTIAL:-}" ]]; then
+      rm -f -- "$ARCHIVE_PARTIAL"
+    fi
+    if [[ -n "${ARCHIVE:-}" ]]; then
+      rm -f -- "$ARCHIVE"
+    fi
   fi
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 mkdir -p "$TMP_CONTENT/database" "$TMP_CONTENT/config"
 DUMP_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -198,9 +245,13 @@ EOF
   find . -type f ! -name manifest.txt -print0 | sort -z | xargs -0 sha256sum
 ) >>"$TMP_CONTENT/manifest.txt"
 
+# 先写 .partial，完整加密后才改名为正式归档；SIGKILL 残留不会被当成有效备份或参与保留计数。
 ARCHIVE="$STAGING/byebyeocs-backup-${DUMP_STARTED_AT//:/-}-$$.tar.age"
-tar -C "$TMP_CONTENT" -cf - . | age --recipient "$AGE_RECIPIENT" --output "$ARCHIVE" || die "age 加密失败"
-[[ -s "$ARCHIVE" ]] || die "备份归档为空"
+ARCHIVE_PARTIAL="$ARCHIVE.partial"
+tar -C "$TMP_CONTENT" -cf - . | age --recipient "$AGE_RECIPIENT" --output "$ARCHIVE_PARTIAL" || die "age 加密失败"
+[[ -s "$ARCHIVE_PARTIAL" ]] || die "备份归档为空"
+mv -Tf -- "$ARCHIVE_PARTIAL" "$ARCHIVE"
+ARCHIVE_PARTIAL=""
 ARCHIVE_SHA256=$(sha256sum "$ARCHIVE" | awk '{print $1}')
 
 if [[ "$LOCAL_ONLY" == 1 ]]; then
@@ -221,26 +272,48 @@ if [[ "$LOCAL_ONLY" == 1 ]]; then
   exit 0
 fi
 
-REMOTE_PATH="${OFFSITE_DIR%/}/$(basename "$ARCHIVE")"
-scp "${SSH_OPTIONS[@]}" -q -p "$ARCHIVE" "$OFFSITE_SSH:$OFFSITE_DIR/" || die "异机上传失败；未更新恢复点状态"
-REMOTE_SHA256=$(ssh "${SSH_OPTIONS[@]}" "$OFFSITE_SSH" "sha256sum -- '$REMOTE_PATH'" | awk 'NF {value=$1} END {print value}')
-[[ "$REMOTE_SHA256" == "$ARCHIVE_SHA256" ]] || die "异机 SHA-256 校验不一致；未更新恢复点状态"
+REMOTE_ARCHIVE="${OFFSITE_DIR%/}/$(basename "$ARCHIVE")"
+# 正式名包含 dump 时间和 PID，并在锁内生成；先用唯一 .partial 上传，断线只能留下 .partial。
+REMOTE_PARTIAL="${REMOTE_ARCHIVE}.partial"
+if ! scp "${SSH_OPTIONS[@]}" -q -p "$ARCHIVE" "$OFFSITE_SSH:$REMOTE_PARTIAL"; then
+  ssh "${SSH_OPTIONS[@]}" "$OFFSITE_SSH" "rm -f -- '$REMOTE_PARTIAL'" >/dev/null 2>&1 || true
+  die "异机上传失败；未更新恢复点状态"
+fi
+if ! REMOTE_SHA256=$(ssh "${SSH_OPTIONS[@]}" "$OFFSITE_SSH" "sha256sum -- '$REMOTE_PARTIAL'" | awk 'NF {value=$1} END {print value}'); then
+  ssh "${SSH_OPTIONS[@]}" "$OFFSITE_SSH" "rm -f -- '$REMOTE_PARTIAL'" >/dev/null 2>&1 || true
+  die "无法读取异机摘要；未更新恢复点状态"
+fi
+if [[ "$REMOTE_SHA256" != "$ARCHIVE_SHA256" ]]; then
+  ssh "${SSH_OPTIONS[@]}" "$OFFSITE_SSH" "rm -f -- '$REMOTE_PARTIAL'" >/dev/null 2>&1 || true
+  die "异机 SHA-256 校验不一致；未更新恢复点状态"
+fi
+# 校验通过后在同一远端目录内 rename；只有 rename 成功才更新恢复点状态。
+if ! ssh "${SSH_OPTIONS[@]}" "$OFFSITE_SSH" "mv -f -- '$REMOTE_PARTIAL' '$REMOTE_ARCHIVE'"; then
+  ssh "${SSH_OPTIONS[@]}" "$OFFSITE_SSH" "rm -f -- '$REMOTE_PARTIAL'" >/dev/null 2>&1 || true
+  die "异机归档启用失败；未更新恢复点状态"
+fi
 
 VERIFIED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-install -d -m 0700 "$(dirname "$STATUS_FILE")"
+STATUS_DIR=$(dirname "$STATUS_FILE")
+if [[ ! -d "$STATUS_DIR" ]]; then
+  install -d -m 0700 "$STATUS_DIR"
+  # 新建的父目录也必须归状态所有者，否则服务用户无法遍历到状态文件。
+  if [[ -n "$STATUS_GROUP" ]]; then
+    chown "$STATUS_OWNER:$STATUS_GROUP" "$STATUS_DIR" || die "无法设置恢复点状态目录所有者"
+  fi
+fi
 STATUS_TMP="${STATUS_FILE}.tmp.$$"
 printf '{"status":"ok","last_recoverable_at":"%s","verified_at":"%s","offsite":true,"archive_sha256":"%s","restore_drill_verified":false}\n' \
   "$DUMP_STARTED_AT" "$VERIFIED_AT" "$ARCHIVE_SHA256" >"$STATUS_TMP"
 chmod 0600 "$STATUS_TMP"
-if [[ -n "$STATUS_OWNER" && $EUID -eq 0 ]]; then
-  STATUS_GROUP=$(id -gn "$STATUS_OWNER" 2>/dev/null || true)
-  [[ -n "$STATUS_GROUP" ]] || { rm -f "$STATUS_TMP"; die "恢复点状态所有者用户不存在"; }
-  chown "$STATUS_OWNER:$STATUS_GROUP" "$STATUS_TMP" || { rm -f "$STATUS_TMP"; die "无法设置恢复点状态文件所有者"; }
+if [[ -n "$STATUS_GROUP" ]]; then
+  chown "$STATUS_OWNER:$STATUS_GROUP" "$STATUS_TMP" || die "无法设置恢复点状态文件所有者"
 fi
 mv -Tf -- "$STATUS_TMP" "$STATUS_FILE" || die "无法原子更新恢复点状态"
+STATUS_TMP=""
 
 KEEP_ARCHIVE=0
-log "备份完成：$REMOTE_PATH"
+log "备份完成：$REMOTE_ARCHIVE"
 log "远端校验通过；last_recoverable_at=$DUMP_STARTED_AT（dump 开始保守值），verified_at=$VERIFIED_AT"
 log "archive_sha256=$ARCHIVE_SHA256"
 log "status=ok 只表示异机校验通过；restore_drill_verified=false，恢复演练需单独执行。"

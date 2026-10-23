@@ -279,7 +279,7 @@ func (e *AutomaticExecutor) withWorkTx(ctx context.Context, fn func(pgx.Tx) erro
 	if err != nil {
 		return Fail(FailureTransient, "自动做题状态暂不可读取")
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackLearningTx(tx)
 	if err := fn(tx); err != nil {
 		return err
 	}

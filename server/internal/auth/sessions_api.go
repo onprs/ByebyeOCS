@@ -40,10 +40,22 @@ func (s *Service) handleListSessions(w http.ResponseWriter, r *http.Request) {
 			ORDER BY last_seen_at DESC, id
 			LIMIT 50`, actor.ID, now)
 	} else {
-		rows, err = s.pool.Query(r.Context(), `SELECT id::text, channel, created_at, last_seen_at, expires_at, authenticated_at
-			FROM public.client_sessions
-			WHERE user_id = $1 AND status = 'active' AND expires_at > $2
-			ORDER BY last_seen_at DESC, id
+		// 活跃资格包含“访问令牌已过期但刷新链仍有效”的 App 会话：它们仍可续期，
+		// 必须能被用户看到并撤销，不能因 15 分钟访问期限而隐藏。
+		// 返回契约不变：expires_at 对这种情况取刷新链到期时间，其余会话保持原值。
+		rows, err = s.pool.Query(r.Context(), `SELECT cs.id::text, cs.channel, cs.created_at,
+				cs.last_seen_at,
+				CASE WHEN cs.expires_at > $2 THEN cs.expires_at ELSE refresh.expires_at END,
+				cs.authenticated_at
+			FROM public.client_sessions cs
+			LEFT JOIN LATERAL (
+				SELECT max(rt.expires_at) AS expires_at
+				FROM public.refresh_tokens rt
+				WHERE rt.session_id = cs.id AND rt.revoked_at IS NULL AND rt.expires_at > $2
+			) refresh ON true
+			WHERE cs.user_id = $1 AND cs.status = 'active'
+			  AND (cs.expires_at > $2 OR refresh.expires_at IS NOT NULL)
+			ORDER BY cs.last_seen_at DESC, cs.id
 			LIMIT 50`, actor.ID, now)
 	}
 	if err != nil {

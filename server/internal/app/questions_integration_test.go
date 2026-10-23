@@ -29,7 +29,9 @@ func (f *accountedFork) Answer(ctx context.Context, r questions.ForkAnswerReques
 func (*accountedFork) TestModel(context.Context, string, string, bool) (questions.ForkTestResult, error) {
 	return questions.ForkTestResult{}, nil
 }
-func (*accountedFork) InvalidateCache(context.Context, string, string) error { return nil }
+func (*accountedFork) InvalidateCache(context.Context, string, string) (bool, error) {
+	return true, nil
+}
 
 func TestQuestionLedgerPreauthorizesAndRespectsOperatingSwitch(t *testing.T) {
 	fork := &accountedFork{}

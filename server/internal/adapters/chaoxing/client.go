@@ -496,6 +496,7 @@ func (v *Verifier) login(ctx context.Context, credentials auth.Credentials) (Ses
 		return Session{}, learning.Fail(learning.FailurePermanent, "无法建立会话容器")
 	}
 	client := v.factory.client(jar)
+	defer client.CloseIdleConnections()
 	form := url.Values{
 		"fid": {schoolFID(credentials.School)}, "uname": {encryptField(credentials.Account)},
 		"password": {encryptField(credentials.Password)}, "refer": {"https%3A%2F%2Fi.chaoxing.com"},

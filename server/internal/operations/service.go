@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -25,6 +26,7 @@ type Options struct {
 	DecryptionKeys      [][]byte
 	ExportMaxBytes      int64
 	RetentionInterval   time.Duration
+	RequestTimeout      time.Duration
 	Runtime             map[string]any
 	DiskProtection      bool
 	RequireFreshBackup  bool
@@ -33,12 +35,25 @@ type Options struct {
 	QuestionConcurrency int
 	Export              func(context.Context, string) (map[string]any, error)
 	RevokeUser          func(context.Context, pgx.Tx, string) error
+	// Logger 记录后台清理与导出失败的安全分类码；未提供时不记录。
+	Logger *slog.Logger
+	// QuestionCleanup 由题库业务注入，保留其幂等、用量及异常状态语义。
+	QuestionCleanup func(context.Context) error
 }
 type Service struct {
 	pool          *pgxpool.Pool
 	options       Options
 	questionSlots chan struct{}
+	downloadSlots chan struct{}
+	failures      *failureLog
 }
+
+// maxConcurrentDownloads 限定同时解密并下载导出文件的请求数。
+// 导出密文与明文会在内存中同时存在，不设上限时并发下载会按请求数成倍占用内存。
+const maxConcurrentDownloads = 4
+
+// rollbackTimeout 限定未提交事务的回滚等待。
+const rollbackTimeout = 3 * time.Second
 
 func New(pool *pgxpool.Pool, options Options) (*Service, error) {
 	if pool == nil || len(options.Key) != 32 || options.DataDir == "" {
@@ -52,6 +67,13 @@ func New(pool *pgxpool.Pool, options Options) (*Service, error) {
 	}
 	if options.RetentionInterval == 0 {
 		options.RetentionInterval = 24 * time.Hour
+	}
+	// 维护接口的单次请求要有数据库时限：行锁等待或停滞查询不能无限占用连接池。
+	if options.RequestTimeout == 0 {
+		options.RequestTimeout = 15 * time.Second
+	}
+	if options.RequestTimeout < 50*time.Millisecond || options.RequestTimeout > 2*time.Minute {
+		return nil, fault.New("config_invalid", "维护接口请求时限无效")
 	}
 	if options.QuestionConcurrency == 0 {
 		options.QuestionConcurrency = 2
@@ -71,24 +93,38 @@ func New(pool *pgxpool.Pool, options Options) (*Service, error) {
 	}
 	options.Key = append([]byte(nil), options.Key...)
 	options.DecryptionKeys = keys
-	service := &Service{pool: pool, options: options, questionSlots: make(chan struct{}, options.QuestionConcurrency)}
+	service := &Service{pool: pool, options: options, questionSlots: make(chan struct{}, options.QuestionConcurrency), downloadSlots: make(chan struct{}, maxConcurrentDownloads), failures: &failureLog{logger: options.Logger, scope: "operations", interval: failureLogInterval}}
 	if service.options.Export == nil {
 		service.options.Export = service.ExportUserData
 	}
 	return service, nil
 }
 func (s *Service) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /admin/api/v1/audit-events", s.auditEvents)
-	mux.HandleFunc("GET /admin/api/v1/settings/runtime", s.runtimeSettings)
-	mux.HandleFunc("GET /admin/api/v1/maintenance", s.runtimeSettings)
-	mux.HandleFunc("POST /api/v1/me/data-exports", s.createExport)
-	mux.HandleFunc("GET /api/v1/me/data-exports", s.listExports)
-	mux.HandleFunc("GET /api/v1/me/data-exports/{id}", s.getExport)
-	mux.HandleFunc("GET /api/v1/me/data-exports/{id}/download", s.downloadExport)
-	mux.HandleFunc("POST /api/v1/me/deletion-requests", s.createDeletion)
-	mux.HandleFunc("GET /api/v1/me/deletion-requests", s.listDeletions)
-	mux.HandleFunc("GET /admin/api/v1/data-requests", s.adminRequests)
-	mux.HandleFunc("POST /admin/api/v1/data-requests/{id}/review", s.reviewDeletion)
+	routes := map[string]http.HandlerFunc{
+		"GET /admin/api/v1/audit-events":               s.auditEvents,
+		"GET /admin/api/v1/settings/runtime":           s.runtimeSettings,
+		"GET /admin/api/v1/maintenance":                s.runtimeSettings,
+		"POST /api/v1/me/data-exports":                 s.createExport,
+		"GET /api/v1/me/data-exports":                  s.listExports,
+		"GET /api/v1/me/data-exports/{id}":             s.getExport,
+		"GET /api/v1/me/data-exports/{id}/download":    s.downloadExport,
+		"POST /api/v1/me/deletion-requests":            s.createDeletion,
+		"GET /api/v1/me/deletion-requests":             s.listDeletions,
+		"GET /admin/api/v1/data-requests":              s.adminRequests,
+		"POST /admin/api/v1/data-requests/{id}/review": s.reviewDeletion,
+	}
+	for pattern, handler := range routes {
+		mux.Handle(pattern, s.bounded(handler))
+	}
+}
+
+// bounded 为每次维护请求设置有限数据库等待，超时由各处理器返回可重试错误。
+func (s *Service) bounded(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), s.options.RequestTimeout)
+		defer cancel()
+		next(w, r.WithContext(ctx))
+	}
 }
 
 type Disk struct {
@@ -208,6 +244,12 @@ func (s *Service) auditEvents(w http.ResponseWriter, r *http.Request) {
 	web.JSON(w, r, 200, map[string]any{"items": items, "next_cursor": next})
 }
 func (s *Service) Run(ctx context.Context) error {
+	// 启动后先执行一次有界清理：保留期长于进程存活时间的实例否则永远等不到第一次周期。
+	initial, cancelInitial := context.WithTimeout(ctx, 30*time.Second)
+	if err := s.Cleanup(initial); err != nil {
+		s.failures.report("retention", err)
+	}
+	cancelInitial()
 	work := time.NewTicker(time.Second)
 	defer work.Stop()
 	retention := time.NewTicker(s.options.RetentionInterval)
@@ -218,11 +260,15 @@ func (s *Service) Run(ctx context.Context) error {
 			return nil
 		case <-work.C:
 			job, cancel := context.WithTimeout(ctx, 15*time.Second)
-			_ = s.processExport(job)
+			if err := s.processExport(job); err != nil {
+				s.failures.report("export", err)
+			}
 			cancel()
 		case <-retention.C:
 			job, cancel := context.WithTimeout(ctx, 30*time.Second)
-			_ = s.Cleanup(job)
+			if err := s.Cleanup(job); err != nil {
+				s.failures.report("retention", err)
+			}
 			cancel()
 		}
 	}
@@ -239,4 +285,11 @@ func (s *Service) Prepare() error {
 }
 func (s *Service) record(ctx context.Context, tx pgx.Tx, actor web.Actor, action, resourceID, reason string) error {
 	return audit.Record(ctx, tx, audit.Event{Actor: actor, Action: action, ResourceType: "data_request", ResourceID: resourceID, Reason: strings.TrimSpace(reason), RequestID: web.RequestID(ctx)})
+}
+
+// rollbackTx 以有限时限回滚未提交事务：连接异常时不能无限占用连接与协程。
+func rollbackTx(tx pgx.Tx) {
+	ctx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
+	defer cancel()
+	_ = tx.Rollback(ctx)
 }

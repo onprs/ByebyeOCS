@@ -59,7 +59,7 @@ func (s *Service) createExport(w http.ResponseWriter, r *http.Request) {
 		web.Fail(w, r, fault.New("service_unavailable", "暂时无法申请导出"))
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	var count int
 	if tx.QueryRow(r.Context(), `SELECT count(*) FROM public.data_requests WHERE user_id=$1 AND kind='export' AND created_at>now()-interval '1 day'`, actor.ID).Scan(&count) != nil {
 		web.Error(w, r, 503, "service_unavailable", "无法读取导出请求")
@@ -116,7 +116,7 @@ func (s *Service) createDeletion(w http.ResponseWriter, r *http.Request) {
 		web.Error(w, r, 503, "service_unavailable", "暂时无法申请删除")
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	id := web.NewID()
 	var actual string
 	err = tx.QueryRow(r.Context(), `INSERT INTO public.data_requests(id,user_id,kind,status) VALUES($1,$2,'deletion','needs_review') ON CONFLICT(user_id,kind) WHERE status IN ('pending','processing','needs_review','deferred') DO UPDATE SET updated_at=data_requests.updated_at RETURNING id::text`, id, actor.ID).Scan(&actual)
@@ -255,6 +255,17 @@ func (s *Service) getExport(w http.ResponseWriter, r *http.Request) {
 	}
 	web.JSON(w, r, 200, item)
 }
+
+// acquireDownload 占用一个导出下载名额；满载时不排队，直接让客户端重试。
+func (s *Service) acquireDownload() (func(), bool) {
+	select {
+	case s.downloadSlots <- struct{}{}:
+		return func() { <-s.downloadSlots }, true
+	default:
+		return nil, false
+	}
+}
+
 func (s *Service) downloadExport(w http.ResponseWriter, r *http.Request) {
 	actor, ok := web.Require(w, r, "user", "")
 	if !ok {
@@ -269,6 +280,13 @@ func (s *Service) downloadExport(w http.ResponseWriter, r *http.Request) {
 		web.Error(w, r, 404, "not_found", "导出请求不存在")
 		return
 	}
+	release, ok := s.acquireDownload()
+	if !ok {
+		w.Header().Set("Retry-After", "3")
+		web.Error(w, r, 429, "rate_limited", "正在处理其他导出下载，请稍后重试")
+		return
+	}
+	defer release()
 	var state string
 	var expires *time.Time
 	var ciphertext []byte
@@ -342,7 +360,7 @@ func (s *Service) processExport(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	var id, user string
 	err = tx.QueryRow(ctx, `SELECT id::text,user_id::text FROM public.data_requests WHERE kind='export' AND status='pending' ORDER BY created_at,id LIMIT 1 FOR UPDATE SKIP LOCKED`).Scan(&id, &user)
 	if err == pgx.ErrNoRows {

@@ -114,7 +114,8 @@ func safeForkCode(code string) string {
 type ForkClient interface {
 	Answer(ctx context.Context, request ForkAnswerRequest, idempotencyKey string) (ForkAnswerResponse, error)
 	TestModel(ctx context.Context, providerRef, kind string, confirmCost bool) (ForkTestResult, error)
-	InvalidateCache(ctx context.Context, entryID, reason string) error
+	// InvalidateCache 返回 fork 是否真的标记了条目失效；已失效或已过期条目返回 false。
+	InvalidateCache(ctx context.Context, entryID, reason string) (bool, error)
 }
 
 type httpFork struct {
@@ -169,6 +170,10 @@ func (c *httpFork) doJSON(ctx context.Context, method, path, idempotencyKey stri
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return &ForkError{Code: "upstream_timeout", Message: "题库服务超时，结果未知", Status: 504, Retryable: true}
 		}
+		// 调用方取消表示上游可能已受理请求，不能当作可重试的确定失败。
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return &ForkError{Code: "request_cancelled", Message: "题库请求已取消，结果未知", Status: 504, Retryable: false}
+		}
 		return &ForkError{Code: "service_unavailable", Message: "题库服务不可用", Status: 503, Retryable: true}
 	}
 	defer response.Body.Close()
@@ -186,11 +191,8 @@ func (c *httpFork) doJSON(ctx context.Context, method, path, idempotencyKey stri
 		}
 		_ = json.Unmarshal(data, &envelope)
 		code := safeForkCode(envelope.Error.Code)
-		message := envelope.Error.Message
-		if message == "" {
-			message = "题库服务返回错误"
-		}
-		return &ForkError{Code: code, Message: message, Status: response.StatusCode, Retryable: envelope.Error.Retryable}
+		// 不保存或转发 fork 的自由文本；错误分类只依赖安全的机器码。
+		return &ForkError{Code: code, Message: "题库服务返回错误", Status: response.StatusCode, Retryable: envelope.Error.Retryable}
 	}
 	if target == nil {
 		return nil
@@ -214,13 +216,27 @@ func (c *httpFork) TestModel(ctx context.Context, providerRef, kind string, conf
 	return response, err
 }
 
-func (c *httpFork) InvalidateCache(ctx context.Context, entryID, reason string) error {
+type forkInvalidationResult struct {
+	Invalidated bool   `json:"invalidated"`
+	EntryID     string `json:"entry_id"`
+}
+
+func (c *httpFork) InvalidateCache(ctx context.Context, entryID, reason string) (bool, error) {
+	var response forkInvalidationResult
 	body := map[string]any{"entry_id": entryID, "reason": reason, "actor": "main-platform"}
-	return c.doJSON(ctx, http.MethodPost, "/internal/v1/cache/invalidations", "", body, nil)
+	if err := c.doJSON(ctx, http.MethodPost, "/internal/v1/cache/invalidations", "", body, &response); err != nil {
+		return false, err
+	}
+	if response.Invalidated && response.EntryID != entryID {
+		// fork 返回的条目与请求不一致时不能记为已失效。
+		return false, &ForkError{Code: "service_unavailable", Message: "题库缓存失效结果不匹配", Status: 502, Retryable: false}
+	}
+	return response.Invalidated, nil
 }
 
 // normalizeForkResponse 校验 fork 回归契约；总量矛盾时降级为待复核，不编造 token。
-func normalizeForkResponse(response *ForkAnswerResponse, requestID, offeringID, mode string) error {
+// maxCalls 是本次请求可能产生的调用上界：图片逐张转述加一次回答。
+func normalizeForkResponse(response *ForkAnswerResponse, requestID, offeringID, mode string, maxCalls int) error {
 	if response.RequestID != requestID {
 		return fault.New("service_unavailable", "题库响应与请求不匹配")
 	}
@@ -255,7 +271,7 @@ func normalizeForkResponse(response *ForkAnswerResponse, requestID, offeringID, 
 	default:
 		return fault.New("service_unavailable", "题库响应状态未知")
 	}
-	if !validUsage(response.Usage, response.Status == "cache_hit") {
+	if !validUsage(response.Usage, response.Status == "cache_hit", maxCalls) {
 		if response.Status == "cache_hit" {
 			return fault.New("service_unavailable", "题库缓存用量事实无效")
 		}
@@ -265,8 +281,11 @@ func normalizeForkResponse(response *ForkAnswerResponse, requestID, offeringID, 
 	return nil
 }
 
-func validUsage(usage Usage, cacheHit bool) bool {
-	if len(usage.Calls) > 4 {
+func validUsage(usage Usage, cacheHit bool, maxCalls int) bool {
+	if maxCalls < 1 {
+		maxCalls = 1
+	}
+	if len(usage.Calls) > maxCalls {
 		return false
 	}
 	if cacheHit {

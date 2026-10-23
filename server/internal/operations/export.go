@@ -15,7 +15,7 @@ func (s *Service) ExportUserData(ctx context.Context, userID string) (map[string
 	if err != nil {
 		return nil, fault.New("service_unavailable", "暂时无法读取个人数据")
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	sections := []struct{ name, query string }{
 		{"profile", `SELECT jsonb_build_object('id',id,'status',status,'created_at',created_at,'updated_at',updated_at) FROM public.users WHERE id=$1`},
 		{"preferences", `SELECT jsonb_build_object('color_scheme',color_scheme,'theme_mode',theme_mode,'notifications',jsonb_build_object('task_attention',notify_task_attention,'wallet_changes',notify_wallet_changes),'version',version) FROM public.user_preferences WHERE user_id=$1`},

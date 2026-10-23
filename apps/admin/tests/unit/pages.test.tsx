@@ -194,4 +194,38 @@ describe('账号与任务页面', () => {
     expect(within(operationDialog).getByText('请填写操作原因，便于后续审计。')).toBeInTheDocument()
     expect(api.runTaskOperation).not.toHaveBeenCalled()
   })
+
+  it('切换任务时不展示上一任务详情，避免对错误任务执行操作', async () => {
+    const user = userEvent.setup()
+    const secondTask = { ...taskSummary, id: 'task_2', title: '第二个任务' }
+    const secondDetail: TaskDetail = { ...taskDetail, id: 'task_2', title: '第二个任务' }
+    api.listTasks.mockResolvedValue({
+      data: { items: [taskSummary, secondTask], next_cursor: null },
+      etag: null,
+    })
+    let resolveSecond: (value: { data: TaskDetail; etag: null }) => void = () => undefined
+    const secondPending = new Promise<{ data: TaskDetail; etag: null }>(resolve => {
+      resolveSecond = resolve
+    })
+    api.getTask.mockImplementation((id: string) =>
+      id === 'task_2' ? secondPending : Promise.resolve({ data: taskDetail, etag: null }),
+    )
+
+    renderPage('/tasks', <TasksPage />)
+    await screen.findByText('设计思维章节任务')
+    await user.click(screen.getByRole('button', { name: '查看任务 设计思维章节任务' }))
+    let drawer = await screen.findByRole('dialog')
+    expect(await within(drawer).findByText('执行观察')).toBeInTheDocument()
+
+    await user.click(within(drawer).getByRole('button', { name: '关闭' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: '查看任务 第二个任务' }))
+    drawer = await screen.findByRole('dialog')
+    expect(within(drawer).queryByText('执行观察')).not.toBeInTheDocument()
+    expect(within(drawer).getByLabelText('正在加载')).toBeInTheDocument()
+
+    resolveSecond({ data: secondDetail, etag: null })
+    expect(await within(drawer).findByText('第二个任务')).toBeInTheDocument()
+  })
 })

@@ -60,8 +60,12 @@ class AuthController extends Notifier<AuthState> {
   bool _disposed = false;
   bool _bootstrapping = false;
 
+  /// 会话代次：切换服务、退出或登录后，早先的身份请求不得改写当前状态。
+  int _authEpoch = 0;
+
   @override
   AuthState build() {
+    _authEpoch++;
     ref.onDispose(() => _disposed = true);
     final server = ref.watch(serverConfigProvider);
     if (!server.loaded) {
@@ -79,6 +83,7 @@ class AuthController extends Notifier<AuthState> {
   Future<void> bootstrap() async {
     if (_bootstrapping || _disposed) return;
     _bootstrapping = true;
+    final epoch = ++_authEpoch;
     if (state.status != AuthStatus.authenticated) {
       state = state.copyWith(
         status: AuthStatus.loading,
@@ -90,16 +95,18 @@ class AuthController extends Notifier<AuthState> {
     final session = ref.read(sessionManagerProvider);
     try {
       final sessionStatus = await repository.fetchSessionStatus();
+      if (_disposed || epoch != _authEpoch) return;
       var capabilities = Capabilities.parse(sessionStatus.capabilities);
       try {
         final transport = await repository.fetchCapabilities();
+        if (_disposed || epoch != _authEpoch) return;
         capabilities = capabilities.merge(transport);
       } catch (_) {
         // 管理能力接口暂不可用不影响已验证的身份会话。
       }
       session.resetExpiredNotification();
       if (!sessionStatus.authenticated) {
-        if (_disposed) return;
+        if (_disposed || epoch != _authEpoch) return;
         state = AuthState(
           status: AuthStatus.anonymous,
           capabilities: capabilities,
@@ -107,13 +114,14 @@ class AuthController extends Notifier<AuthState> {
         return;
       }
       final me = await repository.fetchMe();
+      if (_disposed || epoch != _authEpoch) return;
       PreferencesSnapshot? preferences;
       try {
         preferences = await repository.fetchPreferences();
       } on ApiException catch (error) {
         if (error.isUnauthenticated) rethrow;
       }
-      if (_disposed) return;
+      if (_disposed || epoch != _authEpoch) return;
       final bumpEpoch = state.user?.id != me.id;
       state = AuthState(
         status: AuthStatus.authenticated,
@@ -130,10 +138,10 @@ class AuthController extends Notifier<AuthState> {
             version: preferences.effectiveVersion);
       }
     } on ApiException catch (error) {
-      if (_disposed) return;
+      if (_disposed || epoch != _authEpoch) return;
       if (error.isUnauthenticated) {
         await session.clear();
-        if (_disposed) return;
+        if (_disposed || epoch != _authEpoch) return;
         state = AuthState(
           status: AuthStatus.anonymous,
           capabilities: state.capabilities,
@@ -147,7 +155,7 @@ class AuthController extends Notifier<AuthState> {
         );
       }
     } catch (_) {
-      if (_disposed) return;
+      if (_disposed || epoch != _authEpoch) return;
       state = state.copyWith(
         status: AuthStatus.unavailable,
         error: const ApiException(
@@ -160,20 +168,23 @@ class AuthController extends Notifier<AuthState> {
       );
     } finally {
       _bootstrapping = false;
-      if (!_disposed && state.busy) {
+      if (!_disposed && epoch == _authEpoch && state.busy) {
         state = state.copyWith(busy: false);
       }
     }
   }
 
   Future<void> completeLogin(LoginResult result) async {
+    final epoch = ++_authEpoch;
     final repository = ref.read(authRepositoryProvider);
     var capabilities = state.capabilities;
     try {
       final sessionStatus = await repository.fetchSessionStatus();
+      if (_disposed || epoch != _authEpoch) return;
       capabilities = Capabilities.parse(sessionStatus.capabilities);
       try {
         final transport = await repository.fetchCapabilities();
+        if (_disposed || epoch != _authEpoch) return;
         capabilities = capabilities.merge(transport);
       } catch (_) {}
     } catch (_) {}
@@ -181,11 +192,12 @@ class AuthController extends Notifier<AuthState> {
     PreferencesSnapshot? preferences;
     try {
       user = await repository.fetchMe();
+      if (_disposed || epoch != _authEpoch) return;
       preferences = await repository.fetchPreferences();
     } catch (_) {
       // 登录已成功时仍以会话事实进入；各页面会独立展示数据加载错误。
     }
-    if (_disposed) return;
+    if (_disposed || epoch != _authEpoch) return;
     ref.read(sessionEpochProvider.notifier).bump();
     state = AuthState(
       status: AuthStatus.authenticated,
@@ -201,13 +213,14 @@ class AuthController extends Notifier<AuthState> {
   }
 
   Future<void> refreshAccount() async {
+    final epoch = _authEpoch;
     final repository = ref.read(authRepositoryProvider);
     try {
       final me = await repository.fetchMe();
-      if (_disposed) return;
+      if (_disposed || epoch != _authEpoch) return;
       state = state.copyWith(user: me, clearError: true);
     } on ApiException catch (error) {
-      if (_disposed) return;
+      if (_disposed || epoch != _authEpoch) return;
       if (error.isUnauthenticated) {
         await _handleExpired();
       } else {
@@ -218,6 +231,7 @@ class AuthController extends Notifier<AuthState> {
 
   /// 切换服务前必须调用：清除旧令牌、会话与用户级缓存，再允许写入新地址。
   Future<void> clearForServerChange() async {
+    ++_authEpoch;
     await ref.read(sessionManagerProvider).clear();
     if (_disposed) return;
     ref.read(sessionEpochProvider.notifier).bump();
@@ -230,6 +244,7 @@ class AuthController extends Notifier<AuthState> {
 
   /// 删除申请提交后服务端已撤销会话；本机立即退出，由申请回执页展示最后已知状态。
   Future<void> endSessionAfterDeletion() async {
+    ++_authEpoch;
     await ref.read(sessionManagerProvider).clear();
     if (_disposed) return;
     ref.read(sessionEpochProvider.notifier).bump();
@@ -241,6 +256,7 @@ class AuthController extends Notifier<AuthState> {
 
   Future<void> logout() async {
     if (state.busy) return;
+    ++_authEpoch;
     state = state.copyWith(busy: true, clearError: true);
     String? notice;
     try {
@@ -262,6 +278,7 @@ class AuthController extends Notifier<AuthState> {
 
   Future<void> _handleExpired() async {
     if (_disposed) return;
+    ++_authEpoch;
     await ref.read(sessionManagerProvider).clear();
     if (_disposed) return;
     ref.read(sessionEpochProvider.notifier).bump();

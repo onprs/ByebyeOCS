@@ -183,6 +183,17 @@ func (s *Service) createAdminSession(ctx context.Context, tx pgx.Tx, adminID str
 		AbsoluteExpiresAt: absolute, SessionID: sessionID}, nil
 }
 
+// activeUserSessionCondition 是“在用用户会话”的统一判定。
+//
+// App 会话的访问令牌只有 AppAccessTTL（默认 15 分钟），但刷新链可续期到 RefreshTTL。
+// 只看 expires_at 会把仍可续期的会话排除在配额之外，使单主体会话上限通过
+// “等访问令牌过期后再登录”被绕过，也会让过期会话行持续累积。
+const activeUserSessionCondition = `user_id = $1 AND status = 'active' AND (
+	expires_at > $2 OR (channel = 'app' AND EXISTS (
+		SELECT 1 FROM public.refresh_tokens rt
+		WHERE rt.session_id = client_sessions.id
+		  AND rt.revoked_at IS NULL AND rt.expires_at > $2)))`
+
 // enforceUserSessionQuota 在登录事务内锁定用户行，超限时撤销最旧的在用会话。
 // 会话配额是硬容量上限，不能只靠列表截断。App 会话被淘汰时同时吊销刷新链。
 func (s *Service) enforceUserSessionQuota(ctx context.Context, tx pgx.Tx, userID string, now time.Time) error {
@@ -191,16 +202,16 @@ func (s *Service) enforceUserSessionQuota(ctx context.Context, tx pgx.Tx, userID
 		return fault.New("service_unavailable", "无法锁定用户会话配额")
 	}
 	var count int
-	if err := tx.QueryRow(ctx, `SELECT count(*) FROM public.client_sessions
-		WHERE user_id = $1 AND status = 'active' AND expires_at > $2`, userID, now).Scan(&count); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM public.client_sessions WHERE `+
+		activeUserSessionCondition, userID, now).Scan(&count); err != nil {
 		return fault.New("service_unavailable", "无法统计用户会话")
 	}
 	over := count - s.options.MaxSessionsPerSubject + 1
 	if over <= 0 {
 		return nil
 	}
-	rows, err := tx.Query(ctx, `SELECT id::text, channel FROM public.client_sessions
-		WHERE user_id = $1 AND status = 'active' AND expires_at > $2
+	rows, err := tx.Query(ctx, `SELECT id::text, channel FROM public.client_sessions WHERE `+
+		activeUserSessionCondition+`
 		ORDER BY last_seen_at ASC, created_at ASC, id
 		LIMIT $3`, userID, now, over)
 	if err != nil {
@@ -279,12 +290,24 @@ func (s *Service) enforceAdminSessionQuota(ctx context.Context, tx pgx.Tx, admin
 }
 
 // rotateClientSession 轮换 Web 会话：新记录继承绝对到期时间，旧记录标记为已轮换。
+// 先以条件更新占用旧会话，保证同一会话的并发轮换只能成功一次；否则每个并发请求都会
+// 插入一个新会话，绕过单主体会话上限。
 func (s *Service) rotateClientSession(ctx context.Context, tx pgx.Tx, previous sessionState, now time.Time) (issuedCredential, error) {
 	if previous.Channel != ChannelWeb {
 		return issuedCredential{}, fault.New("forbidden", "该会话不支持 Web 轮换")
 	}
 	if !previous.AbsoluteExpiresAt.After(now) {
 		return issuedCredential{}, fault.New("unauthenticated", "登录已过期，请重新验证身份")
+	}
+	tag, err := tx.Exec(ctx, `UPDATE public.client_sessions
+		SET status = 'revoked', revoked_at = $2, revoke_reason = 'rotated', updated_at = $2
+		WHERE id = $1 AND status = 'active'`, previous.ID, now)
+	if err != nil {
+		return issuedCredential{}, fault.New("service_unavailable", "无法轮换会话，请稍后重试")
+	}
+	if tag.RowsAffected() != 1 {
+		// 并发轮换或登出已占用旧会话：失败关闭，不再派生额外会话。
+		return issuedCredential{}, fault.New("unauthenticated", "登录已失效，请重新验证身份")
 	}
 	newID := web.NewID()
 	if !validUUID(newID) {
@@ -307,19 +330,24 @@ func (s *Service) rotateClientSession(ctx context.Context, tx pgx.Tx, previous s
 		now, previous.AbsoluteExpiresAt, previous.ID); err != nil {
 		return issuedCredential{}, fault.New("service_unavailable", "无法轮换会话，请稍后重试")
 	}
-	if _, err := tx.Exec(ctx, `UPDATE public.client_sessions
-		SET status = 'revoked', revoked_at = $2, revoke_reason = 'rotated', updated_at = $2
-		WHERE id = $1 AND status = 'active'`, previous.ID, now); err != nil {
-		return issuedCredential{}, fault.New("service_unavailable", "无法撤销旧会话，请稍后重试")
-	}
 	return issuedCredential{Token: token, CSRF: csrf, ExpiresAt: previous.AbsoluteExpiresAt,
 		AbsoluteExpiresAt: previous.AbsoluteExpiresAt, SessionID: newID}, nil
 }
 
 // rotateAdminSession 轮换管理员 Web 会话，保持原有新鲜验证时间。
+// 与用户端一致，先条件占用旧会话，并发轮换只允许一个成功。
 func (s *Service) rotateAdminSession(ctx context.Context, tx pgx.Tx, previous sessionState, now time.Time) (issuedCredential, error) {
 	if !previous.AbsoluteExpiresAt.After(now) {
 		return issuedCredential{}, fault.New("unauthenticated", "登录已过期，请重新验证身份")
+	}
+	tag, err := tx.Exec(ctx, `UPDATE public.admin_sessions
+		SET status = 'revoked', revoked_at = $2, revoke_reason = 'rotated', updated_at = $2
+		WHERE id = $1 AND status = 'active'`, previous.ID, now)
+	if err != nil {
+		return issuedCredential{}, fault.New("service_unavailable", "无法轮换管理员会话，请稍后重试")
+	}
+	if tag.RowsAffected() != 1 {
+		return issuedCredential{}, fault.New("unauthenticated", "登录已失效，请重新验证身份")
 	}
 	newID := web.NewID()
 	if !validUUID(newID) {
@@ -337,11 +365,6 @@ func (s *Service) rotateAdminSession(ctx context.Context, tx pgx.Tx, previous se
 		newID, previous.SubjectID, digest, s.csrfDigest(newID), previous.AuthenticatedAt,
 		previous.StepUpAt, now, previous.AbsoluteExpiresAt, previous.ID); err != nil {
 		return issuedCredential{}, fault.New("service_unavailable", "无法轮换管理员会话，请稍后重试")
-	}
-	if _, err := tx.Exec(ctx, `UPDATE public.admin_sessions
-		SET status = 'revoked', revoked_at = $2, revoke_reason = 'rotated', updated_at = $2
-		WHERE id = $1 AND status = 'active'`, previous.ID, now); err != nil {
-		return issuedCredential{}, fault.New("service_unavailable", "无法撤销旧管理员会话，请稍后重试")
 	}
 	return issuedCredential{Token: token, CSRF: csrf, ExpiresAt: previous.AbsoluteExpiresAt,
 		AbsoluteExpiresAt: previous.AbsoluteExpiresAt, SessionID: newID}, nil

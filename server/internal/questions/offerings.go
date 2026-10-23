@@ -209,6 +209,10 @@ func validateOfferingInput(input *offeringInput) error {
 	default:
 		return fault.New("validation_failed", "模型健康状态无效")
 	}
+	if input.Default != nil && *input.Default && input.Health == "unavailable" {
+		// 用户查询会跳过不可用条目；默认条目保持不可用会让默认解析失败并占住唯一默认位。
+		return fault.New("validation_failed", "不可用的模型不能设为默认")
+	}
 	if len(input.PriceVersion) > 64 {
 		return fault.New("validation_failed", "价格版本过长")
 	}
@@ -254,7 +258,7 @@ func (s *Service) adminCreateOffering(w http.ResponseWriter, r *http.Request) {
 		web.Error(w, r, 503, "service_unavailable", "无法保存模型条目")
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	if isDefault {
 		if _, err := tx.Exec(r.Context(), `UPDATE public.question_offerings SET is_default = false,
 			version = version + 1, updated_at = now() WHERE is_default`); err != nil {
@@ -382,7 +386,7 @@ func (s *Service) adminPatchOffering(w http.ResponseWriter, r *http.Request) {
 		web.Error(w, r, 503, "service_unavailable", "无法更新模型条目")
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	current, err := scanOffering(tx.QueryRow(r.Context(), `SELECT `+offeringColumns+`
 		FROM public.question_offerings WHERE public_id = $1 FOR UPDATE`, publicID))
 	if err == pgx.ErrNoRows {
@@ -553,7 +557,7 @@ func (s *Service) adminTestOffering(w http.ResponseWriter, r *http.Request) {
 		web.Error(w, r, 503, "service_unavailable", "无法记录模型测试结果")
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	testID := web.NewID()
 	if _, err := tx.Exec(r.Context(), `INSERT INTO public.question_model_tests
 		(id, offering_id, actor_admin_id, kind, status, error_code, latency_ms, cost_confirmed)

@@ -32,10 +32,25 @@ normalize_path() {
 
 validate_user_name() {
   [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || die "服务用户名称无效：$1"
+  [[ "$1" != root ]] || die "服务用户不能是 root：$1"
 }
 
 safe_version() {
   [[ "$1" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$ ]] || die "版本号无效：$1"
+}
+
+# 拒绝把整个系统目录当作可安装、可写或可删除的部署路径。
+WIDE_PATHS=(/ /etc /usr /var /opt /home /root /tmp /srv /boot /bin /sbin /lib /lib32 /lib64 /proc /sys /dev /run /mnt /media /usr/local /usr/share /usr/lib /etc/systemd /etc/ssh /var/lib /var/log /var/backups /var/cache /var/tmp)
+reject_wide_path() {
+  local label=$1 path=$2 candidate
+  for candidate in "${WIDE_PATHS[@]}"; do
+    [[ "$path" != "$candidate" ]] || die "拒绝使用过宽的${label}：$path"
+  done
+}
+
+# 卸载清理还会删除目录内容；共享系统目录已在 WIDE_PATHS 中拒绝。
+reject_purge_path() {
+  reject_wide_path "$1" "$2"
 }
 
 read_manifest_field() {
@@ -122,10 +137,95 @@ create_owned_dir() {
 
 load_install_state() {
   local prefix=$1
+  INSTALL_STATE_LOADED=0
   if [[ -r "$prefix/install.env" ]]; then
     # shellcheck disable=SC1090
     source "$prefix/install.env"
+    INSTALL_STATE_LOADED=1
   fi
+}
+
+# 升级/回滚依赖状态文件中的配置、数据和用户路径；缺失时不得按默认值猜。
+require_install_state() {
+  local prefix=$1
+  [[ "${INSTALL_STATE_LOADED:-0}" == 1 ]] || die "缺少安装状态文件：$prefix/install.env；请重新执行 install.sh 或人工确认路径"
+}
+
+# 安装/升级共用锁：同一 PREFIX 上同时只允许一个包管理操作。
+lock_prefix() {
+  local prefix=$1
+  require_cmd flock
+  if [[ ! -d "$prefix" ]]; then
+    install -d -m 0755 "$prefix" || die "无法创建程序目录：$prefix"
+  fi
+  exec 8>"$prefix/.deploy.lock" || die "无法创建部署锁：$prefix/.deploy.lock"
+  chmod 0600 "$prefix/.deploy.lock" 2>/dev/null || true
+  flock -n 8 || die "另一个安装/升级/回滚/卸载操作正在使用：$prefix"
+}
+
+# 持有 PREFIX 锁之后才能调用：清理被中断进程留下的内部临时文件。
+cleanup_stale_prefix_artifacts() {
+  local prefix=$1 path
+  for path in "$prefix"/.release.* "$prefix"/.current.* "$prefix"/.install.env.*; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      rm -rf -- "$path"
+    fi
+  done
+}
+
+# 临时路径登记；脚本退出或被信号终止时统一清理。
+TEMP_PATHS=()
+register_temp_path() {
+  if [[ -n "${1:-}" ]]; then
+    TEMP_PATHS+=("$1")
+  fi
+}
+forget_temp_path() {
+  local target=${1:-} i
+  [[ -n "$target" ]] || return 0
+  for i in "${!TEMP_PATHS[@]}"; do
+    if [[ "${TEMP_PATHS[$i]}" == "$target" ]]; then
+      unset 'TEMP_PATHS[i]'
+    fi
+  done
+}
+cleanup_temp_paths() {
+  local path
+  if [[ ${#TEMP_PATHS[@]} -gt 0 ]]; then
+    for path in "${TEMP_PATHS[@]}"; do
+      if [[ -n "$path" ]]; then
+        rm -rf -- "$path"
+      fi
+    done
+  fi
+  TEMP_PATHS=()
+}
+
+# 强制替换若在两次 rename 之间中断，把旧版本目录恢复到目标位置。
+restore_replaced_releases() {
+  local prefix=$1 replaced target version
+  for replaced in "$prefix"/.replaced.*; do
+    if [[ ! -e "$replaced" && ! -L "$replaced" ]]; then
+      continue
+    fi
+    version=${replaced#"$prefix/.replaced."}
+    target="$prefix/releases/$version"
+    if [[ ! -e "$target" ]]; then
+      mv -T -- "$replaced" "$target" || true
+    else
+      rm -rf -- "$replaced"
+    fi
+  done
+}
+
+current_release_dir() {
+  local prefix=$1 resolved
+  [[ -L "$prefix/current" ]] || die "未发现已安装的 current 符号链接：$prefix/current"
+  resolved=$(readlink -f "$prefix/current" 2>/dev/null || true)
+  case "$resolved" in
+    "$prefix/releases/"*) printf '%s\n' "$resolved" ;;
+    *) die "current 指向安装目录之外，拒绝操作" ;;
+  esac
 }
 
 switch_current() {
@@ -150,31 +250,56 @@ switch_current() {
 
 install_release_tree() {
   local root=$1 prefix=$2 version=$3 force=${4:-0}
-  local target="$prefix/releases/$version" tmp="$prefix/.release.$$"
-  if [[ -d "$target" ]]; then
-    if [[ "$force" == 1 ]]; then
-      rm -rf -- "$target"
+  local target="$prefix/releases/$version"
+  local replaced="$prefix/.replaced.$version"
+  local tmp
+  # 上一次强制替换可能在移动旧目录后中断；先恢复旧目录，避免 current 悬空。
+  if [[ -e "$replaced" || -L "$replaced" ]]; then
+    if [[ ! -e "$target" ]]; then
+      mv -T -- "$replaced" "$target"
+      log "已恢复上次中断替换的版本目录：$version"
     else
-      verify_installed_release "$target"
-      [[ "$(read_manifest_field "$target" version)" == "$version" ]] || die "已安装版本清单不一致"
-      log "版本 $version 已存在且校验一致，复用现有目录"
-      return 0
+      rm -rf -- "$replaced"
     fi
   fi
-  rm -rf -- "$tmp"
-  mkdir -p -- "$tmp"
+  if [[ -e "$target" && ! -d "$target" ]]; then
+    die "版本路径已存在且不是目录：$target"
+  fi
+  if [[ -d "$target" && "$force" != 1 ]]; then
+    verify_installed_release "$target"
+    [[ "$(read_manifest_field "$target" version)" == "$version" ]] || die "已安装版本清单不一致"
+    log "版本 $version 已存在且校验一致，复用现有目录"
+    return 0
+  fi
+  tmp=$(mktemp -d "$prefix/.release.XXXXXXXX")
+  register_temp_path "$tmp"
   cp -a -- "$root/." "$tmp/"
   # 发布目录只含公开程序/静态资源，服务用户必须能够遍历目录并读取文件。
   # 私密配置和数据位于版本目录外，继续使用各自的0700/0600权限。
   chmod -R a+rX -- "$tmp"
   verify_installed_release "$tmp"
-  mv -T -- "$tmp" "$target"
+  # 新目录完整校验后再移动旧目录；两次 rename 之间中断可由调用方 trap 恢复。
+  if [[ -e "$target" ]]; then
+    rm -rf -- "$replaced"
+    mv -T -- "$target" "$replaced"
+  fi
+  if ! mv -T -- "$tmp" "$target"; then
+    if [[ -e "$replaced" && ! -e "$target" ]]; then
+      mv -T -- "$replaced" "$target" || true
+    fi
+    die "无法启用版本目录：$target"
+  fi
+  forget_temp_path "$tmp"
+  if [[ -e "$replaced" ]]; then
+    rm -rf -- "$replaced"
+  fi
 }
 
 install_unit_file() {
   local template=$1 destination=$2
   local rendered
   rendered=$(mktemp)
+  register_temp_path "$rendered"
   sed \
     -e "s|@PREFIX@|$PREFIX|g" \
     -e "s|@CONFIG_DIR@|$CONFIG_DIR|g" \
@@ -185,6 +310,7 @@ install_unit_file() {
     "$template" >"$rendered"
   install -m 0644 "$rendered" "$destination"
   rm -f -- "$rendered"
+  forget_temp_path "$rendered"
 }
 
 install_units() {

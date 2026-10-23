@@ -27,6 +27,7 @@ type Service struct {
 	closed  bool
 	started bool
 	runCtx  context.Context
+	workers sync.WaitGroup
 }
 
 func New(pool *pgxpool.Pool, options *Options) (*Service, error) {
@@ -51,7 +52,7 @@ func (s *Service) withTx(ctx context.Context, fn func(pgx.Tx) error) error {
 	if err != nil {
 		return errServiceUnavailable
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackLearningTx(tx)
 	if err := fn(tx); err != nil {
 		return err
 	}
@@ -59,6 +60,13 @@ func (s *Service) withTx(ctx context.Context, fn func(pgx.Tx) error) error {
 		return errServiceUnavailable
 	}
 	return nil
+}
+
+// rollbackLearningTx 在请求已取消时仍清理事务，并限制失联数据库的清理等待。
+func rollbackLearningTx(tx pgx.Tx) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	_ = tx.Rollback(ctx)
 }
 
 type txFunc func(pgx.Tx) error
@@ -285,13 +293,27 @@ func (s *Service) accountBlocked(item accountRecord, now time.Time) string {
 	return ""
 }
 
-// resolveSession 通过认证服务取得平台会话；失败分类为需要重新验证。
+// resolveSession 区分需要重新登录与本地服务暂时不可用，避免临时故障永久阻断账号。
 func (s *Service) resolveSession(ctx context.Context, userID string) ([]byte, error) {
 	if s.opts.Sessions == nil {
 		return nil, Fail(FailureCapabilityMissing, "平台会话解析未配置")
 	}
 	session, err := s.opts.Sessions.PlatformSession(ctx, userID)
-	if err != nil || len(session) == 0 {
+	if ctx.Err() == context.Canceled || errors.Is(err, context.Canceled) {
+		return nil, Fail(FailureStopped, "平台会话读取已停止")
+	}
+	if err != nil {
+		var classified *Failure
+		if errors.As(err, &classified) {
+			return nil, classified
+		}
+		code, _ := fault.Describe(err)
+		if code == "platform_session_unavailable" {
+			return nil, Fail(FailureIdentityInvalid, "平台会话不可用，需要重新验证")
+		}
+		return nil, Fail(FailureTransient, "平台会话暂不可读取，请稍后重试")
+	}
+	if len(session) == 0 {
 		return nil, Fail(FailureIdentityInvalid, "平台会话不可用，需要重新验证")
 	}
 	return session, nil
@@ -318,11 +340,15 @@ func (s *Service) blockAccount(ctx context.Context, tx pgx.Tx, userID, code, rea
 }
 
 func truncate(value string, max int) string {
-	value = strings.TrimSpace(value)
-	if len(value) <= max {
-		return value
+	value = strings.TrimSpace(strings.ToValidUTF8(value, "\uFFFD"))
+	count := 0
+	for offset := range value {
+		if count == max {
+			return value[:offset]
+		}
+		count++
 	}
-	return value[:max]
+	return value
 }
 
 // safeReason 防止把换行、控制字符写入审计或错误码。

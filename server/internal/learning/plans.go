@@ -312,71 +312,15 @@ func (s *Service) createOrUpdatePlan(ctx context.Context, actor Actor, actorKind
 }
 
 func (s *Service) readPlanTx(ctx context.Context, tx pgx.Tx, planID, userID string) (PlanView, error) {
-	var item PlanView
-	var revisionID string
-	var courseIDs []string
-	var scopeKind string
-	var chapterIDs []string
-	var taskTypes []string
-	var policyEnabled, manualConfirmation bool
-	var modelOffering *string
-	var policyMode string
-	err := tx.QueryRow(ctx, `SELECT p.id::text, p.name, p.status, p.version, p.priority,
-		p.current_revision_id::text, p.created_at, p.updated_at,
-		r.course_ids::text[], r.scope_kind, r.chapter_ids::text[], r.task_types,
-		r.question_policy_enabled, r.question_model_offering_id, r.question_mode, r.require_manual_confirmation
-		FROM public.learning_plans p
-		JOIN public.learning_plan_revisions r ON r.id = p.current_revision_id AND r.user_id = p.user_id
-		WHERE p.id = $1 AND p.user_id = $2`, planID, userID).Scan(
-		&item.ID, &item.Name, &item.Status, &item.Version, &item.Priority, &revisionID,
-		&item.CreatedAt, &item.UpdatedAt, &courseIDs, &scopeKind, &chapterIDs, &taskTypes,
-		&policyEnabled, &modelOffering, &policyMode, &manualConfirmation)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return item, errNotFound
-	}
+	item, err := s.scanPlanView(tx.QueryRow(ctx, planViewSelect+` WHERE p.id=$1 AND p.user_id=$2`, planID, userID))
 	if err != nil {
-		return item, errServiceUnavailable
+		return item, err
 	}
-	item.CurrentRevisionID = revisionID
-	item.TaskTypes = taskTypes
-	item.Scope = PlanScopeView{Kind: scopeKind, CourseIDs: courseIDs}
-	item.QuestionPolicy = QuestionPolicyView{
-		Enabled: policyEnabled, ModelOfferingID: modelOffering, AnswerMode: policyMode,
-		RequireManualConfirmation: false,
-		ExecutionAvailable:        s.questionExecutionAvailable(),
-		SubmissionAvailable:       s.questionExecutionAvailable(),
+	items := []PlanView{item}
+	if err := populatePlanChapters(ctx, tx, userID, items); err != nil {
+		return PlanView{}, err
 	}
-	if scopeKind == "selected" && len(chapterIDs) > 0 {
-		// 计划的选定范围保存章节行标识；快照重建或旧数据可能指向历史行。
-		// 这里按稳定外部章节标识解析到当前快照行，避免编辑安排时写回旧标识。
-		rows, err := tx.Query(ctx, `SELECT DISTINCT c.course_id::text, COALESCE(cur.id, c.id)::text
-			FROM public.learning_chapters c
-			LEFT JOIN LATERAL (
-				SELECT ch.id
-				FROM public.learning_chapters ch
-				JOIN public.learning_courses lc ON lc.id = ch.course_id AND lc.user_id = ch.user_id
-				WHERE ch.course_id = c.course_id AND ch.user_id = c.user_id
-				  AND ch.external_id = c.external_id AND ch.snapshot_version = lc.snapshot_version
-				LIMIT 1
-			) cur ON true
-			WHERE c.id = ANY($1::uuid[]) AND c.user_id = $2
-			ORDER BY 1, 2`, chapterIDs, userID)
-		if err != nil {
-			return item, errServiceUnavailable
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var chapter PlanChapter
-			if err := rows.Scan(&chapter.CourseID, &chapter.ChapterID); err != nil {
-				return item, errServiceUnavailable
-			}
-			item.Scope.Chapters = append(item.Scope.Chapters, chapter)
-		}
-		if err := rows.Err(); err != nil {
-			return item, errServiceUnavailable
-		}
-	}
-	return item, nil
+	return items[0], nil
 }
 
 func (s *Service) ListPlans(ctx context.Context, actor Actor, filter PlanFilter) (Page[PlanView], error) {
@@ -385,41 +329,32 @@ func (s *Service) ListPlans(ctx context.Context, actor Actor, filter PlanFilter)
 	if err != nil {
 		return Page[PlanView]{}, err
 	}
-	rows, err := s.pool.Query(ctx, `SELECT id::text, updated_at FROM public.learning_plans
-		WHERE user_id = $1 AND ($2::timestamptz IS NULL OR (created_at, id) < ($2::timestamptz, $3::uuid))
-		ORDER BY created_at DESC, id DESC LIMIT $4`, actor.ID, nullableTime(position.Time), nullableID(position.ID), limit+1)
+	rows, err := s.pool.Query(ctx, planViewSelect+`
+		WHERE p.user_id=$1 AND ($2::timestamptz IS NULL OR (p.created_at,p.id)<($2::timestamptz,$3::uuid))
+		ORDER BY p.created_at DESC,p.id DESC LIMIT $4`, actor.ID, nullableTime(position.Time), nullableID(position.ID), limit+1)
 	if err != nil {
 		return Page[PlanView]{}, errServiceUnavailable
 	}
 	defer rows.Close()
-	ids := make([]string, 0, limit+1)
+	items := make([]PlanView, 0, limit+1)
 	for rows.Next() {
-		var id string
-		var ignored time.Time
-		if err := rows.Scan(&id, &ignored); err != nil {
-			return Page[PlanView]{}, errServiceUnavailable
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return Page[PlanView]{}, errServiceUnavailable
-	}
-	items := make([]PlanView, 0, len(ids))
-	for _, id := range ids {
-		item, err := s.GetPlan(ctx, actor, id)
+		item, err := s.scanPlanView(rows)
 		if err != nil {
 			return Page[PlanView]{}, err
 		}
 		items = append(items, item)
 	}
+	if rows.Err() != nil {
+		return Page[PlanView]{}, errServiceUnavailable
+	}
 	page := Page[PlanView]{Items: items}
 	if len(items) > limit {
 		page.Items = items[:limit]
-		var createdAt time.Time
-		if err := s.pool.QueryRow(ctx, `SELECT created_at FROM public.learning_plans WHERE id = $1`, ids[limit-1]).Scan(&createdAt); err != nil {
-			return Page[PlanView]{}, errServiceUnavailable
-		}
-		page.NextCursor = encodeCursor(createdAt, ids[limit-1])
+		last := page.Items[limit-1]
+		page.NextCursor = encodeCursor(last.CreatedAt, last.ID)
+	}
+	if err := populatePlanChapters(ctx, s.pool, actor.ID, page.Items); err != nil {
+		return Page[PlanView]{}, err
 	}
 	return page, nil
 }

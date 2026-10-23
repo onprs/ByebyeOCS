@@ -18,7 +18,7 @@ func withSavepoint(ctx context.Context, parent pgx.Tx, fn func(pgx.Tx) error) er
 	committed := false
 	defer func() {
 		if !committed {
-			_ = nested.Rollback(context.Background())
+			rollbackLearningTx(nested)
 		}
 	}()
 	if err := fn(nested); err != nil {

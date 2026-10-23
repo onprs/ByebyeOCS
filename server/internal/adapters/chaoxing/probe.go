@@ -106,6 +106,7 @@ func (p *JSONSubjectProbe) Probe(ctx context.Context, session Session) (SubjectE
 		return SubjectEvidence{}, learning.Fail(learning.FailureIdentityInvalid, "平台会话无法建立 Cookie 容器")
 	}
 	client := p.factory.client(jar)
+	defer client.CloseIdleConnections()
 	base := *p.endpoint
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 2 {
@@ -253,11 +254,11 @@ func probeOptionalString(document any, path string, limit int) string {
 	if !ok {
 		return ""
 	}
-	text := strings.TrimSpace(jsonText(value))
+	text := []rune(strings.TrimSpace(jsonText(value)))
 	if len(text) > limit {
 		text = text[:limit]
 	}
-	return text
+	return string(text)
 }
 
 func probeExpiry(value any, format string) (time.Time, error) {

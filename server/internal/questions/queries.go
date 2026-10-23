@@ -25,6 +25,29 @@ const queryColumns = `id, user_id::text, idempotency_key, request_fingerprint, o
 	COALESCE(billing_hold_id, ''), reserved_minor, content_expired,
 	COALESCE(error_code, ''), fork_request_id, version, created_at, updated_at, completed_at`
 
+const (
+	// cleanupTimeout 限制回滚、补偿释放等后台清理；请求取消后也必须有界完成。
+	cleanupTimeout = 5 * time.Second
+	// finalizeTimeout 限制结果事实与账本提交，不继承已取消的请求上下文。
+	finalizeTimeout = 10 * time.Second
+)
+
+// rollbackTx 以有界上下文回滚事务；连接异常时不能让处理协程无限等待。
+func rollbackTx(tx pgx.Tx) {
+	if tx == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	_ = tx.Rollback(ctx)
+}
+
+// finalizeContext 让结算/释放与结果事实脱离已取消的调用方上下文。
+// 上游结果和预占补偿必须提交，不能因为客户端断开而丢失。
+func finalizeContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), finalizeTimeout)
+}
+
 type queryRecord struct {
 	ID                  string
 	UserID              string
@@ -459,7 +482,7 @@ func (s *Service) completeAnswer(ctx context.Context, c answerCompletion) (Query
 		}
 		return QueryView{}, forkQueryError(forkErr)
 	}
-	if err := normalizeForkResponse(&response, queryID, offering.ProviderRef, c.request.Mode); err != nil {
+	if err := normalizeForkResponse(&response, queryID, offering.ProviderRef, c.request.Mode, s.maxImg+1); err != nil {
 		view, finalizeErr := s.finalizeQuery(ctx, queryID, userID, finalizeInput{
 			Status: "needs_review", ErrorCode: "invalid_fork_response", Estimate: estimate,
 			Quote: estimate, HoldID: holdID, ReservedMinor: reservedMinor,
@@ -842,7 +865,7 @@ func (s *Service) prepareBilling(ctx context.Context, queryID, userID string, of
 		if err != nil {
 			return estimate, "", 0, err
 		}
-		defer tx.Rollback(context.Background())
+		defer rollbackTx(tx)
 		holdID, err := s.billing.Reserve(ctx, tx, userID, s.billingKey(queryID), estimate.AmountMinor)
 		if err != nil {
 			return estimate, "", 0, err
@@ -892,31 +915,33 @@ func (s *Service) finalizeQuery(ctx context.Context, queryID, userID string, in 
 		// 未完成或待复核的结果不展示为已报价，避免把 0 费用误读成模型免费。
 		snapshot.State = "unpriced"
 	}
-	tx, err := s.pool.Begin(ctx)
+	// 结算/释放与结果事实不能因为调用方取消而丢失；清理路径使用有界后台上下文。
+	finalCtx, cancel := finalizeContext(ctx)
+	defer cancel()
+	tx, err := s.pool.Begin(finalCtx)
 	if err != nil {
 		return QueryView{}, err
 	}
-	defer tx.Rollback(context.Background())
-	// 任一未提交路径都必须释放预占；Release 以业务键幂等，提交结果不明时重放也安全。
 	committed := false
-	if in.HoldID != "" {
-		defer func() {
-			if !committed {
-				s.releaseAfterLedgerFailure(queryID, in.HoldID)
-			}
-		}()
-	}
+	// 任一未提交路径都必须释放预占；Release 以业务键幂等，提交结果不明时重放也安全。
+	// 清理顺序固定为先回滚再补偿，不依赖事务失败的中间状态。
+	defer func() {
+		rollbackTx(tx)
+		if in.HoldID != "" && !committed {
+			s.releaseAfterLedgerFailure(queryID, in.HoldID)
+		}
+	}()
 	key := s.billingKey(queryID)
 	if in.HoldID != "" {
 		if in.Settle && in.Quote.ChargingAllowed && in.Quote.State == "quoted" && in.Quote.AmountMinor > 0 {
-			if err := s.billing.Settle(ctx, tx, in.HoldID, key, in.Quote.AmountMinor); err != nil {
-				_ = tx.Rollback(context.Background())
+			if err := s.billing.Settle(finalCtx, tx, in.HoldID, key, in.Quote.AmountMinor); err != nil {
+				rollbackTx(tx)
 				s.markLedgerFailure(queryID, userID, in, "billing_settlement_failed")
 				return QueryView{}, err
 			}
 			if in.Quote.AmountMinor < in.ReservedMinor {
-				if err := s.billing.Release(ctx, tx, in.HoldID, key); err != nil {
-					_ = tx.Rollback(context.Background())
+				if err := s.billing.Release(finalCtx, tx, in.HoldID, key); err != nil {
+					rollbackTx(tx)
 					s.markLedgerFailure(queryID, userID, in, "billing_release_failed")
 					return QueryView{}, err
 				}
@@ -924,8 +949,8 @@ func (s *Service) finalizeQuery(ctx context.Context, queryID, userID string, in 
 			snapshot.Charged = true
 			snapshot.BillingState = "settled"
 		} else {
-			if err := s.billing.Release(ctx, tx, in.HoldID, key); err != nil {
-				_ = tx.Rollback(context.Background())
+			if err := s.billing.Release(finalCtx, tx, in.HoldID, key); err != nil {
+				rollbackTx(tx)
 				s.markLedgerFailure(queryID, userID, in, "billing_release_failed")
 				return QueryView{}, err
 			}
@@ -938,7 +963,7 @@ func (s *Service) finalizeQuery(ctx context.Context, queryID, userID string, in 
 	snapshot.HoldID = in.HoldID
 	pricingJSON, _ := json.Marshal(snapshot)
 	var queryVersion int64
-	err = tx.QueryRow(ctx, `UPDATE public.question_queries SET status = $2, answer = NULLIF($3,''),
+	err = tx.QueryRow(finalCtx, `UPDATE public.question_queries SET status = $2, answer = NULLIF($3,''),
 		cache_hit = $4, cache_entry_id = NULLIF($5,''), cache_created_at = $6, usage = $7, pricing = $8,
 		billing_state = $9, billing_hold_id = NULLIF($10,''), reserved_minor = $11,
 		error_code = NULLIF($12,''), offering_provider_ref = NULL, completed_at = now(), updated_at = now(),
@@ -948,8 +973,8 @@ func (s *Service) finalizeQuery(ctx context.Context, queryID, userID string, in 
 		in.Response.Cache.CreatedAt, usageJSON, pricingJSON, snapshot.BillingState, in.HoldID,
 		in.ReservedMinor, in.ErrorCode).Scan(&queryVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
-		tx.Rollback(context.Background())
-		q, err := s.loadQueryAdmin(context.Background(), queryID)
+		rollbackTx(tx)
+		q, err := s.loadQueryAdmin(finalCtx, queryID)
 		if err != nil || q == nil {
 			return QueryView{}, errors.New("查询状态已变化且无法读取")
 		}
@@ -959,15 +984,15 @@ func (s *Service) finalizeQuery(ctx context.Context, queryID, userID string, in 
 		return QueryView{}, err
 	}
 	// 事件只含状态与计费摘要，不含原题、答案、图片或上游信息。
-	if err := recordQuestionEvent(ctx, tx, userID, queryID, queryVersion, in.Status, in.Response.Cache.Hit,
+	if err := recordQuestionEvent(finalCtx, tx, userID, queryID, queryVersion, in.Status, in.Response.Cache.Hit,
 		snapshot.State, snapshot.BillingState); err != nil {
 		return QueryView{}, err
 	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(finalCtx); err != nil {
 		return QueryView{}, err
 	}
 	committed = true
-	q, err := s.loadQueryAdmin(ctx, queryID)
+	q, err := s.loadQueryAdmin(finalCtx, queryID)
 	if err != nil || q == nil {
 		return QueryView{}, errors.New("无法读取已保存的查询")
 	}
@@ -978,13 +1003,13 @@ func (s *Service) releaseAfterLedgerFailure(queryID, holdID string) {
 	if holdID == "" || s.billing == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	if err := s.billing.Release(ctx, tx, holdID, s.billingKey(queryID)); err != nil {
 		return
 	}
@@ -996,13 +1021,13 @@ func (s *Service) markLedgerFailure(queryID, userID string, in finalizeInput, co
 	snapshot.Charged = false
 	pricingJSON, _ := json.Marshal(snapshot)
 	usageJSON, _ := json.Marshal(in.Usage)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return
 	}
-	defer tx.Rollback(context.Background())
+	defer rollbackTx(tx)
 	var version int64
 	err = tx.QueryRow(ctx, `UPDATE public.question_queries SET status = 'needs_review', usage = $2,
 		pricing = $3, billing_state = $4, error_code = $5, offering_provider_ref = NULL,
@@ -1021,9 +1046,35 @@ func (s *Service) markReserveFailed(queryID, code string) error {
 	if code == "charging_setting_unavailable" {
 		billingState = "charging_setting_unavailable"
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
-	tag, err := s.pool.Exec(ctx, `UPDATE public.question_queries SET status = 'failed',
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer rollbackTx(tx)
+	// 等待先前的预占事务落定，再读取其实际结果；提交回执中断不代表事务回滚。
+	q, err := scanQuery(tx.QueryRow(ctx, `SELECT `+queryColumns+` FROM public.question_queries WHERE id = $1 FOR UPDATE`, queryID))
+	if err != nil {
+		return err
+	}
+	if q.Status != "pending" {
+		return nil
+	}
+	if q.BillingHoldID != "" {
+		estimate, err := recoveryEstimate(parsePricingSnapshot(q.Pricing))
+		if err != nil {
+			return err
+		}
+		// 复用结算链的原预占释放。先释放查询行锁，遵循账本、查询的现有加锁顺序。
+		rollbackTx(tx)
+		_, err = s.finalizeQuery(ctx, queryID, q.UserID, finalizeInput{
+			Status: "failed", ErrorCode: code, Estimate: estimate, Quote: estimate,
+			HoldID: q.BillingHoldID, ReservedMinor: q.ReservedMinor, BillingState: "released",
+		})
+		return err
+	}
+	tag, err := tx.Exec(ctx, `UPDATE public.question_queries SET status = 'failed',
 		error_code = $2, billing_state = $3, offering_provider_ref = NULL, completed_at = now(),
 		updated_at = now(), version = version + 1
 		WHERE id = $1 AND status = 'pending'`, queryID, code, billingState)
@@ -1033,13 +1084,13 @@ func (s *Service) markReserveFailed(queryID, code string) error {
 	if tag.RowsAffected() != 1 {
 		return errors.New("题库查询预占失败状态未保存")
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // markFinalizeFailed 只把仍处于 pending 的查询标记为待复核；已完成或已被其他路径
 // 标记的记录不会被覆盖。
 func (s *Service) markFinalizeFailed(queryID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
 	defer cancel()
 	_, _ = s.pool.Exec(ctx, `UPDATE public.question_queries SET status = 'needs_review',
 		error_code = 'finalize_failed', billing_state = 'finalize_failed', offering_provider_ref = NULL,

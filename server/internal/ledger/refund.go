@@ -30,6 +30,7 @@ type Refund struct {
 	UpdatedAt        string `json:"updated_at"`
 	CompletedAt      string `json:"completed_at,omitempty"`
 	createdAtValue   time.Time
+	updatedAtValue   time.Time
 }
 
 type RefundInput struct {
@@ -62,6 +63,7 @@ func scanRefund(row pgx.Row) (*Refund, error) {
 	refund.CreatedAt = utcTime(createdAt)
 	refund.createdAtValue = createdAt
 	refund.UpdatedAt = utcTime(updatedAt)
+	refund.updatedAtValue = updatedAt
 	if completedAt.Valid {
 		refund.CompletedAt = utcTime(completedAt.Time)
 	}
@@ -120,7 +122,33 @@ func (s *Service) CreateRefund(ctx context.Context, actor web.Actor, idempotency
 			if storedDigest != requestDigest {
 				return fault.New("conflict", "相同幂等键已用于不同退款请求")
 			}
-			if existing.Status == "reserved" || existing.Status == "requested" || existing.Status == "submitted" {
+			if existing.Status == "requested" {
+				// 新流程在预占提交后保持 'requested'，直到独立事务把状态转为 'submitted'
+				// 后才调用渠道；旧代码把 'requested' → 'reserved' 放在同一事务，
+				// 从未提交过 'requested'。因此已提交的 'requested' 一定没有发出渠道请求，
+				// 可以安全退回预占资金并结束本次退款。
+				//
+				// 必须先取得行锁并复核：提交方可能在上面读取之后、这里处理之前已取得
+				// 提交权（'submitted'）。只有仍是 'requested' 才能按“未发出”释放。
+				current, lockErr := scanRefund(tx.QueryRow(ctx, refundSelect+
+					` WHERE id = $1 FOR UPDATE`, existing.ID))
+				if lockErr != nil {
+					return lockErr
+				}
+				if current.Status != "requested" {
+					return fault.New("conflict", "退款结果尚待核对，不能自动重放")
+				}
+				resolved, resolveErr := s.resolveRefund(ctx, tx, actor, existing.ID,
+					"failed", "refund_not_submitted")
+				if resolveErr != nil {
+					return resolveErr
+				}
+				refund = resolved
+				return nil
+			}
+			if existing.Status == "reserved" || existing.Status == "submitted" {
+				// 旧版本的 'reserved' 在渠道请求前就落库，无法证明未发出；
+				// 与 'submitted' 一样只能等待人工复核，禁止自动释放或重发。
 				return fault.New("conflict", "退款结果尚待核对，不能自动重放")
 			}
 			refund = existing
@@ -192,7 +220,7 @@ func (s *Service) CreateRefund(ctx context.Context, actor web.Actor, idempotency
 		if err := s.debitFunds(ctx, tx, wallet, amount); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(ctx, `UPDATE public.refunds SET status = 'reserved',
+		if _, err := tx.Exec(ctx, `UPDATE public.refunds SET
 			reservation_journal_id = $2, updated_at = $3 WHERE id = $1`, refundID, journalID, now); err != nil {
 			return fault.New("service_unavailable", "无法更新退款预占状态")
 		}
@@ -211,15 +239,42 @@ func (s *Service) CreateRefund(ctx context.Context, actor web.Actor, idempotency
 	if err != nil {
 		return nil, err
 	}
-	if refund == nil || refund.Status != "reserved" {
+	if refund == nil || refund.Status != "requested" {
 		return refund, nil
 	}
 	return s.submitRefund(ctx, actor, refund)
 }
 
 func (s *Service) submitRefund(ctx context.Context, actor web.Actor, refund *Refund) (*Refund, error) {
-	queryCtx, cancel := context.WithTimeout(ctx, s.queryTimeout)
+	// 测试钩子位于提交标记之前，用于复现“预占已提交但渠道请求未开始”的中断窗口。
+	if err := s.runHook("before_refund_submit"); err != nil {
+		return nil, err
+	}
+	// 必须先把“可能已提交渠道”的事实独立提交，才能区分未发出的 'requested'
+	// 与结果可能存在的 'submitted'；未占用成功说明退款已被并发处理，不再发送。
+	submissionDeadline := time.Now().Add(s.queryTimeout)
+	claimed, ok, err := s.claimRefundSubmission(ctx, refund.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return claimed, nil
+	}
+	// 取得提交权后再确认状态仍是 'submitted'：复核入口可能已在此期间结束该退款，
+	// 此时不能再调用渠道，否则会同时记录渠道退款与资金退回。
+	current, err := scanRefund(s.pool.QueryRow(ctx, refundSelect+` WHERE id = $1`, refund.ID))
+	if err != nil {
+		return nil, err
+	}
+	if current.Status != "submitted" {
+		return current, nil
+	}
+	// 提交流程开始时固定期限，数据库等待和进程停顿不能延长可发送窗口。
+	queryCtx, cancel := context.WithDeadline(ctx, submissionDeadline)
 	defer cancel()
+	if queryCtx.Err() != nil {
+		return s.finishRefund(ctx, actor, refund, "unknown", "provider_unavailable")
+	}
 	result, err := s.provider.Refund(queryCtx, payments.RefundRequest{
 		MerchantOrderNo:  "",
 		ProviderTradeNo:  refund.ProviderTradeNo,
@@ -240,104 +295,233 @@ func (s *Service) submitRefund(ctx context.Context, actor web.Actor, refund *Ref
 	}
 }
 
+// claimRefundSubmission 把未发出渠道请求的退款标记为已提交渠道。
+// 只有新流程提交的 'requested'（预占已提交、请求未开始）可以取得提交权；
+// 旧版本的 'reserved' 无法证明未发出，不在这里转为 submitted，也不自动重发。
+// ok=false 表示退款已处于终态、在途或待核对状态，调用方必须直接返回该记录。
+func (s *Service) claimRefundSubmission(ctx context.Context, refundID string) (*Refund, bool, error) {
+	var current *Refund
+	claimed := false
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		row, err := scanRefund(tx.QueryRow(ctx, refundSelect+` WHERE id = $1 FOR UPDATE`, refundID))
+		if err != nil {
+			return err
+		}
+		current = row
+		if row.Status != "requested" {
+			return nil
+		}
+		now := s.now()
+		tag, err := tx.Exec(ctx, `UPDATE public.refunds SET status = 'submitted', updated_at = $2
+			WHERE id = $1 AND status = 'requested'`, refundID, now)
+		if err != nil {
+			return fault.New("service_unavailable", "无法记录退款提交状态")
+		}
+		if tag.RowsAffected() != 1 {
+			return nil
+		}
+		row.Status = "submitted"
+		row.UpdatedAt = utcTime(now)
+		row.updatedAtValue = now
+		claimed = true
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	return current, claimed, nil
+}
+
 func (s *Service) finishRefund(ctx context.Context, actor web.Actor, refund *Refund,
 	status, errorCode string) (*Refund, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	var updated *Refund
 	err := s.inTx(ctx, func(tx pgx.Tx) error {
-		current, err := scanRefund(tx.QueryRow(ctx, refundSelect+` WHERE id = $1 FOR UPDATE`, refund.ID))
+		var err error
+		updated, err = s.resolveRefund(ctx, tx, actor, refund.ID, status, errorCode)
+		return err
+	})
+	return updated, err
+}
+
+// RefundReviewInput 是管理员已核实的人工复核结果。
+// 复核只记录真实资金事实，不向渠道重发退款，也不读取退款开关或渠道能力。
+type RefundReviewInput struct {
+	// Outcome 只允许 succeeded（渠道已退款）或 failed（渠道未退款，资金退回钱包）。
+	Outcome string
+	Reason  string
+}
+
+// ResolveRefund 记录管理员人工复核结果，复用既有结算/释放事务。
+// 可复核状态：旧版本可能已发出请求的 'reserved'，以及 'submitted'/'unknown'。
+// 新流程的 'requested' 一定未发出渠道请求，不能记为 succeeded，但可由管理员确认
+// 渠道未退款后记为 failed（资金退回钱包）。终态结果相同时幂等返回，不重复记账。
+func (s *Service) ResolveRefund(ctx context.Context, actor web.Actor, idempotencyKey, refundID string,
+	input RefundReviewInput) (*Refund, error) {
+	if err := requireAgent(actor, "admin", PermWalletRefund); err != nil {
+		return nil, err
+	}
+	if err := requireFresh(actor, s.now()); err != nil {
+		return nil, err
+	}
+	if err := validKey(idempotencyKey); err != nil {
+		return nil, fault.New("validation_failed", "缺少有效的退款复核幂等键")
+	}
+	if !web.ValidID(refundID) {
+		return nil, fault.New("validation_failed", "退款编号无效")
+	}
+	if input.Outcome != "succeeded" && input.Outcome != "failed" {
+		return nil, fault.New("validation_failed", "复核结果只支持 succeeded 或 failed")
+	}
+	reason := trimSpace(input.Reason)
+	if len(reason) < 5 || len(reason) > 500 {
+		return nil, fault.New("validation_failed", "退款复核必须填写 5 到 500 字符的理由")
+	}
+	// 同一管理员的复核键绑定退款、结果和理由；资金分录仍按退款自身业务键去重。
+	businessKey := "refund-review:" + digest(actor.ID, idempotencyKey)
+	requestDigest := digest("refund_review", refundID, input.Outcome, reason)
+	var updated *Refund
+	err := s.inTx(ctx, func(tx pgx.Tx) error {
+		if err := s.rememberNoopKey(ctx, tx, businessKey, requestDigest, "refund_review"); err != nil {
+			return err
+		}
+		current, err := scanRefund(tx.QueryRow(ctx, refundSelect+` WHERE id = $1 FOR UPDATE`, refundID))
 		if err != nil {
 			return err
 		}
 		if current.Status == "succeeded" || current.Status == "failed" || current.Status == "cancelled" {
+			if current.Status != input.Outcome {
+				return fault.New("conflict", "退款已按其他结果完成复核")
+			}
+			// 幂等重放：已有相同终态时不重复记账，也不再追加审核事实。
 			updated = current
 			return nil
 		}
-		amount := mustAmount(current.AmountMinor)
-		now := s.now()
-		if status == "succeeded" {
-			journalID, reused, err := s.postJournal(ctx, tx, journalInput{
-				Kind: "refund_payout", BusinessKey: "refund-payout:" + current.ID,
-				RequestDigest: digest("refund_payout", current.ID, formatAmount(amount)),
-				UserID:        current.UserID, WalletID: current.WalletID, AmountMinor: amount,
-				Reason: "异常退款渠道成功", Actor: actor, OrderID: current.OrderID,
-				Postings: []postingInput{
-					{AccountID: systemRefundPayable, AmountMinor: -amount},
-					{AccountID: systemChannelClearing, AmountMinor: amount},
-				},
-			})
-			if err != nil {
-				return err
-			}
-			if reused {
-				return fault.New("conflict", "退款成功分录已存在")
-			}
-			if _, err := tx.Exec(ctx, `UPDATE public.refunds SET status = 'succeeded',
-				payout_journal_id = $2, last_error_code = NULL, completed_at = $3, updated_at = $3
-				WHERE id = $1`, current.ID, journalID, now); err != nil {
-				return fault.New("service_unavailable", "无法更新退款成功状态")
-			}
-			var orderAmount int64
-			if err := tx.QueryRow(ctx, `SELECT amount_minor FROM public.recharge_orders WHERE id = $1`,
-				current.OrderID).Scan(&orderAmount); err != nil {
-				return fault.New("service_unavailable", "无法读取原订单金额")
-			}
-			if amount == orderAmount {
-				if _, err := tx.Exec(ctx, `UPDATE public.recharge_orders SET payment_status = 'refunded',
-					updated_at = $2, version = version + 1 WHERE id = $1`, current.OrderID, now); err != nil {
-					return fault.New("service_unavailable", "无法更新订单退款状态")
-				}
-			}
-		} else if status == "failed" {
-			wallet, err := s.lockWalletByID(ctx, tx, current.WalletID)
-			if err != nil {
-				return err
-			}
-			journalID, reused, err := s.postJournal(ctx, tx, journalInput{
-				Kind: "refund_return", BusinessKey: "refund-return:" + current.ID,
-				RequestDigest: digest("refund_return", current.ID, formatAmount(amount)),
-				UserID:        current.UserID, WalletID: current.WalletID, AmountMinor: amount,
-				Reason: "异常退款渠道失败，资金退回", Actor: actor, OrderID: current.OrderID,
-				Postings: []postingInput{
-					{AccountID: systemRefundPayable, AmountMinor: -amount},
-					{AccountID: wallet.AvailableAccountID, AmountMinor: amount},
-				},
-			})
-			if err != nil {
-				return err
-			}
-			if reused {
-				return fault.New("conflict", "退款退回分录已存在")
-			}
-			if err := s.creditFunds(ctx, tx, wallet, amount); err != nil {
-				return err
-			}
-			if err := s.recordWalletEvent(ctx, tx, wallet, "wallet.updated", map[string]any{
-				"entry": "refund_return", "refund_id": current.ID, "journal_id": journalID,
-			}); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `UPDATE public.refunds SET status = 'failed',
-				return_journal_id = $2, last_error_code = NULL, completed_at = $3, updated_at = $3
-				WHERE id = $1`, current.ID, journalID, now); err != nil {
-				return fault.New("service_unavailable", "无法更新退款失败状态")
-			}
-		} else {
-			if _, err := tx.Exec(ctx, `UPDATE public.refunds SET status = 'unknown',
-				last_error_code = $2, updated_at = $3 WHERE id = $1`,
-				current.ID, nullableText(errorCode), now); err != nil {
-				return fault.New("service_unavailable", "无法更新退款待查状态")
-			}
+		if current.Status == "submitted" &&
+			s.now().Sub(current.updatedAtValue) < s.queryTimeout+10*time.Second {
+			// 'submitted' 可能仍处于渠道调用期限内；过早复核会与在途请求产生两种资金事实。
+			return fault.New("conflict", "退款正在提交渠道，请稍后核对结果")
 		}
-		action := "refund." + status
-		if status == "unknown" {
-			action = "refund.review_required"
-		}
-		if err := s.audit(ctx, tx, actor, action, "refund", current.ID,
-			"异常退款处理结果："+status); err != nil {
+		resolved, err := s.resolveRefund(ctx, tx, actor, refundID, input.Outcome, "")
+		if err != nil {
 			return err
 		}
-		updated, err = scanRefund(tx.QueryRow(ctx, refundSelect+` WHERE id = $1`, current.ID))
-		return err
+		if resolved.Status != input.Outcome {
+			return fault.New("conflict", "退款已按其他结果完成复核")
+		}
+		if err := s.audit(ctx, tx, actor, "refund.reviewed", "refund", refundID,
+			"人工复核退款结果："+reason); err != nil {
+			return err
+		}
+		updated = resolved
+		return nil
 	})
 	return updated, err
+}
+
+// resolveRefund 在调用方事务内落定退款结果；已终态时幂等返回当前记录。
+// 'succeeded' 只允许在渠道请求可能已发出（submitted/unknown）或旧版本 'reserved'
+// 上按人工核实确认；新流程的 'requested' 一定未发出，不能确认打款成功。
+func (s *Service) resolveRefund(ctx context.Context, tx pgx.Tx, actor web.Actor,
+	refundID, status, errorCode string) (*Refund, error) {
+	current, err := scanRefund(tx.QueryRow(ctx, refundSelect+` WHERE id = $1 FOR UPDATE`, refundID))
+	if err != nil {
+		return nil, err
+	}
+	if current.Status == "succeeded" || current.Status == "failed" || current.Status == "cancelled" {
+		return current, nil
+	}
+	if status == "succeeded" && current.Status != "submitted" &&
+		current.Status != "unknown" && current.Status != "reserved" {
+		return nil, fault.New("conflict", "退款尚未提交渠道，不能确认渠道已退款")
+	}
+	amount := mustAmount(current.AmountMinor)
+	now := s.now()
+	if status == "succeeded" {
+		journalID, reused, err := s.postJournal(ctx, tx, journalInput{
+			Kind: "refund_payout", BusinessKey: "refund-payout:" + current.ID,
+			RequestDigest: digest("refund_payout", current.ID, formatAmount(amount)),
+			UserID:        current.UserID, WalletID: current.WalletID, AmountMinor: amount,
+			Reason: "异常退款渠道成功", Actor: actor, OrderID: current.OrderID,
+			Postings: []postingInput{
+				{AccountID: systemRefundPayable, AmountMinor: -amount},
+				{AccountID: systemChannelClearing, AmountMinor: amount},
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		if reused {
+			return nil, fault.New("conflict", "退款成功分录已存在")
+		}
+		if _, err := tx.Exec(ctx, `UPDATE public.refunds SET status = 'succeeded',
+			payout_journal_id = $2, last_error_code = NULL, completed_at = $3, updated_at = $3,
+			approved_by = $4 WHERE id = $1`, current.ID, journalID, now, actor.ID); err != nil {
+			return nil, fault.New("service_unavailable", "无法更新退款成功状态")
+		}
+		var orderAmount int64
+		if err := tx.QueryRow(ctx, `SELECT amount_minor FROM public.recharge_orders WHERE id = $1`,
+			current.OrderID).Scan(&orderAmount); err != nil {
+			return nil, fault.New("service_unavailable", "无法读取原订单金额")
+		}
+		if amount == orderAmount {
+			if _, err := tx.Exec(ctx, `UPDATE public.recharge_orders SET payment_status = 'refunded',
+				updated_at = $2, version = version + 1 WHERE id = $1`, current.OrderID, now); err != nil {
+				return nil, fault.New("service_unavailable", "无法更新订单退款状态")
+			}
+		}
+	} else if status == "failed" {
+		wallet, err := s.lockWalletByID(ctx, tx, current.WalletID)
+		if err != nil {
+			return nil, err
+		}
+		journalID, reused, err := s.postJournal(ctx, tx, journalInput{
+			Kind: "refund_return", BusinessKey: "refund-return:" + current.ID,
+			RequestDigest: digest("refund_return", current.ID, formatAmount(amount)),
+			UserID:        current.UserID, WalletID: current.WalletID, AmountMinor: amount,
+			Reason: "异常退款渠道失败，资金退回", Actor: actor, OrderID: current.OrderID,
+			Postings: []postingInput{
+				{AccountID: systemRefundPayable, AmountMinor: -amount},
+				{AccountID: wallet.AvailableAccountID, AmountMinor: amount},
+			},
+		})
+		if err != nil {
+			return nil, err
+		}
+		if reused {
+			return nil, fault.New("conflict", "退款退回分录已存在")
+		}
+		if err := s.creditFunds(ctx, tx, wallet, amount); err != nil {
+			return nil, err
+		}
+		if err := s.recordWalletEvent(ctx, tx, wallet, "wallet.updated", map[string]any{
+			"entry": "refund_return", "refund_id": current.ID, "journal_id": journalID,
+		}); err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE public.refunds SET status = 'failed',
+			return_journal_id = $2, last_error_code = NULLIF($4, ''), completed_at = $3, updated_at = $3,
+			approved_by = $5 WHERE id = $1`, current.ID, journalID, now, nullableText(errorCode), actor.ID); err != nil {
+			return nil, fault.New("service_unavailable", "无法更新退款失败状态")
+		}
+	} else {
+		if _, err := tx.Exec(ctx, `UPDATE public.refunds SET status = 'unknown',
+			last_error_code = $2, updated_at = $3 WHERE id = $1`,
+			current.ID, nullableText(errorCode), now); err != nil {
+			return nil, fault.New("service_unavailable", "无法更新退款待查状态")
+		}
+	}
+	action := "refund." + status
+	if status == "unknown" {
+		action = "refund.review_required"
+	}
+	reason := "异常退款处理结果：" + status
+	if errorCode == "refund_not_submitted" {
+		reason = "退款未提交渠道，预占资金已退回"
+	}
+	if err := s.audit(ctx, tx, actor, action, "refund", current.ID, reason); err != nil {
+		return nil, err
+	}
+	return scanRefund(tx.QueryRow(ctx, refundSelect+` WHERE id = $1`, current.ID))
 }

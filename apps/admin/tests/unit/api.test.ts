@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, apiRequest } from '../../src/api/client'
-import { getAuthSession, getPreferences, listUsers, login, runAccountOperation, updatePreferences } from '../../src/api/endpoints'
+import { getAuthSession, getPreferences, listUsers, login, resolveRefund, runAccountOperation, updatePreferences } from '../../src/api/endpoints'
 import { getCsrfToken } from '../../src/api/session'
 import { setCsrfToken, subscribeUnauthorized } from '../../src/api/session'
 import {
@@ -284,6 +284,40 @@ describe('端点适配', () => {
     expect(result.updated).toBe(1)
     expect(result.skipped).toBe(1)
     expect(result.items[1]).toMatchObject({ id: 'u2', status: 'failed' })
+  })
+
+  it('退款复核提交明确结果与理由，并携带幂等键', async () => {
+    setCsrfToken('csrf-refund')
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        id: 'refund-1',
+        order_id: 'order-1',
+        user_id: 'user-1',
+        wallet_id: 'wallet-1',
+        kind: 'abnormal_payment',
+        amount_minor: '3000',
+        currency: 'CNY',
+        reason: '渠道退款成功',
+        status: 'succeeded',
+        created_at: '2026-10-20T02:00:00Z',
+        updated_at: '2026-10-20T03:00:00Z',
+        completed_at: '2026-10-20T03:00:00Z',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const refund = await resolveRefund(
+      'refund-1',
+      { outcome: 'succeeded', reason: '渠道账单已核对，交易号一致' },
+      'idem-refund-review-1',
+    )
+
+    const [url, init] = fetchMock.mock.calls[0]
+    expect(url).toBe('/admin/api/v1/refunds/refund-1/resolve')
+    expect(init.method).toBe('POST')
+    expect(init.headers['Idempotency-Key']).toBe('idem-refund-review-1')
+    expect(JSON.parse(init.body)).toEqual({ outcome: 'succeeded', reason: '渠道账单已核对，交易号一致' })
+    expect(refund).toMatchObject({ id: 'refund-1', status: 'succeeded', status_label: '已退款' })
   })
 })
 

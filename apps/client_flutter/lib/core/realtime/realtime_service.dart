@@ -1,20 +1,33 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
+
 import '../api/json.dart';
 import '../config/app_config.dart';
 import '../session/session_manager.dart';
 import 'realtime_event.dart';
 import 'sse_connection.dart';
 
+typedef SseConnector = SseConnection Function(
+  Uri uri, {
+  String? bearerToken,
+  String? lastEventId,
+});
+
 /// 先由页面读取快照，再连接 SSE；断开时使用有界轮询降级并用资源版本去重。
 class RealtimeService {
-  RealtimeService({required AppConfig config, required SessionManager session})
-      : _config = config,
-        _session = session;
+  RealtimeService({
+    required AppConfig config,
+    required SessionManager session,
+    SseConnector? connector,
+  })  : _config = config,
+        _session = session,
+        _connector = connector ?? connectPlatformSse;
 
   final AppConfig _config;
   final SessionManager _session;
+  final SseConnector _connector;
   final StreamController<RealtimeEvent> _controller =
       StreamController<RealtimeEvent>.broadcast();
   final Map<String, int> _versions = <String, int>{};
@@ -31,9 +44,14 @@ class RealtimeService {
   bool _disposed = false;
   String? _lastEventId;
 
+  /// 连接代次：同一连接的错误/结束只计一次，旧连接回调不得影响新连接。
+  int _connectionGeneration = 0;
   Stream<RealtimeEvent> get events => _controller.stream;
 
   bool get usingPolling => _polling;
+
+  @visibleForTesting
+  int get failureCount => _failures;
 
   void start() {
     if (_disposed || _running) return;
@@ -81,26 +99,30 @@ class RealtimeService {
     _polling = false;
     _retryTimer?.cancel();
     _retryTimer = null;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     final base = _config.apiBaseUri;
     if (base == null) return;
+    final generation = _connectionGeneration;
     try {
-      final connection = connectPlatformSse(
+      final connection = _connector(
         _config.resolve('events'),
         bearerToken: _session.isWeb ? null : _session.accessToken,
         lastEventId: _lastEventId,
       );
       _connection = connection;
       _subscription = connection.messages.listen(
-        _handleMessage,
-        onError: (Object _) => _handleFailure(),
-        onDone: _handleFailure,
+        (message) => _handleMessage(message, generation),
+        onError: (Object _) => _handleFailure(generation),
+        onDone: () => _handleFailure(generation),
       );
     } catch (_) {
-      _handleFailure();
+      _handleFailure(generation);
     }
   }
 
-  void _handleMessage(SseMessage message) {
+  void _handleMessage(SseMessage message, int generation) {
+    if (generation != _connectionGeneration) return;
     _failures = 0;
     if (message.id != null && message.id!.isNotEmpty) {
       _lastEventId = message.id;
@@ -141,10 +163,15 @@ class RealtimeService {
     _emit(event);
   }
 
-  void _handleFailure() {
+  void _handleFailure(int generation) {
     if (_disposed || !_running) return;
+    if (generation != _connectionGeneration) return;
+    // 先认领本次失败，再关闭连接；同一连接的 onError/onDone 不会重复计数。
+    _connectionGeneration++;
     _failures++;
     _closeSse();
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     if (_failures >= 3) {
       if (!_polling) {
         _emit(const RealtimeEvent(type: 'client.resume'));
@@ -156,9 +183,7 @@ class RealtimeService {
       });
       return;
     }
-    _reconnectTimer?.cancel();
-    final delay = Duration(seconds: 3 * _failures);
-    _reconnectTimer = Timer(delay, () {
+    _reconnectTimer = Timer(Duration(seconds: 3 * _failures), () {
       if (_running && _foreground) _connectSse();
     });
   }
@@ -175,6 +200,7 @@ class RealtimeService {
   }
 
   void _closeSse() {
+    _connectionGeneration++;
     _subscription?.cancel();
     _subscription = null;
     final connection = _connection;

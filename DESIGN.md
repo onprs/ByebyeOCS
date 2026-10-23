@@ -63,7 +63,7 @@
 
 主服务按平台已确认的有效任务点计量；普通附件、等待、暂停、失败重试不因时间流逝产生新收费。收费关闭、未定价和零价的确认事实仍保留。价格及单位精度按任务启动时的版本冻结，不用后来发布的价格追补旧任务。
 
-钱包以整数分记账，双分录平衡、不可变 journal、事务和业务幂等保护资金；预占、结算、释放分开。正常到账余额原则不退回，异常资金、错误扣费、退款及预占释放独立处理。付款返回不入账，ZPay 验签/查单与账本提交决定结果，付款成功和余额到账分别显示。
+钱包以整数分记账，双分录平衡、不可变 journal、事务和业务幂等保护资金；预占、结算、释放分开。正常到账余额原则不退回，异常资金、错误扣费、退款及预占释放独立处理。退款结果不明保留待核对状态，管理员完成近期验证并核实后可记录实际结果，结清或释放原退款资金，不重复向渠道发起。付款返回不入账，ZPay 验签/查单与账本提交决定结果，付款成功和余额到账分别显示。
 
 题库上游模型密钥只在 fork。主平台发布公开模型条目，用户只提交公开 ID。`cache_first` 先查精确缓存，未命中再调用模型并写入缓存；`always_llm` 每次跳过缓存读取，成功结果仍可写入供后续查询使用。默认用户隔离，共享缓存需要明确开启。命中用量为 0，错误答案可失效，模糊历史不当缓存。
 
@@ -102,7 +102,7 @@
 
 - [产品路线与验收](docs/product/roadmap.md)、[决策清单](docs/product/decision-checklist.md)
 - [架构总览](docs/architecture/overview.md)、[接口契约](api/openapi.yaml)
-- [当前本地实现与验证](docs/development/local-implementation.md)、[任务覆盖与完成判定](docs/development/task-coverage.md)、[跨模块实现契约](docs/development/implementation-contract.md)
+- [当前本地实现与验证](docs/development/local-implementation.md)、[任务覆盖与完成判定](docs/development/task-coverage.md)、[性能与异常排查](docs/development/performance-audit.md)、[跨模块实现契约](docs/development/implementation-contract.md)
 - [部署工具](deploy/README.md)、[维护与密钥轮换](docs/deployment/README.md)
 - [设计原型交互与本地检查](docs/design/interaction-spec.md)
 - [题库决策0006](docs/decisions/0006-tiku-fork-token-billing.md)、[基础服务决策0007](docs/decisions/0007-server-foundation.md)、[业务实现0008](docs/decisions/0008-business-implementation.md)、[原生HTTP执行0009](docs/decisions/0009-native-http-execution.md)、[全自动测验0010](docs/decisions/0010-automatic-questions.md)

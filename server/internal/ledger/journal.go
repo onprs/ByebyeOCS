@@ -172,7 +172,7 @@ func (s *Service) findNoopKey(ctx context.Context, tx pgx.Tx, businessKey, reque
 		return false, nil
 	}
 	if err != nil {
-		return false, fault.New("service_unavailable", "无法检查零金额结算幂等键")
+		return false, fault.New("service_unavailable", "无法检查账务操作幂等键")
 	}
 	if stored != requestDigest {
 		return false, fault.New("conflict", "相同业务键已用于不同请求")
@@ -196,7 +196,7 @@ func (s *Service) rememberNoopKey(ctx context.Context, tx pgx.Tx, businessKey, r
 		return nil
 	}
 	if err != nil {
-		return fault.New("service_unavailable", "无法保存零金额结算幂等键")
+		return fault.New("service_unavailable", "无法保存账务操作幂等键")
 	}
 	return nil
 }

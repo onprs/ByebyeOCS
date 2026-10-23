@@ -75,10 +75,10 @@ done
 validate_user_name "$SERVICE_USER"
 validate_user_name "$TIKU_USER"
 [[ "$TIKU_USER" != "$SERVICE_USER" ]] || die "主服务和题库必须使用不同服务用户"
-case "$PREFIX" in /|/etc|/usr|/var|/opt|/home|/root|/tmp) die "拒绝使用过宽的程序路径：$PREFIX" ;; esac
-case "$CONFIG_DIR" in /|/etc|/usr|/var|/opt|/home|/root|/tmp) die "拒绝使用过宽的配置路径：$CONFIG_DIR" ;; esac
-case "$DATA_DIR" in /|/etc|/usr|/var|/opt|/home|/root|/tmp) die "拒绝使用过宽的数据路径：$DATA_DIR" ;; esac
-case "$TIKU_CONFIG_DIR" in /|/etc|/usr|/var|/opt|/home|/root|/tmp) die "拒绝使用过宽的题库配置路径：$TIKU_CONFIG_DIR" ;; esac
+reject_wide_path "程序路径" "$PREFIX"
+reject_wide_path "配置路径" "$CONFIG_DIR"
+reject_wide_path "数据路径" "$DATA_DIR"
+reject_wide_path "题库配置路径" "$TIKU_CONFIG_DIR"
 [[ "$CONFIG_DIR" != "$DATA_DIR" ]] || die "配置目录和数据目录必须分开"
 [[ "$CONFIG_DIR" != "$TIKU_CONFIG_DIR" ]] || die "主服务和题库配置目录必须分开"
 [[ "$PREFIX" != "$CONFIG_DIR" && "$PREFIX" != "$DATA_DIR" ]] || die "程序前缀不能与配置/数据目录相同"
@@ -89,13 +89,25 @@ elif [[ $EUID -ne 0 ]]; then
   die "安装需要 root；仅隔离测试可使用 --no-systemd --no-service-user"
 fi
 
-for cmd in install cp mv ln readlink realpath sha256sum find sed uname; do
+for cmd in install cp mv ln readlink realpath sha256sum find sed uname mktemp chmod chown flock grep head; do
   require_cmd "$cmd"
 done
 
 VERSION=$(verify_release_root "$RELEASE_ROOT")
 safe_version "$VERSION"
 log "校验通过：ByebyeOCS $VERSION（$(uname -m)）"
+
+# 同一 PREFIX 只允许一个安装/升级/回滚/卸载操作。
+lock_prefix "$PREFIX"
+cleanup() {
+  restore_replaced_releases "$PREFIX"
+  cleanup_temp_paths
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+cleanup_stale_prefix_artifacts "$PREFIX"
 
 if [[ "$NO_SERVICE_USER" != 1 ]]; then
   ensure_user "$SERVICE_USER" "$DATA_DIR"
@@ -165,11 +177,13 @@ install_units
 
 # 记录本次安装路径，供升级/回滚/卸载使用；不包含密钥或数据库连接。
 STATE_FILE="$PREFIX/install.env"
-STATE_TMP="$PREFIX/.install.env.$$"
+STATE_TMP=$(mktemp "$PREFIX/.install.env.XXXXXXXX")
+register_temp_path "$STATE_TMP"
 printf 'PREFIX=%q\nCONFIG_DIR=%q\nDATA_DIR=%q\nTIKU_CONFIG_DIR=%q\nSERVICE_USER=%q\nTIKU_USER=%q\nSKIP_TIKU=%q\n' \
   "$PREFIX" "$CONFIG_DIR" "$DATA_DIR" "$TIKU_CONFIG_DIR" "$SERVICE_USER" "$TIKU_USER" "$SKIP_TIKU" >"$STATE_TMP"
 chmod 0600 "$STATE_TMP"
 mv -Tf -- "$STATE_TMP" "$STATE_FILE"
+forget_temp_path "$STATE_TMP"
 
 log ""
 log "安装完成，但服务未启动，数据库未迁移，管理员未创建，真实收费未启用。"

@@ -16,6 +16,10 @@ class SessionManager {
   String? challengeBinding;
   void Function()? onExpired;
 
+  /// 读取代次：清除或写入新令牌后，早先发起但未完成的读取结果必须丢弃。
+  int _storeEpoch = 0;
+  Future<void>? _pendingLoad;
+
   bool get isWeb => channel == ClientChannel.web;
 
   String? get accessToken => _tokens?.accessToken;
@@ -27,8 +31,24 @@ class SessionManager {
       _loaded = true;
       return;
     }
-    _tokens = await _store.read();
-    _loaded = true;
+    final pending = _pendingLoad;
+    if (pending != null) return pending;
+    final load = _loadFromStore();
+    _pendingLoad = load;
+    await load;
+  }
+
+  Future<void> _loadFromStore() async {
+    final epoch = _storeEpoch;
+    try {
+      final tokens = await _store.read();
+      // 读取期间发生退出、切换服务或新登录时，以内存中的新事实为准。
+      if (epoch != _storeEpoch) return;
+      _tokens = tokens;
+      _loaded = true;
+    } finally {
+      _pendingLoad = null;
+    }
   }
 
   Future<void> acceptLogin({
@@ -41,12 +61,14 @@ class SessionManager {
       csrfToken = csrf;
     }
     if (!isWeb && accessToken != null && refreshToken != null) {
+      _storeEpoch++;
       final tokens = StoredTokens(
         accessToken: accessToken,
         refreshToken: refreshToken,
         accessExpiresAt: accessExpiresAt,
       );
       _tokens = tokens;
+      _loaded = true;
       await _store.write(tokens);
     }
     _expiredNotified = false;
@@ -64,12 +86,14 @@ class SessionManager {
     DateTime? accessExpiresAt,
   }) async {
     if (isWeb) return;
+    _storeEpoch++;
     final tokens = StoredTokens(
       accessToken: accessToken,
       refreshToken: refreshToken,
       accessExpiresAt: accessExpiresAt,
     );
     _tokens = tokens;
+    _loaded = true;
     await _store.write(tokens);
   }
 
@@ -78,7 +102,9 @@ class SessionManager {
   }
 
   Future<void> clear() async {
+    _storeEpoch++;
     _tokens = null;
+    _loaded = true;
     csrfToken = null;
     challengeBinding = null;
     await _store.clear();

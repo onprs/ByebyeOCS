@@ -346,14 +346,61 @@ func joinAnd(parts []string) string {
 	return result
 }
 
+// closeExpiredPageOrders 只关闭当前结果页中已到期的未支付订单。
+// 订单到期是本地生命周期事实；列表读取不再触发全库扫描与更新（任意用户读页只影响
+// 自己看到的有限条目）。晚到付款仍由供应商通知/主动查单按真实付款事实入账，不依赖本地
+// 是否已关闭；并发入账的行因条件更新影响 0 行而不会被误标为关闭。
+func (s *Service) closeExpiredPageOrders(ctx context.Context, items []RechargeOrder, now time.Time) error {
+	ids := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Status == "pending_payment" && item.PaymentStatus == "unpaid" &&
+			!now.Before(item.expiresAtValue) {
+			ids = append(ids, item.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows, err := s.pool.Query(ctx, `UPDATE public.recharge_orders
+		SET status = 'closed', closed_at = $2, updated_at = $2, version = version + 1
+		WHERE id = ANY($1) AND status = 'pending_payment' AND payment_status = 'unpaid'
+		RETURNING id, closed_at, version`, ids, now)
+	if err != nil {
+		return fault.New("service_unavailable", "无法关闭超时订单")
+	}
+	defer rows.Close()
+	type closedOrder struct {
+		closedAt time.Time
+		version  int64
+	}
+	closed := make(map[string]closedOrder, len(ids))
+	for rows.Next() {
+		var id string
+		var value closedOrder
+		if err := rows.Scan(&id, &value.closedAt, &value.version); err != nil {
+			return fault.New("service_unavailable", "无法关闭超时订单")
+		}
+		closed[id] = value
+	}
+	if err := rows.Err(); err != nil {
+		return fault.New("service_unavailable", "无法关闭超时订单")
+	}
+	for index := range items {
+		value, ok := closed[items[index].ID]
+		if !ok {
+			continue
+		}
+		items[index].Status = "closed"
+		items[index].ClosedAt = utcTime(value.closedAt)
+		items[index].UpdatedAt = utcTime(now)
+		items[index].Version = value.version
+	}
+	return nil
+}
+
 func (s *Service) listOrders(ctx context.Context, where string, args []any, cursor string, limit int) (RechargeOrderPage, error) {
 	if limit < 1 || limit > 100 {
 		return RechargeOrderPage{}, fault.New("validation_failed", "每页数量必须为 1 到 100")
-	}
-	if _, err := s.pool.Exec(ctx, `UPDATE public.recharge_orders SET status = 'closed',
-		closed_at = $1, updated_at = $1, version = version + 1
-		WHERE status = 'pending_payment' AND payment_status = 'unpaid' AND expires_at < $1`, s.now()); err != nil {
-		return RechargeOrderPage{}, fault.New("service_unavailable", "无法关闭超时订单")
 	}
 	decoded, err := decodeCursor(cursor)
 	if err != nil {
@@ -387,6 +434,9 @@ func (s *Service) listOrders(ctx context.Context, where string, args []any, curs
 		page.Items = items[:limit]
 		last := items[limit-1]
 		page.NextCursor = encodeCursor(cursorValue{createdAt: last.createdAtValue, id: last.ID})
+	}
+	if err := s.closeExpiredPageOrders(ctx, page.Items, s.now()); err != nil {
+		return RechargeOrderPage{}, err
 	}
 	return page, nil
 }
@@ -590,7 +640,10 @@ func (s *Service) processPayment(ctx context.Context, fact paymentFact) error {
 			return fault.New("conflict", "充值入账分录已存在但与当前通知不一致")
 		}
 		now := s.now()
-		late := order.Status == "closed"
+		// 迟到支付以本地支付窗口判定：已关闭或已过 expires_at 但尚未入账的真实付款都按迟到记录，
+		// 不再依赖某个读页是否顺手扫过并关闭该订单；资金处理不变。
+		late := order.Status == "closed" ||
+			(order.Status == "pending_payment" && !now.Before(order.expiresAtValue))
 		status := "completed"
 		if late {
 			status = "completed"
