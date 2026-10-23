@@ -189,6 +189,12 @@ type Platform interface {
 	CheckTask(ctx context.Context, session []byte, ref PlatformTaskRef) (PlatformCheck, error)
 }
 
+// ScopedSessionPlatform 为一次完整平台操作维持隔离会话，结束时由调用方释放。
+// 平台未提供此能力时，沿用各方法原有的会话实现。
+type ScopedSessionPlatform interface {
+	BeginSession(context.Context, []byte) (context.Context, func(), error)
+}
+
 // Observation 是执行器观察，不构成平台确认。
 type Observation struct {
 	Fraction        *float64  `json:"fraction,omitempty"`

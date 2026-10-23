@@ -625,7 +625,7 @@ func (s *Service) ControlTask(ctx context.Context, actor Actor, taskID, idempote
 			state = $2, desired_state = $3, version = version + 1,
 			failure_count = $4, verification_attempts = $5,
 			stop_requested_at = CASE WHEN $6::timestamptz IS NOT NULL THEN $6
-				WHEN $8 IN ('resume', 'redispatch') THEN NULL ELSE stop_requested_at END,
+				WHEN $8 = 'redispatch' OR ($8 = 'resume' AND $2 NOT IN ('preparing','running')) THEN NULL ELSE stop_requested_at END,
 			next_attempt_at = CASE WHEN $2 = 'pending' THEN $7::timestamptz ELSE next_attempt_at END,
 			next_verify_at = CASE WHEN $2 IN ('pending', 'paused', 'cancelled') THEN NULL ELSE next_verify_at END,
 			lease_attempt_id = CASE WHEN $2 IN ('pending', 'paused', 'cancelled') THEN NULL ELSE lease_attempt_id END,
@@ -643,7 +643,7 @@ func (s *Service) ControlTask(ctx context.Context, actor Actor, taskID, idempote
 		if tag.RowsAffected() != 1 {
 			return errNotFound
 		}
-		if staleSnapshot && hasSubmission && state == StatePending {
+		if hasSubmission && state == StatePending {
 			tag, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
 				state = 'waiting_verification', next_attempt_at = NULL, next_verify_at = $2,
 				verification_reason = 'question_submission', last_error_code = '',
@@ -656,8 +656,9 @@ func (s *Service) ControlTask(ctx context.Context, actor Actor, taskID, idempote
 				return errNotFound
 			}
 			state = StateWaitingVerification
+			record.Version++
 		}
-		if active {
+		if active && action != "resume" {
 			_, err = tx.Exec(ctx, `UPDATE public.learning_task_attempts SET cancel_requested = true
 				WHERE task_id = $1 AND ended_at IS NULL`, taskID)
 			if err != nil {

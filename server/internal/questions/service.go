@@ -259,6 +259,8 @@ func (s *Service) RegisterAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/api/v1/question-models/{id}/tests", s.adminTestOffering)
 	mux.HandleFunc("GET /admin/api/v1/question-usage", s.adminUsage)
 	mux.HandleFunc("GET /admin/api/v1/question-queries", s.adminListQueries)
+	mux.HandleFunc("GET /admin/api/v1/question-cache-reports", s.adminListCacheReports)
+	mux.HandleFunc("POST /admin/api/v1/question-cache-reports/{id}/review", s.adminReviewCacheReport)
 	mux.HandleFunc("POST /admin/api/v1/question-cache/invalidations", s.adminInvalidateCache)
 }
 
@@ -385,20 +387,17 @@ func validateImages(title, options string, images []string, maxImages int, maxBy
 		return imageValidation{}, fault.New("validation_failed", fmt.Sprintf("图片数量不能超过 %d 张", maxImages))
 	}
 	markers := regexp.MustCompile(`\[图片([1-9][0-9]*)\]`).FindAllStringSubmatch(title+"\n"+options, -1)
-	used := make(map[int]bool)
 	for _, marker := range markers {
 		var index int
 		_, _ = fmt.Sscanf(marker[1], "%d", &index)
 		if index < 1 || index > len(images) {
 			return imageValidation{}, fault.New("validation_failed", "图片标记缺少对应图片数据")
 		}
-		used[index] = true
 	}
+	// [图片N] 只做定位校验；自动做题的题干来自平台 HTML，图片按 DOM 顺序附加，
+	// 不含占位标记。要求每张图片都被文本引用会把合法的平台图片题拒绝在模型调用前。
 	hash := sha256.New()
 	for i, raw := range images {
-		if !used[i+1] {
-			return imageValidation{}, fault.New("validation_failed", "存在未被题目标记引用的图片")
-		}
 		header, encoded, ok := strings.Cut(raw, ",")
 		if !ok || !strings.HasPrefix(strings.ToLower(header), "data:image/") || !strings.HasSuffix(strings.ToLower(header), ";base64") {
 			return imageValidation{}, fault.New("validation_failed", "图片必须使用 Base64 data URL")

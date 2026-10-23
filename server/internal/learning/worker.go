@@ -729,8 +729,8 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 				verification_attempts = 0, version = version + 1, updated_at = $4
 				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, now)
 		case (failure.Class == FailureStopped || failure.Class == FailureCancelled) && cancelRequested &&
-			record.LastErrorCode == snapshotMissingCode && record.DesiredState == DesiredRun:
-			// 快照触发的停止须保留原运行意图和预占；已发送最终提交时只回到核验。
+			record.DesiredState == DesiredRun:
+			// 停止握手期间已恢复运行意图时保留原预占；已发送最终提交时只回到核验。
 			var present, submitted bool
 			if err := tx.QueryRow(ctx, `SELECT
 				EXISTS (SELECT 1 FROM public.learning_attachments a
@@ -747,7 +747,7 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 			if submitted {
 				target, code, reason, nextVerify = StateWaitingVerification, "", "question_submission", now
 			} else if present {
-				// 停止握手结束前任务已重现，按原报价重新领取，保留原查询幂等键。
+				// 停止握手结束且任务仍有效，沿用原报价及查询幂等键重新领取。
 				target, code = StatePending, ""
 			}
 			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET

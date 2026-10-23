@@ -64,6 +64,9 @@ func initializeConfig(args []string, stdout io.Writer) error {
 	cfg.Auth.Enabled = true
 	cfg.Auth.EncryptionKeyFile = relative(directory, keyPath)
 	cfg.Auth.IdentityKeyFile = relative(directory, identityPath)
+	// 与 deploy/backup.sh 的默认恢复点位置保持一致；备份未就绪时由维护门槛
+	// 阻止新付款，就绪后无需再手工补配置字段。
+	cfg.Operations.BackupStatusFile = filepath.Join("secrets", "backup-status.json")
 	if *development {
 		cfg.Mode = "development"
 		cfg.Auth.CookieSecure = false

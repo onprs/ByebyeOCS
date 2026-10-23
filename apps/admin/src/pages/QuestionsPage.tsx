@@ -51,6 +51,7 @@ import {
   parseYuanToMicros,
   truncateMiddle,
 } from '../lib/format'
+import { QuestionReportsPanel } from './QuestionReportsPanel'
 import { useAsync, useCursorStack, useDebouncedValue } from '../lib/hooks'
 
 interface ModelDraft {
@@ -589,6 +590,8 @@ export function QuestionsPage() {
           <EmptyState title="暂无查询记录" description="暂无题库查询记录；未定价时不显示虚假金额或收入。" />
         )}
       </Card>
+
+      <QuestionReportsPanel canManage={canManage} />
 
       <div className="card-footer-link" style={{ border: 0, paddingLeft: 2 }}>
         <ShieldCheck size={12} /> 模型密钥与上游地址不会在此页面显示；公开条目、价格版本、查询事实与用量汇总用于核对。

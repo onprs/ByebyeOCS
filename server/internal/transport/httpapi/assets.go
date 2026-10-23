@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/onprs/ByebyeOCS/server/internal/web"
 )
@@ -67,6 +68,8 @@ func assetHandler(directory string) http.Handler {
 			return
 		}
 		defer file.Close()
+		// Flutter大资源和慢速首屏下载需要独立输出期限，普通API仍使用服务默认值。
+		_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Minute))
 		w.Header().Del("Content-Type")
 		w.Header().Set("Cache-Control", "no-cache")
 		http.ServeContent(w, r, info.Name(), info.ModTime(), file)

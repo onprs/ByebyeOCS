@@ -66,6 +66,16 @@ void main() {
         'credit_status': 'needs_review',
       });
       expect(review.stage, RechargeStage.needsReview);
+
+      final refunded = RechargeOrder.parse({
+        'id': 'o5',
+        'amount_minor': '1000',
+        'status': 'completed',
+        'payment_status': 'refunded',
+        'credit_status': 'credited',
+      });
+      expect(refunded.stage, RechargeStage.refunded);
+      expect(refunded.stageLabel, '已退款');
     });
   });
 

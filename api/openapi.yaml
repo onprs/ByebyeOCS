@@ -2863,6 +2863,87 @@ paths:
           - needs_review
           - failed
       - $ref: '#/components/parameters/OfferingIDFilter'
+  /admin/api/v1/question-cache-reports:
+    get:
+      operationId: listAdminQuestionCacheReports
+      tags: [admin-questions]
+      summary: 分页读取用户答案报告
+      description: 需要question:read权限。返回报告理由与最小查询、模型及缓存引用，不返回原题或答案。
+      security:
+      - adminCookie: []
+      parameters:
+      - $ref: '#/components/parameters/Limit'
+      - $ref: '#/components/parameters/Cursor'
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum: [pending, resolved, rejected, all]
+          default: pending
+      responses:
+        '200':
+          description: 报告列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionCacheReportPage'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /admin/api/v1/question-cache-reports/{id}/review:
+    post:
+      operationId: reviewAdminQuestionCacheReport
+      tags: [admin-questions]
+      summary: 记录答案报告处理结果
+      description: 需要question:manage权限及管理员Cookie/CSRF。报告只允许从pending结清；相同管理员、幂等键、报告、状态和理由返回原结果，同键不同负载冲突。复核不发起模型调用或缓存失效。
+      security:
+      - adminCookie: []
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - $ref: '#/components/parameters/AdminCsrf'
+      - $ref: '#/components/parameters/AdminOrigin'
+      - in: header
+        name: Idempotency-Key
+        required: true
+        schema:
+          type: string
+          minLength: 8
+          maxLength: 128
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuestionCacheReportReviewInput'
+      responses:
+        '200':
+          description: 已记录或幂等重放的处理结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuestionCacheReportReviewResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /admin/api/v1/question-cache/invalidations:
     post:
       operationId: invalidateQuestionCache
@@ -3966,6 +4047,9 @@ components:
               type: boolean
             tiku:
               type: boolean
+            shared_question_cache:
+              type: boolean
+              description: 题库服务已启用且维护配置允许共享缓存；仍需模型条目允许。
             preferences:
               type: boolean
             events:
@@ -6594,6 +6678,84 @@ components:
       additionalProperties: false
       required:
       - items
+    QuestionCacheReport:
+      type: object
+      additionalProperties: false
+      required: [id, query, cache_entry_id, reason, status, created_at, resolved_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        query:
+          type: object
+          additionalProperties: false
+          required: [id, model]
+          properties:
+            id:
+              type: string
+            model:
+              type: object
+              additionalProperties: false
+              required: [offering_id, display_name]
+              properties:
+                offering_id:
+                  type: string
+                display_name:
+                  type: string
+        cache_entry_id:
+          type: string
+          nullable: true
+        reason:
+          type: string
+          maxLength: 1000
+        status:
+          type: string
+          enum: [pending, resolved, rejected]
+        created_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+    QuestionCacheReportPage:
+      type: object
+      additionalProperties: false
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuestionCacheReport'
+        next_cursor:
+          type: string
+          nullable: true
+    QuestionCacheReportReviewInput:
+      type: object
+      additionalProperties: false
+      required: [status, reason]
+      properties:
+        status:
+          type: string
+          enum: [resolved, rejected]
+        reason:
+          type: string
+          minLength: 5
+          maxLength: 500
+    QuestionCacheReportReviewResult:
+      type: object
+      additionalProperties: false
+      required: [id, status, resolved_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [resolved, rejected]
+        resolved_at:
+          type: string
+          format: date-time
     PriceView:
       type: object
       properties:
@@ -6639,6 +6801,7 @@ components:
           enum:
           - ceil
           - floor
+          - half_up
         min_charge_minor:
           type: string
           pattern: ^[0-9]+$
@@ -6704,7 +6867,10 @@ components:
         service:
           $ref: '#/components/schemas/PriceView'
         tiku:
-          $ref: '#/components/schemas/PriceView'
+          allOf:
+          - $ref: '#/components/schemas/PriceView'
+          deprecated: true
+          description: 保留的全局题库价格兼容字段；正式查询以公开模型条目的pricing为准。
         recharge:
           $ref: '#/components/schemas/RechargePolicy'
       additionalProperties: false
@@ -7311,7 +7477,10 @@ components:
         service_price:
           $ref: '#/components/schemas/ServicePricePatch'
         tiku_price:
-          $ref: '#/components/schemas/TikuPricePatch'
+          allOf:
+          - $ref: '#/components/schemas/TikuPricePatch'
+          deprecated: true
+          description: 兼容全局题库配置；正式题库价格在模型条目上维护，此字段不决定模型查询费用。
       additionalProperties: false
       description: 字段均可选；提供的字段整体替换。价格对象是不可变快照，修改价格必须提供完整字段。
     ServicePricePatch:
@@ -7335,6 +7504,7 @@ components:
           enum:
           - ceil
           - floor
+          - half_up
         min_charge_minor:
           type: string
           pattern: ^[0-9]+$
@@ -7376,6 +7546,7 @@ components:
           enum:
           - ceil
           - floor
+          - half_up
         unit_label:
           type: string
           maxLength: 40

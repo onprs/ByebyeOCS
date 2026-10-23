@@ -9,13 +9,18 @@ import (
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
 )
 
-// BeginWorkSession 保持同一次取题、图片读取与最终提交的Cookie轮换连续。
-func (p *Platform) BeginWorkSession(ctx context.Context, raw []byte) (context.Context, func(), error) {
+// BeginSession 在一次课程同步或其他多步操作内保持隔离的Cookie轮换连续。
+func (p *Platform) BeginSession(ctx context.Context, raw []byte) (context.Context, func(), error) {
 	session, err := decodeSession(raw)
 	if err != nil {
 		return ctx, nil, learning.Fail(learning.FailureIdentityInvalid, "平台会话格式无效")
 	}
 	return p.withSessionClient(ctx, session)
+}
+
+// BeginWorkSession 兼容自动作答作用域，取题至提交使用同一个隔离容器。
+func (p *Platform) BeginWorkSession(ctx context.Context, raw []byte) (context.Context, func(), error) {
+	return p.BeginSession(ctx, raw)
 }
 
 type platformClientKey struct{}

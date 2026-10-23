@@ -170,6 +170,8 @@ class RechargeOrder {
   Money get amount => Money(amountMinor, currency: currency);
 
   RechargeStage get stage {
+    // 渠道退款是订单最终的支付事实；即使此前已到账，也应优先展示已退款。
+    if (paymentStatus == 'refunded') return RechargeStage.refunded;
     if (creditStatus == 'credited' || status == 'completed') {
       return RechargeStage.credited;
     }
@@ -180,7 +182,6 @@ class RechargeOrder {
         latePayment) {
       return RechargeStage.needsReview;
     }
-    if (paymentStatus == 'refunded') return RechargeStage.refunded;
     if (status == 'closed') return RechargeStage.closed;
     if (paymentStatus == 'paid') return RechargeStage.paidWaitingCredit;
     if (status == 'pending_payment' || paymentStatus == 'unpaid') {

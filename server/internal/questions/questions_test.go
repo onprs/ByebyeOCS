@@ -84,6 +84,11 @@ type fakeBilling struct {
 	reserveErr    error
 	settleErr     error
 	releaseErr    error
+	// reserveFailures 让前 N 次预占按余额不足失败，用于验证充值后的重新调度。
+	reserveFailures int
+	// holds 按业务键保存预占，与真实账本一样同键重复预占返回同一笔预占。
+	holds    map[string]string
+	released map[string]bool
 }
 
 func (b *fakeBilling) Reserve(_ context.Context, tx pgx.Tx, userID, key string, amountMinor int64) (string, error) {
@@ -95,9 +100,21 @@ func (b *fakeBilling) Reserve(_ context.Context, tx pgx.Tx, userID, key string, 
 	if b.reserveErr != nil {
 		return "", b.reserveErr
 	}
+	if b.holds == nil {
+		b.holds = make(map[string]string)
+	}
+	if holdID := b.holds[key]; holdID != "" {
+		return holdID, nil
+	}
+	if b.reserveFailures > 0 {
+		b.reserveFailures--
+		return "", fault.New("insufficient_balance", "余额不足")
+	}
+	holdID := web.NewID()
+	b.holds[key] = holdID
 	b.reserves++
 	b.reservedMinor, b.userID, b.key = amountMinor, userID, key
-	return web.NewID(), nil
+	return holdID, nil
 }
 
 func (b *fakeBilling) Settle(_ context.Context, tx pgx.Tx, holdID, key string, actualMinor int64) error {
@@ -108,6 +125,12 @@ func (b *fakeBilling) Settle(_ context.Context, tx pgx.Tx, holdID, key string, a
 	defer b.mu.Unlock()
 	if b.settleErr != nil {
 		return b.settleErr
+	}
+	if b.holds[key] != holdID {
+		return errors.New("预占不存在或已释放")
+	}
+	if b.released[key] {
+		return errors.New("预占已释放")
 	}
 	b.settles++
 	b.settledMinor = actualMinor
@@ -123,6 +146,17 @@ func (b *fakeBilling) Release(_ context.Context, tx pgx.Tx, holdID, key string) 
 	if b.releaseErr != nil {
 		return b.releaseErr
 	}
+	if b.holds[key] != holdID {
+		return errors.New("预占不存在")
+	}
+	// 与真实账本一致：同一业务键的重复释放是幂等的。
+	if b.released[key] {
+		return nil
+	}
+	if b.released == nil {
+		b.released = make(map[string]bool)
+	}
+	b.released[key] = true
 	b.releases++
 	return nil
 }
@@ -1016,5 +1050,41 @@ func TestIdempotencyConflict(t *testing.T) {
 	}
 	if env.fork.callCount() != 1 {
 		t.Fatal("冲突请求不得产生新的 fork 调用")
+	}
+}
+
+// 缓存失效后，同一缓存条目的待处理报告应结清；失效原因按公开契约允许最长 1000 字。
+func TestInvalidateCacheResolvesPendingReports(t *testing.T) {
+	entryID := "entry-report"
+	created := time.Now().UTC()
+	zero := int64(0)
+	fork := &fakeFork{answer: func(request ForkAnswerRequest) (ForkAnswerResponse, error) {
+		return ForkAnswerResponse{RequestID: request.RequestID, Status: "cache_hit", Answer: "A",
+			Model: ForkModel{OfferingID: request.ModelOfferingID}, Mode: request.Mode,
+			Cache: ForkCache{Hit: true, EntryID: &entryID, CreatedAt: &created},
+			Usage: Usage{InputTokens: &zero, OutputTokens: &zero, TotalTokens: &zero, Complete: true, Calls: []Call{}}}, nil
+	}}
+	env := newTestEnv(t, envOptions{fork: fork})
+	env.createOffering(t, "报告模型", "internal-report", nil, true)
+	view := mustAnswer(t, env, "report-query-0001", queryBody("报告题", "cache_first"))
+
+	report := env.call(t, http.MethodPost, "/api/v1/question-cache-reports",
+		map[string]any{"query_id": view.ID, "reason": "答案与题目不符"}, env.user(), nil)
+	if report.Code != http.StatusCreated {
+		t.Fatalf("报告应被记录：%d %s", report.Code, report.Body.String())
+	}
+	invalidated := env.call(t, http.MethodPost, "/admin/api/v1/question-cache/invalidations",
+		map[string]any{"query_id": view.ID, "reason": strings.Repeat("核对失败原因", 100)}, env.admin(), nil)
+	if invalidated.Code != http.StatusOK {
+		t.Fatalf("失效应成功：%d %s", invalidated.Code, invalidated.Body.String())
+	}
+	var status string
+	var resolvedAt *time.Time
+	if err := env.pool.QueryRow(context.Background(), `SELECT status, resolved_at FROM public.question_cache_reports
+		WHERE query_id = $1`, view.ID).Scan(&status, &resolvedAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "resolved" || resolvedAt == nil {
+		t.Fatalf("失效后报告应结清：%s/%v", status, resolvedAt)
 	}
 }

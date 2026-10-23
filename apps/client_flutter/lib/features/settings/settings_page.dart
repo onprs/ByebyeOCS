@@ -211,6 +211,25 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               ),
             ),
             const SizedBox(height: 14),
+            if (!auth.capabilities.questionsExplicitlyDisabled)
+              SectionCard(
+                title: '题库查询',
+                subtitle: '输入题目后查询答案；发现答案或缓存有误可以报告复核。',
+                action: TextButton.icon(
+                  onPressed: () => context.go('/questions'),
+                  icon: const Icon(Icons.arrow_forward, size: 15),
+                  label: const Text('打开'),
+                ),
+                child: Text(
+                  '单独查询不写入课程任务，安排内的测验仍由任务自动完成。',
+                  style: TextStyle(
+                    color: colors.textSecondary,
+                    fontSize: 11.5,
+                    height: 1.5,
+                  ),
+                ),
+              ),
+            const SizedBox(height: 14),
             SectionCard(
               title: '数据与隐私',
               subtitle: '导出和删除的处理状态与文件以下发结果为准。',
@@ -343,12 +362,30 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   ? StatusTone.warning
                   : StatusTone.success,
               message: privacy.error ?? privacy.notice!,
-              action: IconButton(
-                tooltip: '关闭',
-                onPressed: () =>
-                    ref.read(privacyControllerProvider.notifier).clearBanner(),
-                icon: const Icon(Icons.close, size: 16),
-              ),
+              action: privacy.errorCode == 'step_up_required'
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton(
+                          onPressed: _logoutForReverify,
+                          child: const Text('重新验证'),
+                        ),
+                        IconButton(
+                          tooltip: '关闭',
+                          onPressed: () => ref
+                              .read(privacyControllerProvider.notifier)
+                              .clearBanner(),
+                          icon: const Icon(Icons.close, size: 16),
+                        ),
+                      ],
+                    )
+                  : IconButton(
+                      tooltip: '关闭',
+                      onPressed: () => ref
+                          .read(privacyControllerProvider.notifier)
+                          .clearBanner(),
+                      icon: const Icon(Icons.close, size: 16),
+                    ),
             ),
           ),
         _DataActionRow(

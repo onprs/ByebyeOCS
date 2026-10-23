@@ -72,6 +72,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ -n "$USER_ORIGIN" && -z "$ADMIN_ORIGIN" ]] || [[ -z "$USER_ORIGIN" && -n "$ADMIN_ORIGIN" ]]; then
+  die "生成配置时必须同时提供 --user-origin 和 --admin-origin"
+fi
 validate_user_name "$SERVICE_USER"
 validate_user_name "$TIKU_USER"
 [[ "$TIKU_USER" != "$SERVICE_USER" ]] || die "主服务和题库必须使用不同服务用户"
@@ -83,6 +86,9 @@ reject_wide_path "题库配置路径" "$TIKU_CONFIG_DIR"
 [[ "$CONFIG_DIR" != "$TIKU_CONFIG_DIR" ]] || die "主服务和题库配置目录必须分开"
 [[ "$PREFIX" != "$CONFIG_DIR" && "$PREFIX" != "$DATA_DIR" ]] || die "程序前缀不能与配置/数据目录相同"
 
+if [[ "$NO_SERVICE_USER" == 1 && "$NO_SYSTEMD" != 1 ]]; then
+  die "--no-service-user 只能与 --no-systemd 一起用于隔离测试，避免安装 root 运行的服务单元"
+fi
 if [[ "$NO_SYSTEMD" == 1 && "$NO_SERVICE_USER" == 1 ]]; then
   : # 允许非 root 隔离测试/打包。
 elif [[ $EUID -ne 0 ]]; then
@@ -154,7 +160,9 @@ fi
 
 # 首次安装且提供了两个 Origin 时，可用正式 CLI 生成配置和独立密钥。
 # config init 会拒绝覆盖；不会创建数据库、管理员或收费配置。
-if [[ ! -e "$CONFIG_DIR/config.yaml" && -n "$USER_ORIGIN" && -n "$ADMIN_ORIGIN" ]]; then
+if [[ -e "$CONFIG_DIR/config.yaml" ]]; then
+  log "已存在 $CONFIG_DIR/config.yaml，本次未重新生成或覆盖。"
+elif [[ -n "$USER_ORIGIN" && -n "$ADMIN_ORIGIN" ]]; then
   init_args=(config init --output "$CONFIG_DIR/config.yaml" --key-output "$CONFIG_DIR/secrets/application-v1.key"
     --user-origin "$USER_ORIGIN" --admin-origin "$ADMIN_ORIGIN"
     --data-dir "$DATA_DIR" --admin-assets-dir "$PREFIX/current/apps/admin"
@@ -188,9 +196,13 @@ forget_temp_path "$STATE_TMP"
 log ""
 log "安装完成，但服务未启动，数据库未迁移，管理员未创建，真实收费未启用。"
 log "下一步："
-log "  1. 按 $CONFIG_DIR/config.yaml.example 配置数据库和两个 HTTPS Origin。"
+if [[ -e "$CONFIG_DIR/config.yaml" ]]; then
+  log "  1. 核对 $CONFIG_DIR/config.yaml，并创建仅 $SERVICE_USER 可读的 $CONFIG_DIR/secrets/database.dsn。"
+else
+  log "  1. 按 $CONFIG_DIR/config.yaml.example 创建 config.yaml、两个 HTTPS Origin 和数据库 DSN。"
+fi
 log "  2. sudo -u $SERVICE_USER $PREFIX/current/bin/byebyeocs migrate up --config $CONFIG_DIR/config.yaml"
 log "  3. sudo -u $SERVICE_USER $PREFIX/current/bin/byebyeocs admin create --config $CONFIG_DIR/config.yaml --username ... --password-file ... --totp-output-file $CONFIG_DIR/secrets/admin-totp-setup.json"
 log "  4. 配置反向代理（参考发布包 configs/nginx-*.example.conf）。"
 log "  5. systemctl enable --now $SERVICE_NAME"
-[[ "$SKIP_TIKU" == 1 ]] || log "题库：配置 $TIKU_CONFIG_DIR/ocs-tiku-fork.json 和独立数据库后再启用 $TIKU_SERVICE_NAME。"
+[[ "$SKIP_TIKU" == 1 ]] || log "题库：配置 $TIKU_CONFIG_DIR/ocs-tiku-fork.json 和独立数据库后，先执行 sudo -u $TIKU_USER $PREFIX/current/bin/ocs-tiku-fork migrate -config $TIKU_CONFIG_DIR/ocs-tiku-fork.json，再启用 $TIKU_SERVICE_NAME。"

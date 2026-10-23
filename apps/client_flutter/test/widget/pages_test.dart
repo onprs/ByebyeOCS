@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:byebyeocs_client/core/api/api_error.dart';
 import 'package:byebyeocs_client/core/models/capabilities.dart';
+import 'package:byebyeocs_client/design/components.dart';
 import 'package:byebyeocs_client/features/auth/login_page.dart';
 import 'package:byebyeocs_client/features/courses/course_detail_page.dart';
 import 'package:byebyeocs_client/features/courses/courses_page.dart';
@@ -138,6 +139,32 @@ void main() {
     expect(find.textContaining('单价待公布'), findsWidgets);
   });
 
+  testWidgets('钱包题库费用说明指向公开模型价格，不回显全局旧费率', (tester) async {
+    final server = TestServer(
+      overrides: {
+        'GET /api/v1/pricing': (_) async => jsonResponse({
+              ...pricingFixture,
+              'automatic_charging': true,
+              'tiku': {
+                'scope': 'tiku_tokens',
+                'configured': true,
+                'state': 'active',
+                'unit_label': 'tokens',
+                'unit_precision': 0,
+                'input_micros_per_million': '7654321',
+                'output_micros_per_million': '1234567',
+              },
+            }),
+      },
+    );
+
+    await pumpTestPage(tester, const WalletPage(), handler: server.call);
+
+    expect(find.text('题库：按所选公开模型的 token 价格单独计费。'), findsOneWidget);
+    expect(find.textContaining('7.654321'), findsNothing);
+    expect(find.textContaining('1.234567'), findsNothing);
+  });
+
   testWidgets('支付回跳只查询服务端，不本地增加余额', (tester) async {
     final server = TestServer(
       overrides: {
@@ -218,6 +245,34 @@ void main() {
     );
   });
 
+  testWidgets('导出下载需要重新验证时提供重新验证入口', (tester) async {
+    final server = TestServer(
+      overrides: {
+        'GET /api/v1/me/data-exports/de1/download': (_) async => jsonResponse(
+              {
+                'error': {
+                  'code': 'step_up_required',
+                  'message': '下载前请重新验证身份',
+                  'request_id': 'req_test',
+                  'retryable': false,
+                  'scope': 'request',
+                },
+              },
+              status: 403,
+            ),
+      },
+    );
+    await pumpTestPage(tester, const SettingsPage(), handler: server.call);
+
+    final download = find.widgetWithText(AsyncButton, '下载 JSON');
+    await tester.ensureVisible(download);
+    await tester.tap(download);
+    await settle(tester);
+
+    expect(find.text('下载前请重新验证身份'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '重新验证'), findsOneWidget);
+  });
+
   testWidgets('设置页展示身份、外观、通知与数据请求', (tester) async {
     await pumpTestPage(tester, const SettingsPage());
 
@@ -228,6 +283,8 @@ void main() {
     expect(find.text('青禾'), findsOneWidget);
     expect(find.text('靛蓝'), findsOneWidget);
     expect(find.text('任务需要处理时提醒'), findsOneWidget);
+    expect(find.text('题库查询'), findsOneWidget);
+    expect(find.widgetWithText(TextButton, '打开'), findsOneWidget);
     expect(find.text('服务连接'), findsOneWidget);
     expect(find.text('申请导出'), findsOneWidget);
     expect(find.text('申请删除'), findsOneWidget);

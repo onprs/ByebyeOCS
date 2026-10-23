@@ -22,11 +22,15 @@ func (s *Service) claimCourseSync(ctx context.Context) (*courseSyncJob, error) {
 	var job courseSyncJob
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
 		err := tx.QueryRow(ctx, `WITH candidate AS (
-				SELECT id FROM public.learning_course_syncs
-				WHERE (status = 'queued' AND (next_attempt_at IS NULL OR next_attempt_at <= $1))
-				   OR (status = 'running' AND lease_expires_at <= $1)
-				ORDER BY requested_at
-				FOR UPDATE SKIP LOCKED
+				SELECT pending.id FROM public.learning_course_syncs pending
+				JOIN public.users u ON u.id=pending.user_id
+				JOIN public.learning_accounts ac ON ac.user_id=pending.user_id
+				WHERE u.status='active' AND ac.blocked_code=''
+				  AND (ac.blocked_until IS NULL OR ac.blocked_until <= $1)
+				  AND ((pending.status='queued' AND (pending.next_attempt_at IS NULL OR pending.next_attempt_at <= $1))
+				    OR (pending.status='running' AND pending.lease_expires_at <= $1))
+				ORDER BY pending.requested_at
+				FOR UPDATE OF pending SKIP LOCKED
 				LIMIT 1
 			)
 			UPDATE public.learning_course_syncs s
@@ -57,9 +61,13 @@ func (s *Service) claimCourseSync(ctx context.Context) (*courseSyncJob, error) {
 // assertCourseSyncLease 续租并确认 fencing token 仍有效。
 func (s *Service) assertCourseSyncLease(ctx context.Context, job *courseSyncJob) error {
 	now := s.now()
-	tag, err := s.pool.Exec(ctx, `UPDATE public.learning_course_syncs
+	tag, err := s.pool.Exec(ctx, `UPDATE public.learning_course_syncs sync
 		SET lease_expires_at = $3, updated_at = $4
-		WHERE id = $1 AND fence_token = $2 AND status = 'running' AND lease_expires_at > $4`,
+		WHERE id = $1 AND fence_token = $2 AND status = 'running' AND lease_expires_at > $4
+		  AND EXISTS (SELECT 1 FROM public.users u
+			JOIN public.learning_accounts ac ON ac.user_id=u.id
+			WHERE u.id=sync.user_id AND u.status='active' AND ac.blocked_code=''
+			  AND (ac.blocked_until IS NULL OR ac.blocked_until <= $4))`,
 		job.ID, job.FenceToken, now.Add(s.opts.LeaseTTL), now)
 	if err != nil {
 		return errServiceUnavailable
@@ -116,6 +124,17 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 	}
 	var version int64
 	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		// 与用户停用/闭户互斥：限制生效后不再写入新快照。
+		var allowed bool
+		if err := tx.QueryRow(ctx, `SELECT u.status='active' AND ac.blocked_code=''
+			AND (ac.blocked_until IS NULL OR ac.blocked_until <= $2)
+			FROM public.users u JOIN public.learning_accounts ac ON ac.user_id=u.id
+			WHERE u.id=$1 FOR SHARE OF u`, account.UserID, now).Scan(&allowed); err != nil {
+			return errServiceUnavailable
+		}
+		if !allowed {
+			return errLeaseLost
+		}
 		// 写前确认租约。网络读取不持有此锁。
 		var fence int64
 		if err := tx.QueryRow(ctx, `SELECT fence_token FROM public.learning_course_syncs

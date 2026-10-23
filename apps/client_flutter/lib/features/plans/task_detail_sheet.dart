@@ -11,6 +11,7 @@ import '../../core/models/task.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
 import '../questions/question_providers.dart';
+import '../questions/question_widgets.dart';
 import 'plans_controller.dart';
 import 'task_visuals.dart';
 
@@ -808,6 +809,8 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
   bool _querying = false;
   bool _reporting = false;
   String? _selectedModelId;
+  String? _queryKey;
+  String? _querySignature;
   AnswerMode _mode = AnswerMode.cacheFirst;
   String? _error;
   String? _notice;
@@ -892,7 +895,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
                 ),
               )
             else
-              _PromptView(prompt: prompt),
+              QuestionPromptView(prompt: prompt),
             const SizedBox(height: 12),
             offeringsAsync.when(
               loading: () => const LinearProgressIndicator(minHeight: 2),
@@ -913,7 +916,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
             ],
             if (_query != null) ...[
               const SizedBox(height: 14),
-              _QueryResult(
+              QuestionResultCard(
                 query: _query!,
                 reporting: _reporting,
                 onReport: _report,
@@ -924,7 +927,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
               InlineNotice(
                 tone: StatusTone.warning,
                 icon: Icons.fact_check_outlined,
-                message: _reviewReasonLabel(_query!.reviewReason),
+                message: questionReviewReasonLabel(_query!.reviewReason),
               ),
             ],
             if (_query?.status == 'failed') ...[
@@ -965,6 +968,8 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
       if (offering.id == _selectedModelId) selected = offering;
     }
     final missingSelected = _selectedModelId != null && selected == null;
+    final cacheAllowed = selected?.cacheAllowed ?? true;
+    final mode = cacheAllowed ? _mode : AnswerMode.alwaysLlm;
     final canQuery =
         prompt != null && selected != null && !_querying && !_loadingExisting;
     return Column(
@@ -1019,24 +1024,28 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
         ],
         const SizedBox(height: 12),
         SegmentedButton<AnswerMode>(
-          segments: const [
+          segments: [
             ButtonSegment(
               value: AnswerMode.cacheFirst,
-              label: Text('优先使用已有答案'),
+              label: const Text('优先使用已有答案'),
+              enabled: cacheAllowed,
             ),
-            ButtonSegment(
+            const ButtonSegment(
               value: AnswerMode.alwaysLlm,
               label: Text('每次都使用模型'),
             ),
           ],
-          selected: {_mode},
+          selected: {mode},
           showSelectedIcon: false,
-          onSelectionChanged:
-              _querying ? null : (value) => setState(() => _mode = value.first),
+          onSelectionChanged: _querying || !cacheAllowed
+              ? null
+              : (value) => setState(() => _mode = value.first),
         ),
         const SizedBox(height: 7),
         Text(
-          _mode.description,
+          !cacheAllowed
+              ? '该模型未启用答案缓存，每次都会调用模型。'
+              : mode.description,
           style: TextStyle(
             color: colors.textSecondary,
             fontSize: 11.5,
@@ -1055,6 +1064,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
                     ? () => _queryAnswer(
                           prompt: prompt,
                           offering: selected!,
+                          mode: mode,
                         )
                     : null,
               ),
@@ -1078,7 +1088,14 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
   Future<void> _queryAnswer({
     required QuestionPrompt prompt,
     required QuestionOffering offering,
+    required AnswerMode mode,
   }) async {
+    final signature = '${offering.id}\u0000${mode.value}\u0000${prompt.type}'
+        '\u0000${prompt.title}\u0000${prompt.options}';
+    if (_querySignature != signature || _queryKey == null) {
+      _querySignature = signature;
+      _queryKey = newIdempotencyKey();
+    }
     setState(() {
       _querying = true;
       _error = null;
@@ -1088,15 +1105,17 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
       final query = await ref.read(questionRepositoryProvider).createQuery(
             request: QuestionQueryRequest(
               modelOfferingId: offering.id,
-              mode: _mode,
+              mode: mode,
               prompt: prompt,
             ),
-            idempotencyKey: newIdempotencyKey(),
+            idempotencyKey: _queryKey!,
           );
       if (!mounted) return;
       setState(() {
         _query = query;
         _querying = false;
+        _queryKey = null;
+        _querySignature = null;
         _notice = query.answered ? '答案已返回' : '查询已提交，答案返回后可继续查看';
       });
       if (!query.answered && query.id.isNotEmpty) {
@@ -1146,12 +1165,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
   Future<void> _report() async {
     final query = _query;
     if (query == null || _reporting) return;
-    final reason = await _askReason(
-      context,
-      title: '报告答案问题',
-      message: '说明答案或缓存的问题，平台会标记待复核，不会直接删除账务记录。',
-      hint: '例如：答案与题目不符',
-    );
+    final reason = await askQuestionReportReason(context);
     if (reason == null || !mounted) return;
     setState(() {
       _reporting = true;
@@ -1182,344 +1196,98 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
     }
   }
 
-  String _reviewReasonLabel(String? reason) {
-    return switch (reason) {
-      'usage_incomplete' => '模型用量不完整，本次不自动扣费，等待人工核对。',
-      'reserve_failed' || 'billing_not_connected' => '费用预占未完成，查询结果等待核对。',
-      'billing_settlement_failed' ||
-      'billing_release_failed' =>
-        '费用结算出现异常，本次结果等待核对。',
-      'timeout' || 'unknown' => '模型响应超时或状态未知，本次结果等待人工核对。',
-      _ => '本次查询需要人工核对，未自动扣费。',
-    };
-  }
 }
 
-class _PromptView extends StatelessWidget {
-  const _PromptView({required this.prompt});
-
-  final QuestionPrompt prompt;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Container(
-      padding: const EdgeInsets.all(13),
-      decoration: BoxDecoration(
-        color: colors.surfaceSubtle,
-        borderRadius: colors.cardRadius,
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            prompt.typeLabel,
-            style: TextStyle(color: colors.muted, fontSize: 11),
-          ),
-          const SizedBox(height: 5),
-          Text(
-            prompt.title,
-            style: TextStyle(
-              color: colors.text,
-              fontSize: 13.5,
-              height: 1.55,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          if (prompt.options.isNotEmpty) ...[
-            const SizedBox(height: 8),
-            Text(
-              prompt.options,
-              style: TextStyle(
-                color: colors.textSecondary,
-                fontSize: 12.5,
-                height: 1.65,
-              ),
-            ),
-          ],
-          if (prompt.images.isNotEmpty || prompt.imageCount > 0) ...[
-            const SizedBox(height: 6),
-            Text(
-              '题目包含 ${prompt.images.isNotEmpty ? prompt.images.length : prompt.imageCount} 张图片',
-              style: TextStyle(color: colors.muted, fontSize: 11),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _QueryResult extends StatelessWidget {
-  const _QueryResult({
-    required this.query,
-    required this.reporting,
-    required this.onReport,
-  });
-
-  final QuestionQuery query;
-  final bool reporting;
-  final VoidCallback? onReport;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: colors.surfaceSubtle,
-        borderRadius: colors.cardRadius,
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Wrap(
-            spacing: 8,
-            runSpacing: 6,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              StatusPill(
-                label: query.cacheHit ? '缓存命中' : '模型作答',
-                tone: query.cacheHit ? StatusTone.success : StatusTone.accent,
-                icon: query.cacheHit
-                    ? Icons.storage_outlined
-                    : Icons.smart_toy_outlined,
-                compact: true,
-              ),
-              StatusPill(
-                label: query.mode.label,
-                tone: StatusTone.neutral,
-                compact: true,
-              ),
-              if (query.submitted)
-                const StatusPill(
-                  label: '已提交',
-                  tone: StatusTone.info,
-                  compact: true,
-                ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          Text(
-            query.answer ?? '答案尚未返回',
-            style: TextStyle(
-              color: colors.text,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: 5),
-          Text(
-            '${query.modelName ?? '平台模型'} · ${query.cacheLabel}',
-            style: TextStyle(color: colors.textSecondary, fontSize: 11.5),
-          ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: colors.surface,
-              borderRadius: BorderRadius.circular(7),
-              border: Border.all(color: colors.border),
-            ),
-            child: Row(
-              children: [
-                _token(context, '输入 token', query.usage.inputTokens),
-                _token(context, '输出 token', query.usage.outputTokens),
-                _token(context, '合计', query.usage.totalTokens),
-              ],
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            query.pricing.label,
-            style: TextStyle(color: colors.textSecondary, fontSize: 11.5),
-          ),
-          if (query.cacheHit) ...[
-            const SizedBox(height: 4),
-            Text(
-              query.cacheCreatedAt == null
-                  ? '使用精确缓存答案；本次未调用模型，token 为 0。'
-                  : '使用 ${formatShortDateTime(query.cacheCreatedAt)} 的精确缓存；本次未调用模型，token 为 0。',
-              style: TextStyle(
-                color: colors.success,
-                fontSize: 11,
-                height: 1.5,
-              ),
-            ),
-          ],
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              AsyncButton(
-                label: '报告答案问题',
-                icon: Icons.flag_outlined,
-                busy: reporting,
-                variant: AsyncButtonVariant.outline,
-                onPressed: onReport,
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _token(BuildContext context, String label, int value) {
-    return Expanded(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: TextStyle(color: context.colors.muted, fontSize: 10),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            formatCount(value),
-            style: TextStyle(
-              color: context.colors.text,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-Future<QuestionPrompt?> _askQuestionPrompt(BuildContext context) async {
-  final titleController = TextEditingController();
-  final optionsController = TextEditingController();
-  var type = 'single';
-  final result = await showDialog<QuestionPrompt>(
+Future<QuestionPrompt?> _askQuestionPrompt(BuildContext context) {
+  return showDialog<QuestionPrompt>(
     context: context,
-    builder: (dialogContext) {
-      return StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: const Text('填写题目'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  TextField(
-                    controller: titleController,
-                    autofocus: true,
-                    maxLines: 4,
-                    maxLength: 20000,
-                    decoration: const InputDecoration(labelText: '题干'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: optionsController,
-                    maxLines: 5,
-                    maxLength: 50000,
-                    decoration: const InputDecoration(
-                      labelText: '选项（可选）',
-                      hintText: 'A. ...\nB. ...',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<String>(
-                    initialValue: type,
-                    decoration: const InputDecoration(labelText: '题型'),
-                    items: const [
-                      DropdownMenuItem(value: 'single', child: Text('单选题')),
-                      DropdownMenuItem(value: 'multiple', child: Text('多选题')),
-                      DropdownMenuItem(value: 'judgement', child: Text('判断题')),
-                      DropdownMenuItem(value: 'completion', child: Text('填空题')),
-                    ],
-                    onChanged: (value) {
-                      if (value != null) {
-                        setDialogState(() => type = value);
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('取消'),
-              ),
-              FilledButton(
-                onPressed: () {
-                  final title = titleController.text.trim();
-                  if (title.isEmpty) return;
-                  Navigator.of(dialogContext).pop(
-                    QuestionPrompt(
-                      title: title,
-                      options: optionsController.text.trim(),
-                      type: type,
-                    ),
-                  );
-                },
-                child: const Text('使用此题目'),
-              ),
-            ],
-          );
-        },
-      );
-    },
+    builder: (_) => const _QuestionPromptDialog(),
   );
-  titleController.dispose();
-  optionsController.dispose();
-  return result;
 }
 
-Future<String?> _askReason(
-  BuildContext context, {
-  required String title,
-  required String message,
-  required String hint,
-}) async {
-  final controller = TextEditingController();
-  final result = await showDialog<String>(
-    context: context,
-    builder: (dialogContext) {
-      return AlertDialog(
-        title: Text(title),
-        content: Column(
+class _QuestionPromptDialog extends StatefulWidget {
+  const _QuestionPromptDialog();
+
+  @override
+  State<_QuestionPromptDialog> createState() => _QuestionPromptDialogState();
+}
+
+class _QuestionPromptDialogState extends State<_QuestionPromptDialog> {
+  final _titleController = TextEditingController();
+  final _optionsController = TextEditingController();
+  String _type = 'single';
+
+  @override
+  void dispose() {
+    _titleController.dispose();
+    _optionsController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('填写题目'),
+      content: SingleChildScrollView(
+        child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(message),
-            const SizedBox(height: 12),
             TextField(
-              controller: controller,
+              controller: _titleController,
               autofocus: true,
-              maxLength: 200,
-              maxLines: 3,
-              decoration: InputDecoration(hintText: hint),
+              maxLines: 4,
+              maxLength: 20000,
+              decoration: const InputDecoration(labelText: '题干'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: _optionsController,
+              maxLines: 5,
+              maxLength: 50000,
+              decoration: const InputDecoration(
+                labelText: '选项（可选）',
+                hintText: 'A. ...\nB. ...',
+              ),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: _type,
+              decoration: const InputDecoration(labelText: '题型'),
+              items: const [
+                DropdownMenuItem(value: 'single', child: Text('单选题')),
+                DropdownMenuItem(value: 'multiple', child: Text('多选题')),
+                DropdownMenuItem(value: 'judgement', child: Text('判断题')),
+                DropdownMenuItem(value: 'completion', child: Text('填空题')),
+                DropdownMenuItem(value: 'shortanswer', child: Text('简答题')),
+              ],
+              onChanged: (value) {
+                if (value != null) setState(() => _type = value);
+              },
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final value = controller.text.trim();
-              if (value.length < 2) return;
-              Navigator.of(dialogContext).pop(value);
-            },
-            child: const Text('提交'),
-          ),
-        ],
-      );
-    },
-  );
-  controller.dispose();
-  return result;
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('取消'),
+        ),
+        FilledButton(
+          onPressed: () {
+            final title = _titleController.text.trim();
+            if (title.isEmpty) return;
+            Navigator.of(context).pop(
+              QuestionPrompt(
+                title: title,
+                options: _optionsController.text.trim(),
+                type: _type,
+              ),
+            );
+          },
+          child: const Text('使用此题目'),
+        ),
+      ],
+    );
+  }
 }

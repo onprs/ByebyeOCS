@@ -52,8 +52,10 @@ sudo ./deploy/install.sh --user-origin https://learn.example.com \
 
 安装不会自动生成活动配置；可复制 `config.yaml.example` 并填写自己的 HTTPS 域名和数据库
 DSN，或提供两个 Origin 让安装器调用正式 `config init` 生成配置和独立加密/身份索引密钥。
-`config init` 会拒绝覆盖现有文件。身份索引密钥、解密 keyring 和数据库连接文件都位于
-`secrets/`，必须与配置一起备份。
+`config init` 会拒绝覆盖现有文件。手工使用示例配置时，还要用 `keys generate` 分别生成
+`secrets/application-v1.key` 和独立的 `secrets/identity.key`，并创建仅服务用户可读的
+`secrets/database.dsn`。身份索引密钥、解密 keyring 和数据库连接文件都位于 `secrets/`，
+必须与配置一起备份。
 
 后续步骤：
 
@@ -71,12 +73,31 @@ sudo systemctl enable --now byebyeocs.service
 数据库必须先由用户安装为原生 PostgreSQL 16，并创建独立主库/角色；题库需要独立数据库和
 角色，不能复用主库 schema。安装器不假定数据库单元名、不创建数据库。
 
+启用题库时还要执行题库自己的迁移；主服务 `migrate up` 不会创建题库 schema，题库 `serve`
+也不会自动迁移：
+
+```sh
+sudo -u ocs-tiku /opt/byebyeocs/current/bin/ocs-tiku-fork migrate \
+  -config /etc/ocs-tiku/ocs-tiku-fork.json
+```
+
 ## 3. HTTPS 与 SSE
 
 `configs/nginx-user.example.conf` 和 `configs/nginx-admin.example.conf` 是独立域名示例。
 按实际证书、域名和代理网络替换；管理员入口应加 VPN、mTLS 或 IP allowlist。SSE 路径
 `/api/v1/events` 与 `/admin/api/v1/events` 示例已关闭代理缓冲、缓存和 gzip，并延长读取超时。
 反向代理不是安装前提；使用其他入口时同样要关闭 SSE 缓冲并设置合理请求体上限。
+
+支付回调的内部路由是 `/payments/callbacks/zpay`，只注册在管理员监听上；用户监听不会处理
+支付回调。按实际公网代理拓扑填写 `payments.notify_url`，确保渠道 POST 最终到达这个内部
+路由（默认示例为 `https://admin.example.com/payments/callbacks/zpay`；使用单独的公网域名
+或路径时由代理转发）。管理员入口设置 IP allowlist 时，要为回调保留公网访问（管理员示例
+已给出不受 allowlist 限制的 `location = /payments/callbacks/zpay`）；使用 VPN 或 mTLS 保护
+管理员入口时，要为回调单独提供一个不经该限制、转发到管理员监听的 HTTPS 入口。若渠道回调
+返回 404/403 或订单长期未到账，先核对 notify_url 的主机/路径是否到达该内部路由以及代理
+是否拦住了回调；回调被拒绝时不会入账，只能由管理员主动查单。
+
+`payments.notify_url`与`payments.return_url`均须为不带查询参数的HTTPS地址；这是[ZPay接口规则](https://zpayz.cn/doc.html)。付款返回地址填写对应页面的HTTPS路径。
 
 ## 4. 升级、回滚、卸载
 

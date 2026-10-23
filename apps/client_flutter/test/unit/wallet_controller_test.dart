@@ -253,5 +253,12 @@ void main() {
             const <WalletEntry>[];
     expect(entries.map((entry) => entry.id).toList(), <String>['j1', 'j2']);
     expect(repository.entryCalls, 2);
+    expect(
+      container.read(walletControllerProvider).valueOrNull?.entriesCursor,
+      isNull,
+    );
+
+    await notifier.loadEntries();
+    expect(repository.entryCalls, 2);
   });
 }

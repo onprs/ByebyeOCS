@@ -322,11 +322,15 @@ func (s *Service) claimVerification(ctx context.Context) (string, string, error)
 			next_verify_at = $1, verification_attempts = verification_attempts + 1,
 			version = version + 1, updated_at = $2
 			WHERE id = (
-				SELECT id FROM public.learning_tasks
-				WHERE state = 'waiting_verification'
-				  AND (next_verify_at IS NULL OR next_verify_at <= $2)
-				ORDER BY next_verify_at NULLS FIRST, updated_at
-				LIMIT 1 FOR UPDATE SKIP LOCKED)
+				SELECT t.id FROM public.learning_tasks t
+				JOIN public.users u ON u.id=t.user_id
+				JOIN public.learning_accounts ac ON ac.user_id=t.user_id
+				WHERE t.state = 'waiting_verification' AND t.desired_state='run'
+				  AND u.status='active' AND ac.blocked_code=''
+				  AND (ac.blocked_until IS NULL OR ac.blocked_until <= $2)
+				  AND (t.next_verify_at IS NULL OR t.next_verify_at <= $2)
+				ORDER BY t.next_verify_at NULLS FIRST, t.updated_at
+				LIMIT 1 FOR UPDATE OF t SKIP LOCKED)
 			RETURNING id::text, user_id::text`,
 			now.Add(2*time.Minute), now).Scan(&taskID, &userID)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -343,7 +347,25 @@ func (s *Service) claimVerification(ctx context.Context) (string, string, error)
 	return taskID, userID, nil
 }
 
+func (s *Service) verificationAllowed(ctx context.Context, taskID, userID string) (bool, error) {
+	var allowed bool
+	err := s.pool.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM public.learning_tasks t
+		JOIN public.users u ON u.id=t.user_id
+		JOIN public.learning_accounts ac ON ac.user_id=t.user_id
+		WHERE t.id=$1 AND t.user_id=$2 AND t.state='waiting_verification' AND t.desired_state='run'
+		  AND u.status='active' AND ac.blocked_code=''
+		  AND (ac.blocked_until IS NULL OR ac.blocked_until <= now()))`, taskID, userID).Scan(&allowed)
+	return allowed, err
+}
+
 func (s *Service) runVerification(ctx context.Context, verifier Verifier, taskID, userID string) {
+	verifyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	ctx = verifyCtx
+	if allowed, err := s.verificationAllowed(ctx, taskID, userID); err != nil || !allowed {
+		return
+	}
 	record, err := s.loadTask(ctx, s.pool, taskID, userID, false)
 	if err != nil {
 		return
@@ -353,8 +375,10 @@ func (s *Service) runVerification(ctx context.Context, verifier Verifier, taskID
 		_ = s.applyVerification(ctx, taskID, PlatformCheck{Status: CheckUnknown}, err)
 		return
 	}
-	verifyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
+	// 领取和会话读取之后也可能出现停止、闭户或平台冷却，外部读取前再次核对。
+	if allowed, err := s.verificationAllowed(ctx, taskID, userID); err != nil || !allowed {
+		return
+	}
 	check, err := verifier.Verify(verifyCtx, VerificationRequest{
 		TaskID: taskID, UserID: userID, AttemptID: valueOrEmpty(record.LeaseAttempt),
 		Session: session,
@@ -675,6 +699,9 @@ type syncResult struct {
 }
 
 func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
+	if err := s.assertCourseSyncLease(ctx, &job); err != nil {
+		return
+	}
 	ctx, stopLease := s.courseSyncLeaseContext(ctx, job)
 	defer stopLease()
 	capabilities := s.opts.Platform.Capabilities()
@@ -691,13 +718,27 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 		return
 	}
+	if scoped, ok := s.opts.Platform.(ScopedSessionPlatform); ok {
+		var cleanup func()
+		ctx, cleanup, err = scoped.BeginSession(ctx, session)
+		if err != nil {
+			s.finishSyncFailure(ctx, job, s.classifySyncError(err))
+			return
+		}
+		defer cleanup()
+	}
+	if err := s.assertCourseSyncLease(ctx, &job); err != nil {
+		return
+	}
 	courses, err := s.opts.Platform.ListCourses(ctx, session)
 	if err != nil {
 		s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 		return
 	}
 	if len(courses) == 0 {
-		s.finishSyncFailure(ctx, job, syncResult{status: "failed", errorCode: "no_courses"})
+		if err := s.finishCourseSync(ctx, &job, "succeeded", "", 0, 0); err != nil {
+			s.opts.Logger.Warn("空课程同步完成状态写入失败", "code", describe(err))
+		}
 		return
 	}
 	if s.opts.SyncBatch > 0 && len(courses) > s.opts.SyncBatch {

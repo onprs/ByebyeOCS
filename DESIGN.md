@@ -69,7 +69,7 @@
 
 每个模型的费率与价格版本独立；相同版本不能改价，历史请求保留原始快照。token 来自 fork 服务端响应，不能信任客户端。费率按微元/百万 token 表达，人民币每分固定 10000 微元。计费先完成最坏预算预占，再发可能付费的请求；用量缺失、未知或结算失败进入复核，不假记零成本。
 
-安排启用题库策略后，按冻结的模型和模式全自动取题、查询答案、填写、最终提交及独立平台复核，无需人工确认。普通章节测验支持单选、多选、判断、填空、简答，以及具有已识别纯文本字段的名词解释、论述和计算；提交前重新读取试卷、选项、图片与作答机会，确认仍与本次答案对应。模型答案、提交响应和平台确认分别记录。单独题库查询页用于查询、展示与报告错误缓存。
+安排启用题库策略后，按冻结的模型和模式全自动取题、查询答案、填写、最终提交及独立平台复核，无需人工确认。普通章节测验支持单选、多选、判断、填空、简答，以及具有已识别纯文本字段的名词解释、论述和计算；提交前重新读取试卷、选项、图片与作答机会，确认仍与本次答案对应。模型答案、提交响应和平台确认分别记录。单独题库查询页从用户设置进入，用于查询、展示与报告答案问题；管理员在题库页查看、复核报告或使错误缓存失效。
 
 查询恢复复用原查询及计费事实；最终提交发起前保存持久状态，响应丢失后只重新核验平台，不自动重放最终提交。验证码、身份/权限异常、未支持的题型、无法可信解析的内容或无法唯一映射的答案停止本次任务，记录可处理的原因。真实课程兼容性按已授权目标单独验证。
 
@@ -102,7 +102,7 @@
 
 - [产品路线与验收](docs/product/roadmap.md)、[决策清单](docs/product/decision-checklist.md)
 - [架构总览](docs/architecture/overview.md)、[接口契约](api/openapi.yaml)
-- [当前本地实现与验证](docs/development/local-implementation.md)、[任务覆盖与完成判定](docs/development/task-coverage.md)、[性能与异常排查](docs/development/performance-audit.md)、[跨模块实现契约](docs/development/implementation-contract.md)
+- [当前本地实现与验证](docs/development/local-implementation.md)、[任务覆盖与完成判定](docs/development/task-coverage.md)、[性能与异常排查](docs/development/performance-audit.md)、[正常运行缺口复查](docs/development/runtime-gaps.md)、[跨模块实现契约](docs/development/implementation-contract.md)
 - [部署工具](deploy/README.md)、[维护与密钥轮换](docs/deployment/README.md)
 - [设计原型交互与本地检查](docs/design/interaction-spec.md)
 - [题库决策0006](docs/decisions/0006-tiku-fork-token-billing.md)、[基础服务决策0007](docs/decisions/0007-server-foundation.md)、[业务实现0008](docs/decisions/0008-business-implementation.md)、[原生HTTP执行0009](docs/decisions/0009-native-http-execution.md)、[全自动测验0010](docs/decisions/0010-automatic-questions.md)

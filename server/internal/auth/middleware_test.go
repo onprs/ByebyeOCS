@@ -333,3 +333,33 @@ func TestMiddlewareDatabaseFailureIsNotUnauthenticated(t *testing.T) {
 		t.Fatalf("会话存储故障返回 %d，期望 503", recorder.Code)
 	}
 }
+
+// 数据库短暂故障返回 503 时不能删除仍然有效的会话 Cookie，否则服务恢复后
+// 客户端仍会被当作未登录，必须重新完成外部身份验证。
+func TestMiddlewareTransientFailureKeepsSessionCookie(t *testing.T) {
+	now := time.Unix(1700000000, 0).UTC()
+	service, reader := newTestService(t, baseTestOptions(now))
+	token := tokenPrefixUserWeb + "transient"
+	reader.add(KindUser, token, testSession(service, web.NewID(), ChannelWeb, now))
+	reader.err = fault.New("service_unavailable", "会话存储暂不可用")
+	handler := service.Middleware(KindUser, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }))
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	request.AddCookie(&http.Cookie{Name: userSessionCookie, Value: token})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("会话存储故障返回 %d，期望 503", recorder.Code)
+	}
+	if cookie := recorder.Header().Get("Set-Cookie"); cookie != "" {
+		t.Fatalf("短暂故障清除了会话 Cookie: %s", cookie)
+	}
+
+	reader.err = nil
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
+	request.AddCookie(&http.Cookie{Name: userSessionCookie, Value: token})
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("故障恢复后同一 Cookie 未继续可用: %d", recorder.Code)
+	}
+}

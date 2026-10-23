@@ -312,6 +312,8 @@ func (s *Service) downloadExport(w http.ResponseWriter, r *http.Request) {
 		web.Fail(w, r, err)
 		return
 	}
+	// 已鉴权且准备就绪的有界导出使用独立下载期限，慢链路不受普通API短期限截断。
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Minute))
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="byebyeocs-data-%s.json"`, id))
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))

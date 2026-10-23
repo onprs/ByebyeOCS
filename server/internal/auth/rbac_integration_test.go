@@ -203,7 +203,7 @@ func TestIntegrationAdminRoleManagement(t *testing.T) {
 	harness.clock.Advance(11 * time.Minute)
 	staleAdmin := harness.adminRequest(http.MethodGet, "/admin/api/v1/admin-users", nil, ownerCookie, ownerCSRF)
 	requireStatus(t, staleAdmin, http.StatusForbidden)
-	if harness.errorCode(staleAdmin) != "reauth_required" {
+	if harness.errorCode(staleAdmin) != "step_up_required" {
 		t.Fatalf("新鲜验证失败返回 %s", harness.errorCode(staleAdmin))
 	}
 	requireStatus(t, harness.stepUpAdmin(ownerCookie, ownerCSRF, ownerSecret), http.StatusOK)

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/onprs/ByebyeOCS/server/internal/ledger"
+	"github.com/onprs/ByebyeOCS/server/internal/platform/fault"
 	"github.com/onprs/ByebyeOCS/server/internal/web"
 )
 
@@ -495,7 +497,8 @@ func seedStalePending(t *testing.T, env *testEnv, offeringView adminOfferingView
 	if err != nil || !created || q.ID != queryID {
 		t.Fatalf("构造 pending 失败：%v/%v/%v", err, created, q)
 	}
-	_, holdID, _, err := env.service.prepareBilling(ctx, queryID, env.userID, offering, input.Budget.MaxOutputTokens, images.Count)
+	_, holdID, _, err := env.service.prepareBilling(ctx, queryID, env.userID, offering, input.Budget.MaxOutputTokens, images.Count,
+		env.service.billingKey(queryID))
 	if err != nil || holdID == "" {
 		t.Fatalf("构造预占失败：%v/%s", err, holdID)
 	}
@@ -913,19 +916,26 @@ func TestAnswerEventFailureReleasesReservation(t *testing.T) {
 	}
 }
 
-// 永久性 fork 4xx 必须按不可重试分类保存并返回：同键重放不再调用 fork、不重复预占或结算。
+// fork 确定性错误的重放边界：入口阶段、可证未调用模型的错误在释放旧预占后可用
+// 新一代预占重驱动；请求内容错误、冲突或可能已调用的错误同键只返回原失败。
 func TestPermanentForkErrorDoesNotRetryOrCharge(t *testing.T) {
 	cases := []struct {
 		forkCode   string
 		forkStatus int
 		wantCode   string
 		wantStatus int
+		retryable  bool
 	}{
-		{"invalid_request", 400, "validation_failed", 422},
-		{"shared_cache_disabled", 409, "shared_cache_not_allowed", 422},
-		{"idempotency_conflict", 409, "idempotency_conflict", 409},
-		{"not_found", 404, "not_found", 404},
-		{"unauthenticated", 401, "provider_unavailable", 503},
+		{"invalid_request", 400, "validation_failed", 422, false},
+		{"shared_cache_disabled", 409, "shared_cache_not_allowed", 422, true},
+		{"idempotency_conflict", 409, "idempotency_conflict", 409, false},
+		{"not_found", 404, "not_found", 404, false},
+		{"unauthenticated", 401, "provider_unavailable", 503, true},
+		{"forbidden", 403, "provider_unavailable", 503, true},
+		{"model_not_configured", 503, "not_configured", 503, true},
+		{"model_disabled", 409, "model_disabled", 409, true},
+		{"invalid_question", 422, "invalid_question", 422, true},
+		{"budget_exceeded", 422, "budget_exceeded", 422, true},
 	}
 	for _, item := range cases {
 		t.Run(item.forkCode, func(t *testing.T) {
@@ -944,22 +954,27 @@ func TestPermanentForkErrorDoesNotRetryOrCharge(t *testing.T) {
 				t.Fatalf("错误泄露 fork 原始响应：%s", queryErr.Message)
 			}
 
-			// 同键重放必须返回同一不可重试分类，且不再次调用 fork 或账本。
+			// 同键重放：不可重驱动的错误不再次调用 fork 或账本；入口阶段错误会用新一代预占重驱动。
 			_, err = env.service.Answer(context.Background(), env.userID, key, queryBody("永久错误题", "cache_first"))
 			replayErr := requireQueryError(t, err, item.wantCode, item.wantStatus)
 			if replayErr.Retryable {
 				t.Fatalf("重放分类仍应为不可重试：%#v", replayErr)
 			}
-			if env.fork.callCount() != 1 {
-				t.Fatalf("永久错误不得重试 fork，实际 %d", env.fork.callCount())
-			}
-			if reserves, settles, releases, _, _ := env.billing.counts(); reserves != 1 || settles != 0 || releases != 1 {
-				t.Fatalf("永久错误不得重复收费：%d/%d/%d", reserves, settles, releases)
+			calls := env.fork.callCount()
+			reserves, settles, releases, _, _ := env.billing.counts()
+			if !item.retryable {
+				if calls != 1 || reserves != 1 || settles != 0 || releases != 1 {
+					t.Fatalf("不可重驱动的错误不得重试：fork=%d 预占/结算/释放=%d/%d/%d", calls, reserves, settles, releases)
+				}
+			} else {
+				if calls != 2 || reserves != 2 || settles != 0 || releases != 2 {
+					t.Fatalf("入口阶段错误应在新一代预占上重试：fork=%d 预占/结算/释放=%d/%d/%d", calls, reserves, settles, releases)
+				}
 			}
 			var status string
 			if err := env.pool.QueryRow(context.Background(), `SELECT status FROM public.question_queries
 				WHERE user_id = $1 AND idempotency_key = $2`, env.userID, key).Scan(&status); err != nil || status != "failed" {
-				t.Fatalf("永久错误应保存失败事实：%s/%v", status, err)
+				t.Fatalf("错误应保存失败事实：%s/%v", status, err)
 			}
 		})
 	}
@@ -986,5 +1001,727 @@ func TestQueryErrorHTTPRetryableContract(t *testing.T) {
 	}
 	if body.Error.Code != "provider_unavailable" || body.Error.Retryable || body.Error.Scope != "service" || body.Error.RequestID == "" {
 		t.Fatalf("不可重试 503 封套不符：%#v", body.Error)
+	}
+}
+
+// 首次余额不足后充值并重新调度：预占阶段失败没有调用模型，可用同一幂等键重新驱动。
+func TestAnswerRecoversReservationFailureAfterBalanceRestored(t *testing.T) {
+	env := newTestEnv(t, envOptions{auto: true, billing: true})
+	env.createOffering(t, "余额恢复模型", "internal-balance", testPricing(10_000_000, 20_000_000, 10000), true)
+	env.billing.reserveFailures = 1
+	input := queryBody("余额恢复题", "cache_first")
+
+	_, err := env.service.Answer(context.Background(), env.userID, "answer-balance-0001", input)
+	requireQueryError(t, err, "insufficient_balance", http.StatusConflict)
+	if env.fork.callCount() != 0 {
+		t.Fatalf("余额不足不得调用 fork，实际 %d", env.fork.callCount())
+	}
+
+	view, err := env.service.Answer(context.Background(), env.userID, "answer-balance-0001", input)
+	if err != nil {
+		t.Fatalf("充值后同一幂等键应可重新驱动：%v", err)
+	}
+	if view.Status != "answered" || view.Answer != "A" {
+		t.Fatalf("重驱动未取得答案：%#v", view)
+	}
+	if env.fork.callCount() != 1 {
+		t.Fatalf("重驱动只应调用一次 fork，实际 %d", env.fork.callCount())
+	}
+	// 真实账本按业务键幂等：首次预占虽因提交回执不明未写入查询行，重驱动会复用同一笔预占，
+	// 而不是再占一次新额度；结算后按实际用量释放剩余额度。
+	if reserves, settles, releases, _, _ := env.billing.counts(); reserves < 1 || settles != 1 || releases > 1 {
+		t.Fatalf("重驱动账本事实不符：预占/结算/释放 %d/%d/%d", reserves, settles, releases)
+	}
+	var reservedCount int
+	if err := env.pool.QueryRow(context.Background(), `SELECT count(*) FROM public.question_queries
+		WHERE user_id = $1 AND idempotency_key = 'answer-balance-0001' AND reserved_minor > 0`, env.userID).Scan(&reservedCount); err != nil {
+		t.Fatal(err)
+	}
+	if reservedCount != 1 {
+		t.Fatalf("重驱动后的查询必须保留预占事实：%d", reservedCount)
+	}
+}
+
+// fork 入口阶段拒绝（配置、令牌、预算、停用）没有写入请求记录，也没有模型调用：
+// 修复配置后同一幂等键重驱动必须成功。
+func TestAnswerRecoversProvablePreCallForkFailure(t *testing.T) {
+	for _, code := range []string{
+		"model_not_configured", "model_disabled", "unauthenticated", "forbidden",
+		"invalid_question", "budget_exceeded", "shared_cache_disabled",
+	} {
+		t.Run(code, func(t *testing.T) {
+			calls := 0
+			fork := &fakeFork{answer: func(request ForkAnswerRequest) (ForkAnswerResponse, error) {
+				calls++
+				if calls == 1 {
+					return ForkAnswerResponse{}, &ForkError{Code: code, Message: "入口拒绝", Status: http.StatusServiceUnavailable}
+				}
+				return answeredForkResponse(request), nil
+			}}
+			env := newTestEnv(t, envOptions{fork: fork})
+			env.createOffering(t, "入口校验模型", "internal-pre-call", nil, true)
+			input := queryBody("入口校验题", "cache_first")
+			key := "pre-call-" + code
+
+			_, err := env.service.Answer(context.Background(), env.userID, key, input)
+			if err == nil {
+				t.Fatal("首次调用应保留入口失败")
+			}
+			view, err := env.service.Answer(context.Background(), env.userID, key, input)
+			if err != nil {
+				t.Fatalf("可证明未调用模型的失败应可重驱动：%v", err)
+			}
+			if view.Status != "answered" || calls != 2 {
+				t.Fatalf("重驱动事实不符：status=%s calls=%d", view.Status, calls)
+			}
+			var billingState string
+			if err := env.pool.QueryRow(context.Background(), `SELECT billing_state FROM public.question_queries
+				WHERE user_id = $1 AND idempotency_key = $2`, env.userID, key).Scan(&billingState); err != nil {
+				t.Fatal(err)
+			}
+			if billingState == "pending" {
+				t.Fatalf("重驱动后仍停在 pending：%s", billingState)
+			}
+		})
+	}
+}
+
+// 通用 503、上游错误与超时可能已经产生模型费用：同键重放必须保留原事实，不重新调用模型。
+func TestAnswerDoesNotRetryAmbiguousForkFailure(t *testing.T) {
+	cases := []struct {
+		code        string
+		wantCode    string
+		wantStatus  int
+		needsReview bool
+	}{
+		{"model_unavailable", "service_unavailable", http.StatusServiceUnavailable, false},
+		{"service_unavailable", "service_unavailable", http.StatusServiceUnavailable, false},
+		{"internal_error", "service_unavailable", http.StatusServiceUnavailable, false},
+		{"upstream_rate_limited", "upstream_rate_limited", http.StatusTooManyRequests, false},
+		{"upstream_timeout", "", 0, true},
+		{"request_cancelled", "", 0, true},
+	}
+	for _, item := range cases {
+		t.Run(item.code, func(t *testing.T) {
+			fork := &fakeFork{answer: func(ForkAnswerRequest) (ForkAnswerResponse, error) {
+				return ForkAnswerResponse{}, &ForkError{Code: item.code, Message: "结果未知", Status: http.StatusServiceUnavailable}
+			}}
+			env := newTestEnv(t, envOptions{fork: fork})
+			env.createOffering(t, "不确定模型", "internal-uncertain", nil, true)
+			input := queryBody("不确定题", "cache_first")
+			key := "uncertain-" + item.code
+
+			if _, err := env.service.Answer(context.Background(), env.userID, key, input); err == nil {
+				t.Fatal("首次调用应返回错误")
+			}
+			view, err := env.service.Answer(context.Background(), env.userID, key, input)
+			if item.needsReview {
+				if err != nil {
+					t.Fatalf("待复核结果应按原事实返回：%v", err)
+				}
+				if view.Status != "needs_review" {
+					t.Fatalf("状态应为 needs_review：%s", view.Status)
+				}
+			} else {
+				queryErr := requireQueryError(t, err, item.wantCode, item.wantStatus)
+				if strings.Contains(queryErr.Message, "结果未知") {
+					t.Fatalf("错误不得转发 fork 自由文本：%s", queryErr.Message)
+				}
+			}
+			if fork.callCount() != 1 {
+				t.Fatalf("可能已付费的失败不得重驱动，实际调用 %d", fork.callCount())
+			}
+		})
+	}
+}
+
+// 可能已调用模型的失败即使预占已释放也不重驱动：未知结果保留原失败事实。
+func TestAnswerDoesNotRetryFailureWithReleasedReservation(t *testing.T) {
+	calls := 0
+	fork := &fakeFork{answer: func(request ForkAnswerRequest) (ForkAnswerResponse, error) {
+		calls++
+		if calls == 1 {
+			return ForkAnswerResponse{}, &ForkError{Code: "model_unavailable", Message: "上游结果未知", Status: http.StatusServiceUnavailable}
+		}
+		return answeredForkResponse(request), nil
+	}}
+	env := newTestEnv(t, envOptions{auto: true, billing: true, fork: fork})
+	env.createOffering(t, "已预占模型", "internal-reserved", testPricing(10_000_000, 20_000_000, 10000), true)
+	input := queryBody("已预占题", "cache_first")
+
+	_, err := env.service.Answer(context.Background(), env.userID, "answer-released-0001", input)
+	requireQueryError(t, err, "service_unavailable", http.StatusServiceUnavailable)
+	_, err = env.service.Answer(context.Background(), env.userID, "answer-released-0001", input)
+	requireQueryError(t, err, "service_unavailable", http.StatusServiceUnavailable)
+	if calls != 1 {
+		t.Fatalf("已释放预占的未知失败不得重驱动，实际调用 %d", calls)
+	}
+	if reserves, _, releases, _, _ := env.billing.counts(); reserves != 1 || releases != 1 {
+		t.Fatalf("账本事实不符：%d/%d", reserves, releases)
+	}
+	var holdID *string
+	if err := env.pool.QueryRow(context.Background(), `SELECT billing_hold_id FROM public.question_queries
+		WHERE user_id = $1 AND idempotency_key = 'answer-released-0001'`, env.userID).Scan(&holdID); err != nil {
+		t.Fatal(err)
+	}
+	if holdID == nil || *holdID == "" {
+		t.Fatal("已释放预占必须保留预占编号作为核对事实")
+	}
+}
+
+// 主平台未配置 fork 时保存的失败没有外部调用：补齐配置后同一幂等键可重驱动。
+func TestAnswerRecoversUnconfiguredFork(t *testing.T) {
+	env := newTestEnv(t, envOptions{})
+	env.createOffering(t, "未接线模型", "internal-unwired", nil, true)
+	env.service.fork = nil
+	input := queryBody("未接线题", "cache_first")
+
+	_, err := env.service.Answer(context.Background(), env.userID, "answer-unwired-0001", input)
+	requireQueryError(t, err, "not_configured", http.StatusServiceUnavailable)
+	env.service.fork = env.fork
+	view, err := env.service.Answer(context.Background(), env.userID, "answer-unwired-0001", input)
+	if err != nil || view.Status != "answered" {
+		t.Fatalf("补齐配置后应可重驱动：%v %#v", err, view)
+	}
+	if env.fork.callCount() != 1 {
+		t.Fatalf("应只调用一次 fork，实际 %d", env.fork.callCount())
+	}
+}
+
+// 崩溃遗留、尚未写入任何收费决策的在途行，可证明没有调用模型：应在恢复时重新驱动，
+// 而不是永久停在人工复核（后台做题会因此再也拿不到这个任务的答案）。
+func TestAnswerRecoversInterruptedPendingWithoutExternalCall(t *testing.T) {
+	env := newTestEnv(t, envOptions{})
+	offering := env.createOffering(t, "恢复在途模型", "internal-interrupted", nil, true)
+	input := queryBody("中断题", "cache_first")
+	images, err := env.service.validateQuery(&input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	resolved, err := env.service.offeringByPublicID(ctx, offering.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queryID := newPrefixedID("qq_")
+	created, _, err := env.service.insertPendingQuery(ctx, queryID, env.userID, "interrupted-key-0001",
+		fingerprint(env.userID, input), resolved, input, hashHex(env.service.scopeKeyFor(env.userID)), images)
+	if err != nil || !created {
+		t.Fatalf("无法建立在途夹具：%v/%v", created, err)
+	}
+	if _, err := env.pool.Exec(ctx, `UPDATE public.question_queries SET updated_at = now() - interval '10 minutes'
+		WHERE id = $1`, queryID); err != nil {
+		t.Fatal(err)
+	}
+	view, err := env.service.Answer(ctx, env.userID, "interrupted-key-0001", input)
+	if err != nil {
+		t.Fatalf("无外部调用的在途行应可恢复：%v", err)
+	}
+	if view.Status != "answered" || view.ID != queryID {
+		t.Fatalf("恢复应沿用原查询编号：%#v", view)
+	}
+	if env.fork.callCount() != 1 {
+		t.Fatalf("恢复只应调用一次 fork，实际 %d", env.fork.callCount())
+	}
+}
+
+// 自动做题的题干来自平台 HTML，图片按 DOM 顺序附加，不包含 [图片N] 占位标记；
+// 合法的平台图片题必须能进入模型调用，不能因缺少文本标记被拒绝。
+func TestAnswerAcceptsImagesWithoutTextMarkers(t *testing.T) {
+	const tinyPNG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	env := newTestEnv(t, envOptions{})
+	env.createOffering(t, "平台图片模型", "internal-platform-image", nil, true)
+	input := queryBody("平台题干不含占位标记", "cache_first")
+	input.Question.Images = []string{tinyPNG}
+	view := mustAnswer(t, env, "platform-image-0001", input)
+	if view.Status != "answered" || view.Question.ImageCount != 1 {
+		t.Fatalf("图片题未按原样通过：%#v", view)
+	}
+	if env.fork.callCount() != 1 {
+		t.Fatalf("图片题应调用一次 fork，实际 %d", env.fork.callCount())
+	}
+	env.fork.mu.Lock()
+	requests := append([]ForkAnswerRequest(nil), env.fork.requests...)
+	env.fork.mu.Unlock()
+	if len(requests) != 1 || len(requests[0].Question.Images) != 1 {
+		t.Fatalf("图片必须原样传给 fork：%#v", requests)
+	}
+}
+
+// 主平台尚未发布模型时，失败发生在写入查询之前：发布后同一幂等键直接可用。
+func TestAnswerQueriesAfterDefaultModelPublished(t *testing.T) {
+	env := newTestEnv(t, envOptions{})
+	input := queryBody("待发布模型题", "cache_first")
+	_, err := env.service.Answer(context.Background(), env.userID, "answer-publish-0001", input)
+	requireQueryError(t, err, "not_configured", http.StatusServiceUnavailable)
+	var count int
+	if err := env.pool.QueryRow(context.Background(), `SELECT count(*) FROM public.question_queries
+		WHERE user_id = $1 AND idempotency_key = 'answer-publish-0001'`, env.userID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("模型未发布时不应留下查询行：%d", count)
+	}
+	env.createOffering(t, "后发布模型", "internal-published", nil, true)
+	view := mustAnswer(t, env, "answer-publish-0001", input)
+	if view.Status != "answered" || env.fork.callCount() != 1 {
+		t.Fatalf("发布后应正常作答：%#v/%d", view, env.fork.callCount())
+	}
+}
+
+// 缓存关闭的模型不能用于「缓存优先」安排：保存时就应拒绝，而不是让每次自动作题
+// 在入口被 422 cache_not_allowed 拒绝后停在人工处理。
+func TestValidateQuestionPolicyRejectsCacheFirstWithoutCache(t *testing.T) {
+	env := newTestEnv(t, envOptions{})
+	recorder := env.call(t, http.MethodPost, "/admin/api/v1/question-models", map[string]any{
+		"display_name": "无缓存模型", "provider_ref": "internal-no-cache", "capabilities": []string{"text"},
+		"cache_policy": map[string]any{"allow": false, "scope": "user", "ttl_days": 7},
+	}, env.admin(), nil)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("无法创建无缓存模型：%d %s", recorder.Code, recorder.Body.String())
+	}
+	var view adminOfferingView
+	if err := json.Unmarshal(recorder.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
+	}
+	err := env.service.ValidateQuestionPolicy(context.Background(), view.ID, "cache_first")
+	var safe *fault.Error
+	if !errors.As(err, &safe) || safe.Code != "validation_failed" {
+		t.Fatalf("缓存优先必须被拒绝：%v", err)
+	}
+	if err := env.service.ValidateQuestionPolicy(context.Background(), view.ID, "always_llm"); err != nil {
+		t.Fatalf("每次调用模型应允许：%v", err)
+	}
+}
+
+// 已释放预占、可证明未调用模型的入口拒绝：先确认旧预占释放，再用新一代业务键
+// 按冻结价格重新预占；旧预占与分录保留，结算使用新的代次键。
+func TestAnswerRetriesReleasedPreCallFailureWithNewGeneration(t *testing.T) {
+	calls := 0
+	fork := &fakeFork{answer: func(request ForkAnswerRequest) (ForkAnswerResponse, error) {
+		calls++
+		if calls == 1 {
+			return ForkAnswerResponse{}, &ForkError{Code: "model_not_configured", Message: "入口拒绝", Status: http.StatusServiceUnavailable}
+		}
+		return answeredForkResponse(request), nil
+	}}
+	env := newTestEnv(t, envOptions{auto: true, billing: true, fork: fork})
+	model := env.createOffering(t, "代次模型", "internal-generation", testPricing(10_000_000, 20_000_000, 10000), true)
+	input := queryBody("代次题", "cache_first")
+	const key = "answer-generation-0001"
+
+	_, err := env.service.Answer(context.Background(), env.userID, key, input)
+	requireQueryError(t, err, "not_configured", http.StatusServiceUnavailable)
+	before, err := env.service.loadQueryByUserKey(context.Background(), env.userID, key)
+	if err != nil || before == nil || before.BillingHoldID == "" || before.BillingState != "released" {
+		t.Fatalf("首次失败事实不完整：%#v/%v", before, err)
+	}
+	oldSnapshot := parsePricingSnapshot(before.Pricing)
+	if oldSnapshot.BillingKey == "" || oldSnapshot.Pricing == nil || before.ReservedMinor <= 0 {
+		t.Fatalf("首次失败未保留冻结收费事实：%#v", oldSnapshot)
+	}
+
+	// 两次尝试之间发布新价格版本：重驱动必须沿用原冻结价格，不按新价格多占。
+	repriced := *testPricing(20_000_000, 40_000_000, 10000)
+	repriced.Version = "price-v2"
+	changed := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+model.ID,
+		map[string]any{"price_version": repriced.Version, "pricing": repriced}, env.admin(),
+		map[string]string{"If-Match": fmt.Sprintf(`"v%d"`, model.Version)})
+	if changed.Code != http.StatusOK {
+		t.Fatalf("无法发布新价格版本：%d %s", changed.Code, changed.Body.String())
+	}
+
+	view, err := env.service.Answer(context.Background(), env.userID, key, input)
+	if err != nil || view.Status != "answered" {
+		t.Fatalf("入口修复后应重驱动成功：%v %#v", err, view)
+	}
+	after, err := env.service.loadQueryByUserKey(context.Background(), env.userID, key)
+	if err != nil || after == nil {
+		t.Fatalf("无法读取重驱动结果：%v", err)
+	}
+	if after.BillingHoldID == "" || after.BillingHoldID == before.BillingHoldID {
+		t.Fatalf("重驱动必须使用新一代预占：old=%s new=%s", before.BillingHoldID, after.BillingHoldID)
+	}
+	newSnapshot := parsePricingSnapshot(after.Pricing)
+	if newSnapshot.BillingKey == oldSnapshot.BillingKey || !strings.Contains(newSnapshot.BillingKey, ":g") {
+		t.Fatalf("新代次必须使用独立业务键：old=%s new=%s", oldSnapshot.BillingKey, newSnapshot.BillingKey)
+	}
+	if newSnapshot.PriceVersion != "price-v1" || newSnapshot.Pricing == nil || newSnapshot.Pricing.Version != "price-v1" {
+		t.Fatalf("重驱动丢失原冻结价格版本：%#v", newSnapshot)
+	}
+	if after.ReservedMinor != before.ReservedMinor {
+		t.Fatalf("重驱动金额必须沿用冻结报价：old=%d new=%d", before.ReservedMinor, after.ReservedMinor)
+	}
+	if reserves, settles, releases, _, _ := env.billing.counts(); reserves != 2 || settles != 1 || releases != 2 {
+		t.Fatalf("新一代预占账本事实不符：预占/结算/释放 %d/%d/%d", reserves, settles, releases)
+	}
+	if calls != 2 {
+		t.Fatalf("只应发生一次入口拒绝与一次作答：%d", calls)
+	}
+}
+
+// 真实账本回归：先预占 → 模型入口拒绝 → 全额释放 → 修复后重新预占（新代次）→
+// 一次模型调用、一次结算，金额与价格沿用原冻结报价，旧预占保留在账本。
+func TestAnswerRealLedgerNewGenerationAfterReleasedPreCallFailure(t *testing.T) {
+	calls := 0
+	fork := &fakeFork{answer: func(request ForkAnswerRequest) (ForkAnswerResponse, error) {
+		calls++
+		if calls == 1 {
+			return ForkAnswerResponse{}, &ForkError{Code: "model_not_configured", Message: "入口拒绝", Status: http.StatusServiceUnavailable}
+		}
+		return answeredForkResponse(request), nil
+	}}
+	env := newTestEnv(t, envOptions{auto: true, fork: fork})
+	book := attachedLedger(t, env)
+	fundWallet(t, book, env, "1000")
+	model := env.createOffering(t, "真实账本代次模型", "internal-ledger-generation",
+		testPricing(10_000_000, 20_000_000, 10000), true)
+	input := queryBody("真实账本代次题", "cache_first")
+	const key = "answer-ledger-generation-0001"
+	ctx := context.Background()
+
+	_, err := env.service.Answer(ctx, env.userID, key, input)
+	requireQueryError(t, err, "not_configured", http.StatusServiceUnavailable)
+	before, err := env.service.loadQueryByUserKey(ctx, env.userID, key)
+	if err != nil || before == nil || before.Status != "failed" ||
+		before.BillingState != "released" || before.BillingHoldID == "" || before.ReservedMinor <= 0 {
+		t.Fatalf("首次入口拒绝应释放并保留预占事实：%#v/%v", before, err)
+	}
+	oldHold, oldAmount := before.BillingHoldID, before.ReservedMinor
+	oldSnapshot := parsePricingSnapshot(before.Pricing)
+	if oldSnapshot.BillingKey == "" || oldSnapshot.Pricing == nil {
+		t.Fatalf("首次失败未保留冻结收费事实：%#v", oldSnapshot)
+	}
+
+	repriced := *testPricing(20_000_000, 40_000_000, 10000)
+	repriced.Version = "price-v2"
+	changed := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+model.ID,
+		map[string]any{"price_version": repriced.Version, "pricing": repriced}, env.admin(),
+		map[string]string{"If-Match": fmt.Sprintf(`"v%d"`, model.Version)})
+	if changed.Code != http.StatusOK {
+		t.Fatalf("无法发布新价格版本：%d %s", changed.Code, changed.Body.String())
+	}
+
+	view, err := env.service.Answer(ctx, env.userID, key, input)
+	if err != nil || view.Status != "answered" {
+		t.Fatalf("真实账本重驱动失败：%v %#v", err, view)
+	}
+	after, err := env.service.loadQueryByUserKey(ctx, env.userID, key)
+	if err != nil || after == nil || after.BillingHoldID == "" || after.BillingHoldID == oldHold {
+		t.Fatalf("重驱动必须形成独立的新预占：%#v/%v", after, err)
+	}
+	newSnapshot := parsePricingSnapshot(after.Pricing)
+	if newSnapshot.BillingKey == oldSnapshot.BillingKey || !strings.Contains(newSnapshot.BillingKey, ":g") {
+		t.Fatalf("新代次业务键未区分旧预占：old=%s new=%s", oldSnapshot.BillingKey, newSnapshot.BillingKey)
+	}
+	if newSnapshot.PriceVersion != "price-v1" || newSnapshot.Pricing == nil || newSnapshot.Pricing.Version != "price-v1" {
+		t.Fatalf("重驱动没有沿用冻结价格：%#v", newSnapshot)
+	}
+
+	wallet, err := book.GetWallet(ctx, env.userID)
+	if err != nil || wallet.AvailableMinor != "999" || wallet.ReservedMinor != "0" {
+		t.Fatalf("钱包应只扣一次实际费用并释放全部预占：%#v/%v", wallet, err)
+	}
+
+	var oldStatus, oldKey string
+	var oldHoldAmount int64
+	if err := env.pool.QueryRow(ctx, `SELECT status, amount_minor, business_key FROM public.holds WHERE id = $1`,
+		oldHold).Scan(&oldStatus, &oldHoldAmount, &oldKey); err != nil {
+		t.Fatal(err)
+	}
+	if oldStatus != "released" || oldHoldAmount != oldAmount {
+		t.Fatalf("旧预占应保留为已释放事实：%s/%d（期望 %d）", oldStatus, oldHoldAmount, oldAmount)
+	}
+	var newStatus, newKey string
+	var newAmount, newSettled, newReleased int64
+	if err := env.pool.QueryRow(ctx, `SELECT status, amount_minor, settled_minor, released_minor, business_key
+		FROM public.holds WHERE id = $1`, after.BillingHoldID).
+		Scan(&newStatus, &newAmount, &newSettled, &newReleased, &newKey); err != nil {
+		t.Fatal(err)
+	}
+	if newStatus != "released" || newAmount != oldAmount || newSettled != 1 || newReleased != oldAmount-1 {
+		t.Fatalf("新预占结算事实不符：%s/%d/%d/%d（期望 released/%d/1/%d）",
+			newStatus, newAmount, newSettled, newReleased, oldAmount, oldAmount-1)
+	}
+	if newKey == oldKey || !strings.Contains(newKey, ":g") {
+		t.Fatalf("新旧预占业务键必须区分：old=%s new=%s", oldKey, newKey)
+	}
+
+	for _, item := range []struct {
+		name string
+		hold string
+		kind string
+		want int
+	}{
+		{"旧预占释放", oldHold, "release", 1},
+		{"新预占结算", after.BillingHoldID, "capture", 1},
+		{"新预占剩余释放", after.BillingHoldID, "release", 1},
+	} {
+		var count int
+		if err := env.pool.QueryRow(ctx, `SELECT count(*) FROM public.journals WHERE kind = $2 AND hold_id = $1`,
+			item.hold, item.kind).Scan(&count); err != nil || count != item.want {
+			t.Fatalf("%s 分录不符：%d（期望 %d）/%v", item.name, count, item.want, err)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("只应发生一次入口拒绝与一次模型作答：%d", calls)
+	}
+}
+
+// 新一代预占尚未完成时崩溃：pending 行保存的冻结收费事实必须在恢复时继续生效，
+// 不能按当前条目重算或再次进人工复核。
+func TestAnswerRecoversInterruptedFrozenGeneration(t *testing.T) {
+	calls := 0
+	fork := &fakeFork{answer: func(request ForkAnswerRequest) (ForkAnswerResponse, error) {
+		calls++
+		if calls == 1 {
+			return ForkAnswerResponse{}, &ForkError{Code: "model_not_configured", Message: "入口拒绝", Status: http.StatusServiceUnavailable}
+		}
+		return answeredForkResponse(request), nil
+	}}
+	env := newTestEnv(t, envOptions{auto: true, billing: true, fork: fork})
+	model := env.createOffering(t, "冻结中断模型", "internal-frozen-interrupted",
+		testPricing(10_000_000, 20_000_000, 10000), true)
+	input := queryBody("冻结中断题", "cache_first")
+	const key = "answer-frozen-interrupted-0001"
+	ctx := context.Background()
+
+	_, err := env.service.Answer(ctx, env.userID, key, input)
+	requireQueryError(t, err, "not_configured", http.StatusServiceUnavailable)
+	before, err := env.service.loadQueryByUserKey(ctx, env.userID, key)
+	if err != nil || before == nil || before.BillingHoldID == "" {
+		t.Fatalf("首次失败事实不完整：%#v/%v", before, err)
+	}
+	resolved, err := env.service.offeringByPublicID(ctx, model.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 模拟已释放旧预占、抢占成功但新预占尚未写入时进程退出。
+	claimed, err := env.service.claimRetryableFailure(ctx, before.ID, env.userID, resolved,
+		hashHex(env.service.scopeKeyFor(env.userID)), input)
+	if err != nil || claimed == nil || claimed.BillingHoldID != "" || claimed.Status != "pending" {
+		t.Fatalf("无法构造新一代预占中断现场：%#v/%v", claimed, err)
+	}
+	if _, err := env.pool.Exec(ctx, `UPDATE public.question_queries
+		SET updated_at = now() - interval '10 minutes' WHERE id = $1`, before.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := env.service.Answer(ctx, env.userID, key, input)
+	if err != nil || view.Status != "answered" {
+		t.Fatalf("冻结代次中断应可恢复：%v %#v", err, view)
+	}
+	after, err := env.service.loadQueryByUserKey(ctx, env.userID, key)
+	if err != nil || after == nil || after.BillingHoldID == "" {
+		t.Fatalf("恢复后缺少新代次预占：%#v/%v", after, err)
+	}
+	snapshot := parsePricingSnapshot(after.Pricing)
+	if snapshot.PriceVersion != "price-v1" || snapshot.Pricing == nil || snapshot.Pricing.Version != "price-v1" {
+		t.Fatalf("中断恢复丢失冻结价格：%#v", snapshot)
+	}
+	if !strings.Contains(snapshot.BillingKey, ":g") {
+		t.Fatalf("中断恢复应使用新一代业务键：%s", snapshot.BillingKey)
+	}
+	if reserves, settles, releases, _, _ := env.billing.counts(); reserves != 2 || settles != 1 || releases != 2 {
+		t.Fatalf("中断恢复账本事实不符：%d/%d/%d", reserves, settles, releases)
+	}
+	if calls != 2 {
+		t.Fatalf("只应有一次入口拒绝与一次作答：%d", calls)
+	}
+}
+
+// 首次明确前置失败时收费关闭：重试即使管理员已开启收费、发布新价格，
+// 也必须沿用原“不收费”决定，不新开预占、不按新价格扣费。
+func TestAnswerFreezesNoChargeDecisionAcrossRepricing(t *testing.T) {
+	calls := 0
+	fork := &fakeFork{answer: func(request ForkAnswerRequest) (ForkAnswerResponse, error) {
+		calls++
+		if calls == 1 {
+			return ForkAnswerResponse{}, &ForkError{Code: "model_not_configured", Message: "入口拒绝", Status: http.StatusServiceUnavailable}
+		}
+		return answeredForkResponse(request), nil
+	}}
+	env := newTestEnv(t, envOptions{auto: false, billing: true, fork: fork})
+	model := env.createOffering(t, "免费决定模型", "internal-free-decision",
+		testPricing(10_000_000, 20_000_000, 10000), true)
+	input := queryBody("免费决定题", "cache_first")
+	const key = "answer-free-decision-0001"
+	ctx := context.Background()
+
+	_, err := env.service.Answer(ctx, env.userID, key, input)
+	requireQueryError(t, err, "not_configured", http.StatusServiceUnavailable)
+	before, err := env.service.loadQueryByUserKey(ctx, env.userID, key)
+	if err != nil || before == nil || before.BillingHoldID != "" || before.BillingState != "automatic_charging_disabled" {
+		t.Fatalf("收费关闭时不应形成预占：%#v/%v", before, err)
+	}
+
+	repriced := *testPricing(20_000_000, 40_000_000, 10000)
+	repriced.Version = "price-v2"
+	changed := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+model.ID,
+		map[string]any{"price_version": repriced.Version, "pricing": repriced}, env.admin(),
+		map[string]string{"If-Match": fmt.Sprintf(`"v%d"`, model.Version)})
+	if changed.Code != http.StatusOK {
+		t.Fatalf("无法发布新价格版本：%d %s", changed.Code, changed.Body.String())
+	}
+	env.service.auto = true
+
+	view, err := env.service.Answer(ctx, env.userID, key, input)
+	if err != nil || view.Status != "answered" {
+		t.Fatalf("重试应作答：%v %#v", err, view)
+	}
+	if view.Pricing.Charged || view.Pricing.BillingState != "automatic_charging_disabled" {
+		t.Fatalf("必须沿用原不收费决定：%#v", view.Pricing)
+	}
+	if view.Pricing.PriceVersion != "price-v1" {
+		t.Fatalf("必须沿用冻结价格版本：%s", view.Pricing.PriceVersion)
+	}
+	if reserves, settles, releases, _, _ := env.billing.counts(); reserves != 0 || settles != 0 || releases != 0 {
+		t.Fatalf("不收费决定不得触发账本操作：预占/结算/释放 %d/%d/%d", reserves, settles, releases)
+	}
+	if calls != 2 {
+		t.Fatalf("只应有一次入口拒绝与一次作答：%d", calls)
+	}
+}
+
+// 首次前置失败时模型未定价：管理员后来发布价格，重试仍按原未定价决定处理。
+func TestAnswerFreezesUnpricedDecisionAcrossPricing(t *testing.T) {
+	calls := 0
+	fork := &fakeFork{answer: func(request ForkAnswerRequest) (ForkAnswerResponse, error) {
+		calls++
+		if calls == 1 {
+			return ForkAnswerResponse{}, &ForkError{Code: "model_not_configured", Message: "入口拒绝", Status: http.StatusServiceUnavailable}
+		}
+		return answeredForkResponse(request), nil
+	}}
+	env := newTestEnv(t, envOptions{auto: true, billing: true, fork: fork})
+	model := env.createOffering(t, "未定价决定模型", "internal-unpriced-decision", nil, true)
+	input := queryBody("未定价决定题", "cache_first")
+	const key = "answer-unpriced-decision-0001"
+	ctx := context.Background()
+
+	_, err := env.service.Answer(ctx, env.userID, key, input)
+	requireQueryError(t, err, "not_configured", http.StatusServiceUnavailable)
+	before, err := env.service.loadQueryByUserKey(ctx, env.userID, key)
+	if err != nil || before == nil || before.BillingHoldID != "" {
+		t.Fatalf("未定价时不应形成预占：%#v/%v", before, err)
+	}
+	repriced := *testPricing(20_000_000, 40_000_000, 10000)
+	repriced.Version = "price-v2"
+	changed := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+model.ID,
+		map[string]any{"price_version": repriced.Version, "pricing": repriced}, env.admin(),
+		map[string]string{"If-Match": fmt.Sprintf(`"v%d"`, model.Version)})
+	if changed.Code != http.StatusOK {
+		t.Fatalf("无法发布新价格版本：%d %s", changed.Code, changed.Body.String())
+	}
+
+	view, err := env.service.Answer(ctx, env.userID, key, input)
+	if err != nil || view.Status != "answered" {
+		t.Fatalf("重试应作答：%v %#v", err, view)
+	}
+	if view.Pricing.State != "unpriced" || view.Pricing.Charged {
+		t.Fatalf("必须沿用原未定价决定：%#v", view.Pricing)
+	}
+	if reserves, settles, releases, _, _ := env.billing.counts(); reserves != 0 || settles != 0 || releases != 0 {
+		t.Fatalf("未定价决定不得触发账本操作：预占/结算/释放 %d/%d/%d", reserves, settles, releases)
+	}
+}
+
+// 抢占成功但新预占尚未写入时进程退出：无预占的冻结决定也必须能按原决定恢复，
+// 不能转人工复核，也不能在管理员后来开启收费后变成收费查询。
+func TestAnswerRecoversInterruptedFrozenNoChargeGeneration(t *testing.T) {
+	calls := 0
+	fork := &fakeFork{answer: func(request ForkAnswerRequest) (ForkAnswerResponse, error) {
+		calls++
+		if calls == 1 {
+			return ForkAnswerResponse{}, &ForkError{Code: "model_not_configured", Message: "入口拒绝", Status: http.StatusServiceUnavailable}
+		}
+		return answeredForkResponse(request), nil
+	}}
+	env := newTestEnv(t, envOptions{auto: false, billing: true, fork: fork})
+	model := env.createOffering(t, "冻结无预占模型", "internal-frozen-no-hold",
+		testPricing(10_000_000, 20_000_000, 10000), true)
+	input := queryBody("冻结无预占题", "cache_first")
+	const key = "answer-frozen-no-hold-0001"
+	ctx := context.Background()
+
+	_, err := env.service.Answer(ctx, env.userID, key, input)
+	requireQueryError(t, err, "not_configured", http.StatusServiceUnavailable)
+	before, err := env.service.loadQueryByUserKey(ctx, env.userID, key)
+	if err != nil || before == nil || before.BillingHoldID != "" {
+		t.Fatalf("首次失败不应形成预占：%#v/%v", before, err)
+	}
+	resolved, err := env.service.offeringByPublicID(ctx, model.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := env.service.claimRetryableFailure(ctx, before.ID, env.userID, resolved,
+		hashHex(env.service.scopeKeyFor(env.userID)), input)
+	if err != nil || claimed == nil || claimed.Status != "pending" || claimed.BillingHoldID != "" {
+		t.Fatalf("无法构造无预占冻结中断现场：%#v/%v", claimed, err)
+	}
+	if _, err := env.pool.Exec(ctx, `UPDATE public.question_queries
+		SET updated_at = now() - interval '10 minutes' WHERE id = $1`, before.ID); err != nil {
+		t.Fatal(err)
+	}
+	env.service.auto = true
+
+	view, err := env.service.Answer(ctx, env.userID, key, input)
+	if err != nil || view.Status != "answered" {
+		t.Fatalf("无预占冻结决定应可恢复：%v %#v", err, view)
+	}
+	if view.Pricing.Charged || view.Pricing.BillingState != "automatic_charging_disabled" {
+		t.Fatalf("中断恢复必须沿用原不收费决定：%#v", view.Pricing)
+	}
+	if view.Pricing.PriceVersion != "price-v1" {
+		t.Fatalf("中断恢复必须沿用冻结价格版本：%s", view.Pricing.PriceVersion)
+	}
+	if reserves, settles, releases, _, _ := env.billing.counts(); reserves != 0 || settles != 0 || releases != 0 {
+		t.Fatalf("中断恢复不得触发账本操作：%d/%d/%d", reserves, settles, releases)
+	}
+	if calls != 2 {
+		t.Fatalf("只应有一次入口拒绝与一次作答：%d", calls)
+	}
+}
+
+// 预占阶段失败从未保存收费快照：抢占后崩溃无 frozen 标记，恢复按当前报价重新驱动，
+// 不因缺少冻结事实转人工复核。
+func TestAnswerRecoversInterruptedClaimWithoutFrozenSnapshot(t *testing.T) {
+	env := newTestEnv(t, envOptions{auto: true, billing: true})
+	model := env.createOffering(t, "无快照恢复模型", "internal-no-snapshot",
+		testPricing(10_000_000, 20_000_000, 10000), true)
+	env.billing.reserveFailures = 1
+	input := queryBody("无快照恢复题", "cache_first")
+	const key = "answer-no-snapshot-0001"
+	ctx := context.Background()
+
+	_, err := env.service.Answer(ctx, env.userID, key, input)
+	requireQueryError(t, err, "insufficient_balance", http.StatusConflict)
+	before, err := env.service.loadQueryByUserKey(ctx, env.userID, key)
+	if err != nil || before == nil || before.BillingHoldID != "" || string(before.Pricing) != "{}" {
+		t.Fatalf("预占阶段失败不应保存收费快照：%#v/%v", before, err)
+	}
+	resolved, err := env.service.offeringByPublicID(ctx, model.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := env.service.claimRetryableFailure(ctx, before.ID, env.userID, resolved,
+		hashHex(env.service.scopeKeyFor(env.userID)), input)
+	if err != nil || claimed == nil || claimed.Status != "pending" {
+		t.Fatalf("无法构造无快照中断现场：%#v/%v", claimed, err)
+	}
+	if string(claimed.Pricing) != "{}" {
+		t.Fatalf("无快照不应生成 frozen 标记：%s", claimed.Pricing)
+	}
+	if _, err := env.pool.Exec(ctx, `UPDATE public.question_queries
+		SET updated_at = now() - interval '10 minutes' WHERE id = $1`, before.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := env.service.Answer(ctx, env.userID, key, input)
+	if err != nil || view.Status != "answered" {
+		t.Fatalf("无快照中断应按当前报价恢复：%v %#v", err, view)
+	}
+	if reserves, settles, _, _, _ := env.billing.counts(); reserves != 1 || settles != 1 {
+		t.Fatalf("恢复账本事实不符：%d/%d", reserves, settles)
 	}
 }

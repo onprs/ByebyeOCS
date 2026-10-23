@@ -214,7 +214,7 @@ func TestAutomaticWorkUnknownSubmissionCannotReplayAfterPlanRevision(t *testing.
 }
 
 // TestQuizUnknownSubmissionNotReplayedByTaskControl 验证提交结果未知后，用户暂停、
-// 恢复、重新调度以及进程重启都只核验平台事实，不会再次查询答案或发送最终提交。
+// 恢复、重新调度以及提交落库中断都只核验平台事实，不会再次查询答案或发送最终提交。
 func TestQuizUnknownSubmissionNotReplayedByTaskControl(t *testing.T) {
 	service, executor, platform, answers, job, _ := setupWorkTask(t)
 	platform.unknown = true
@@ -234,19 +234,16 @@ func TestQuizUnknownSubmissionNotReplayedByTaskControl(t *testing.T) {
 	if _, err := service.ControlTask(context.Background(), actor, job.TaskID, "resume-quiz-0001", "resume", "继续"); err != nil {
 		t.Fatal(err)
 	}
-	// 模拟进程重启：只重建执行器，任务与提交事实都在数据库。
-	resumed := claimOnePointer(t, service)
-	restarted, err := NewAutomaticExecutor(service.pool, executor.opts)
-	if err != nil {
-		t.Fatal(err)
+	// 控制入口直接回到核验，不再新领一次执行后由执行器拒绝重放。
+	state, desired, _, _, _, _ = taskRow(t, service.pool, job.TaskID)
+	if state != StateWaitingVerification || desired != DesiredRun {
+		t.Fatalf("提交未知任务恢复后没有直接核验: %s/%s", state, desired)
 	}
-	result, err = restarted.Execute(context.Background(), workRequest(*resumed))
-	requireWorkFailure(t, err, FailureSubmissionUnknown)
+	if resumed, err := service.claimNext(context.Background()); err != nil || resumed != nil {
+		t.Fatalf("暂停恢复产生新的执行尝试: %#v/%v", resumed, err)
+	}
 	if platform.posts != 1 || answers.modelCalls != 2 {
-		t.Fatalf("暂停恢复或重启导致重复查询/提交: posts=%d calls=%d", platform.posts, answers.modelCalls)
-	}
-	if err := service.applyExecutionResult(context.Background(), *resumed, result, err, executor.Capabilities()); err != nil {
-		t.Fatal(err)
+		t.Fatalf("暂停恢复导致重复查询/提交: posts=%d calls=%d", platform.posts, answers.modelCalls)
 	}
 	// 模拟进程在最终提交状态落库前崩溃：持久提交记录仍为 submitting。
 	if _, err := service.pool.Exec(context.Background(), `UPDATE public.learning_work_runs
@@ -256,9 +253,13 @@ func TestQuizUnknownSubmissionNotReplayedByTaskControl(t *testing.T) {
 	if _, err := service.ControlTask(context.Background(), actor, job.TaskID, "redispatch-quiz-0001", "redispatch", "重新调度"); err != nil {
 		t.Fatal(err)
 	}
-	claimed := claimOnePointer(t, service)
-	_, err = restarted.Execute(context.Background(), workRequest(*claimed))
-	requireWorkFailure(t, err, FailureSubmissionUnknown)
+	if claimed, err := service.claimNext(context.Background()); err != nil || claimed != nil {
+		t.Fatalf("提交崩溃恢复产生新执行尝试: %#v/%v", claimed, err)
+	}
+	state, _, _, _, _, _ = taskRow(t, service.pool, job.TaskID)
+	if state != StateWaitingVerification {
+		t.Fatalf("提交崩溃恢复未直接核验: %s", state)
+	}
 	if platform.posts != 1 || answers.modelCalls != 2 {
 		t.Fatalf("崩溃恢复重放了题库查询或最终提交: posts=%d calls=%d", platform.posts, answers.modelCalls)
 	}

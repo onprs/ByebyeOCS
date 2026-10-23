@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { ApiError, apiRequest } from '../../src/api/client'
 import { getAuthSession, getPreferences, listUsers, login, resolveRefund, runAccountOperation, updatePreferences } from '../../src/api/endpoints'
+import { normalizeDashboard } from '../../src/api/normalize'
 import { getCsrfToken } from '../../src/api/session'
 import { setCsrfToken, subscribeUnauthorized } from '../../src/api/session'
 import {
@@ -19,6 +20,15 @@ function jsonResponse(status: number, body: unknown, headers: Record<string, str
 }
 
 describe('请求适配层', () => {
+  it('总览等待队列只取任务待执行数，不用课程同步队列代替', () => {
+    const dashboard = normalizeDashboard({
+      generated_at: '2026-10-23T00:00:00Z',
+      tasks: { total: 2, by_state: { running: 2 }, active_attempts: 2 },
+      syncs: { queued: 7, running: 1, needs_attention: 0 },
+    })
+
+    expect(dashboard.limits.queued_tasks).toBeNull()
+  })
   it('请求始终携带 Cookie，并在写操作中附带 CSRF 与幂等键', async () => {
     setCsrfToken('csrf-test')
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }, { ETag: '"v3"' }))

@@ -353,23 +353,22 @@ func (s *Service) runPaymentReconciliation(ctx context.Context, id string, actor
 			findings["reason"] = "ZPay 主动查单未配置或运营未启用"
 			break
 		}
-		orderQuery := orderSelect + ` WHERE status = 'pending_payment'
-			AND payment_status = 'unpaid'`
+		// 待查范围必须覆盖“已支付但未到账”和已进入 needs_review 的订单，
+		// 否则金额/渠道差异或回调丢失后，订单会被移出扫描集合并永远无法主动恢复。
+		// 指定订单时允许 closed 订单继续查单，用于发现本地关闭后才完成的迟到付款。
+		orderScope := `credit_status <> 'credited' AND (
+			status IN ('pending_payment', 'needs_review') OR payment_status = 'paid')`
 		orderArgs := []any{}
 		if record.TargetOrderID != "" {
-			orderQuery += ` AND id = $1`
+			orderScope = `credit_status <> 'credited' AND id = $1`
 			orderArgs = append(orderArgs, record.TargetOrderID)
 		}
+		orderQuery := orderSelect + ` WHERE ` + orderScope
 		orderQuery += ` ORDER BY created_at LIMIT $` + itoa(len(orderArgs)+1)
 		orderArgs = append(orderArgs, s.reconcileLimit)
 		var totalPending int
-		countQuery := `SELECT count(*)::integer FROM public.recharge_orders
-			WHERE status = 'pending_payment' AND payment_status = 'unpaid'`
-		countArgs := []any{}
-		if record.TargetOrderID != "" {
-			countQuery += ` AND id = $1`
-			countArgs = append(countArgs, record.TargetOrderID)
-		}
+		countQuery := `SELECT count(*)::integer FROM public.recharge_orders WHERE ` + orderScope
+		countArgs := orderArgs[:len(orderArgs)-1]
 		if err := s.pool.QueryRow(ctx, countQuery, countArgs...).Scan(&totalPending); err != nil {
 			return fault.New("service_unavailable", "无法统计待查订单")
 		}

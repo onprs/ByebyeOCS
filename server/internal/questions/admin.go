@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/onprs/ByebyeOCS/server/internal/platform/audit"
 	"github.com/onprs/ByebyeOCS/server/internal/web"
@@ -94,7 +95,8 @@ func (s *Service) adminInvalidateCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	input.Reason = strings.TrimSpace(input.Reason)
-	if input.Reason == "" || len(input.Reason) > 1000 {
+	// 公开契约与数据库约束都按字符计数；不能把中文原因按字节提前拒绝。
+	if input.Reason == "" || utf8.RuneCountInString(input.Reason) > 1000 {
 		web.Error(w, r, 422, "validation_failed", "失效原因不能为空或超过 1000 字")
 		return
 	}
@@ -143,6 +145,14 @@ func (s *Service) adminInvalidateCache(w http.ResponseWriter, r *http.Request) {
 		(id, offering_id, cache_entry_id, reason, actor_admin_id, fork_invalidated)
 		VALUES ($1,$2,$3,$4,$5,$6)`, id, offering, input.CacheEntryID, input.Reason, actor.ID, invalidated); err != nil {
 		web.Error(w, r, 503, "service_unavailable", "缓存已失效，但平台记录失败，请人工核对")
+		return
+	}
+	// 失效后同一缓存条目的待处理报告已无事可做：无论 fork 实际标记还是条目已过期，
+	// 旧答案都不会再被命中，一并结清，避免永久阻断删除复核。
+	if _, err := tx.Exec(r.Context(), `UPDATE public.question_cache_reports r SET status = 'resolved',
+		resolved_at = now() FROM public.question_queries q
+		WHERE r.query_id = q.id AND r.status = 'pending' AND q.cache_entry_id = $1`, input.CacheEntryID); err != nil {
+		web.Error(w, r, 503, "service_unavailable", "缓存已失效，但报告状态未保存，请人工核对")
 		return
 	}
 	if err := audit.Record(r.Context(), tx, audit.Event{Actor: actor, Action: "question.cache.invalidate",

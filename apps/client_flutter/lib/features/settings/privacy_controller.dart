@@ -19,6 +19,7 @@ class PrivacyState {
     this.downloadingId,
     this.notice,
     this.error,
+    this.errorCode,
   });
 
   final List<DataRequest> exports;
@@ -31,6 +32,7 @@ class PrivacyState {
   final String? downloadingId;
   final String? notice;
   final String? error;
+  final String? errorCode;
 
   PrivacyState copyWith({
     List<DataRequest>? exports,
@@ -43,15 +45,21 @@ class PrivacyState {
     String? downloadingId,
     String? notice,
     String? error,
+    String? errorCode,
     bool clearDownloading = false,
     bool clearNotice = false,
     bool clearError = false,
+    bool clearExportsCursor = false,
+    bool clearDeletionsCursor = false,
   }) {
     return PrivacyState(
       exports: exports ?? this.exports,
       deletions: deletions ?? this.deletions,
-      exportsCursor: exportsCursor ?? this.exportsCursor,
-      deletionsCursor: deletionsCursor ?? this.deletionsCursor,
+      exportsCursor:
+          clearExportsCursor ? null : exportsCursor ?? this.exportsCursor,
+      deletionsCursor: clearDeletionsCursor
+          ? null
+          : deletionsCursor ?? this.deletionsCursor,
       refreshing: refreshing ?? this.refreshing,
       requestingExport: requestingExport ?? this.requestingExport,
       requestingDeletion: requestingDeletion ?? this.requestingDeletion,
@@ -59,6 +67,7 @@ class PrivacyState {
           clearDownloading ? null : downloadingId ?? this.downloadingId,
       notice: clearNotice ? null : notice ?? this.notice,
       error: clearError ? null : error ?? this.error,
+      errorCode: clearError ? null : errorCode ?? this.errorCode,
     );
   }
 }
@@ -76,6 +85,8 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
   Future<PrivacyState> build() async {
     ++_accountEpoch;
     ++_listEpoch;
+    _loadingExports = false;
+    _loadingDeletions = false;
     ref.watch(sessionEpochProvider);
     final user = ref.watch(currentUserProvider);
     if (user == null) return const PrivacyState();
@@ -126,7 +137,11 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
       if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
-        latest.copyWith(refreshing: false, error: error.userMessage),
+        latest.copyWith(
+          refreshing: false,
+          error: error.userMessage,
+          errorCode: error.code,
+        ),
       );
     } catch (_) {
       if (epoch != _accountEpoch) return;
@@ -151,10 +166,14 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
           );
       if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
+      final known = latest.exports.map((item) => item.id).toSet();
+      final appended =
+          page.items.where((item) => known.add(item.id)).toList(growable: false);
       state = AsyncData(
         latest.copyWith(
-          exports: [...latest.exports, ...page.items],
+          exports: [...latest.exports, ...appended],
           exportsCursor: page.nextCursor,
+          clearExportsCursor: page.nextCursor == null,
         ),
       );
     } catch (_) {
@@ -182,10 +201,14 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
           );
       if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
+      final known = latest.deletions.map((item) => item.id).toSet();
+      final appended =
+          page.items.where((item) => known.add(item.id)).toList(growable: false);
       state = AsyncData(
         latest.copyWith(
-          deletions: [...latest.deletions, ...page.items],
+          deletions: [...latest.deletions, ...appended],
           deletionsCursor: page.nextCursor,
+          clearDeletionsCursor: page.nextCursor == null,
         ),
       );
     } catch (_) {
@@ -224,7 +247,11 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
       if (epoch != _accountEpoch) return;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
-        latest.copyWith(requestingExport: false, error: error.userMessage),
+        latest.copyWith(
+          requestingExport: false,
+          error: error.userMessage,
+          errorCode: error.code,
+        ),
       );
     } catch (_) {
       if (epoch != _accountEpoch) return;
@@ -267,7 +294,11 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
       if (epoch != _accountEpoch) return null;
       final latest = state.valueOrNull ?? current;
       state = AsyncData(
-        latest.copyWith(requestingDeletion: false, error: error.userMessage),
+        latest.copyWith(
+          requestingDeletion: false,
+          error: error.userMessage,
+          errorCode: error.code,
+        ),
       );
       return null;
     } catch (_) {
@@ -315,6 +346,7 @@ class PrivacyController extends AsyncNotifier<PrivacyState> {
         latest.copyWith(
           clearDownloading: true,
           error: error.userMessage,
+          errorCode: error.code,
         ),
       );
     } catch (_) {

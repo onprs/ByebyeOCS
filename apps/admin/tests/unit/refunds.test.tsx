@@ -74,6 +74,13 @@ const succeededRefund: Refund = {
   completed_at: '2026-10-20T02:20:00Z',
 }
 
+const requestedRefund: Refund = {
+  ...reservedRefund,
+  id: 'refund-requested',
+  status: 'requested',
+  status_label: '已申请',
+}
+
 function renderFinance() {
   return render(
     <MemoryRouter initialEntries={['/finance']}>
@@ -100,7 +107,7 @@ describe('退款人工复核', () => {
     api.getBillingSettings.mockResolvedValue({ data: null, etag: null })
     api.listOrders.mockResolvedValue({ data: { items: [], next_cursor: null }, etag: null })
     api.listRefunds.mockResolvedValue({
-      data: { items: [reservedRefund, succeededRefund], next_cursor: null },
+      data: { items: [requestedRefund, reservedRefund, succeededRefund], next_cursor: null },
       etag: null,
     })
     api.resolveRefund.mockResolvedValue({
@@ -145,6 +152,30 @@ describe('退款人工复核', () => {
     expect(await within(dialog).findByText('已记录为已退款。')).toBeInTheDocument()
     await waitFor(() => expect(api.listRefunds).toHaveBeenCalledTimes(2))
     expect(screen.queryByText(/再次退款/)).not.toBeInTheDocument()
+  })
+
+  it('未提交渠道的退款只允许登记未退款并释放预占', async () => {
+    const user = userEvent.setup()
+    renderFinance()
+
+    await user.click(screen.getByRole('tab', { name: '退款' }))
+    await screen.findByText('refund-requested')
+    await user.click(screen.getByRole('button', { name: '复核退款 refund-requested' }))
+    const dialog = await screen.findByRole('dialog', { name: '复核退款结果' })
+
+    expect(within(dialog).queryByRole('button', { name: /^已退款/ })).not.toBeInTheDocument()
+    expect(within(dialog).getByText('该退款尚未提交渠道，只能登记为未退款并释放预占资金。')).toBeInTheDocument()
+
+    await user.type(within(dialog).getByLabelText(/核实依据/), '退款未提交渠道，释放预占')
+    await user.click(within(dialog).getByRole('button', { name: '提交复核结果' }))
+
+    await waitFor(() => {
+      expect(api.resolveRefund).toHaveBeenCalledWith(
+        'refund-requested',
+        { outcome: 'failed', reason: '退款未提交渠道，释放预占' },
+        expect.any(String),
+      )
+    })
   })
 
   it('近期验证过期时提示重新验证，不重复提交复核', async () => {

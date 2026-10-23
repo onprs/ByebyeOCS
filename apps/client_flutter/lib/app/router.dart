@@ -10,6 +10,7 @@ import '../features/courses/course_detail_page.dart';
 import '../features/courses/courses_page.dart';
 import '../features/home/home_page.dart';
 import '../features/plans/plans_page.dart';
+import '../features/questions/question_query_page.dart';
 import '../features/settings/connect_service_page.dart';
 import '../features/settings/deletion_receipt_page.dart';
 import '../features/settings/settings_page.dart';
@@ -106,6 +107,10 @@ final routerProvider = Provider<GoRouter>((ref) {
               orderId: state.uri.queryParameters['order_id'] ??
                   state.uri.queryParameters['order'],
             ),
+          ),
+          GoRoute(
+            path: '/questions',
+            builder: (context, state) => const QuestionQueryPage(),
           ),
           GoRoute(
             path: '/settings',

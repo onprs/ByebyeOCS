@@ -143,7 +143,7 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 		return nil, err
 	}
 	runtime.Learning = learn
-	answers, err := questions.New(db.Pool(), questions.Options{Fork: deps.Fork, Billing: &questionBilling{book: book}, AutomaticCharging: cfg.Payments.ChargingEnabled, AutomaticChargingAllowed: func(ctx context.Context) (bool, error) {
+	answers, err := questions.New(db.Pool(), questions.Options{Fork: deps.Fork, Billing: &questionBilling{book: book}, AllowSharedCache: cfg.Questions.AllowSharedCache, AutomaticCharging: cfg.Payments.ChargingEnabled, AutomaticChargingAllowed: func(ctx context.Context) (bool, error) {
 		if !cfg.Payments.ChargingEnabled || !cfg.Questions.Enabled {
 			return false, nil
 		}
@@ -210,6 +210,7 @@ func (r *Runtime) capabilities(ctx context.Context, audience, id string) map[str
 	capability.ExecutionEnabled = features["task_execution"]
 	capability.CredentialVerify = r.userLoginAvailable
 	features["tiku"] = r.cfg.Questions.Enabled
+	features["shared_question_cache"] = r.cfg.Questions.Enabled && r.cfg.Questions.AllowSharedCache
 	body["execution"] = capability
 	taskTypes := make([]map[string]any, 0, 5)
 	for _, item := range []struct{ id, name string }{{"video", "视频"}, {"audio", "音频"}, {"document", "文档/阅读"}, {"quiz", "测验"}, {"other", "其他"}} {

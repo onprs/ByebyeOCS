@@ -70,7 +70,9 @@ func (s *Service) requireOwnerFresh(w http.ResponseWriter, r *http.Request) (web
 		return web.Actor{}, false
 	}
 	if actor.AuthenticatedAt.IsZero() || s.clock().Sub(actor.AuthenticatedAt) > s.options.FreshWindow {
-		web.Error(w, r, http.StatusForbidden, "reauth_required", "此操作需要重新完成管理员二次验证")
+		// 管理端前端按 step_up_required 打开二次验证对话框；与隐私复核等
+		// 其他管理员敏感操作保持同一错误码，不能只返回泛化的 reauth_required。
+		web.Error(w, r, http.StatusForbidden, "step_up_required", "此操作需要重新完成管理员二次验证")
 		return web.Actor{}, false
 	}
 	return actor, true

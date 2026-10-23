@@ -70,10 +70,11 @@ func (s *Service) BindAccountTx(ctx context.Context, tx pgx.Tx, userID string, i
 	if identity.VerifiedAt.IsZero() {
 		identity.VerifiedAt = s.now()
 	}
-	var boundUser, boundFingerprint, boundNamespace string
-	err = tx.QueryRow(ctx, `SELECT user_id::text, identity_fingerprint, identity_namespace
+	var boundUser, boundFingerprint, boundNamespace, blockedCode string
+	var blockedAt *time.Time
+	err = tx.QueryRow(ctx, `SELECT user_id::text, identity_fingerprint, identity_namespace, blocked_code, blocked_at
 		FROM public.learning_accounts WHERE user_id = $1 FOR UPDATE`, userID).
-		Scan(&boundUser, &boundFingerprint, &boundNamespace)
+		Scan(&boundUser, &boundFingerprint, &boundNamespace, &blockedCode, &blockedAt)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return errServiceUnavailable
 	}
@@ -90,15 +91,21 @@ func (s *Service) BindAccountTx(ctx context.Context, tx pgx.Tx, userID string, i
 	if otherUser != "" && otherUser != userID {
 		return apiErr(409, "identity_conflict", "该学习通主体已关联其他用户，需人工核验")
 	}
+	// 同主体的新鲜凭据验证可恢复会话失效；管理员限制、平台验证/拒绝和冷却独立保留。
+	recoverIdentity := boundUser != "" && blockedCode == string(FailureIdentityInvalid) &&
+		(blockedAt == nil || !identity.VerifiedAt.Before(*blockedAt))
 	_, err = tx.Exec(ctx, `INSERT INTO public.learning_accounts
 		(user_id, provider, identity_namespace, identity_fingerprint, school, display_name, verified_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, now())
 		ON CONFLICT (user_id) DO UPDATE SET
 			school = EXCLUDED.school, display_name = EXCLUDED.display_name,
 			verified_at = EXCLUDED.verified_at, version = public.learning_accounts.version + 1,
+			blocked_code = CASE WHEN $8 THEN '' ELSE public.learning_accounts.blocked_code END,
+			blocked_reason = CASE WHEN $8 THEN '' ELSE public.learning_accounts.blocked_reason END,
+			blocked_at = CASE WHEN $8 THEN NULL ELSE public.learning_accounts.blocked_at END,
 			updated_at = now()`,
 		userID, identity.Provider, identity.Namespace, fingerprint, truncate(identity.School, 128),
-		truncate(identity.DisplayName, 128), identity.VerifiedAt)
+		truncate(identity.DisplayName, 128), identity.VerifiedAt, recoverIdentity)
 	if err != nil {
 		return errServiceUnavailable
 	}

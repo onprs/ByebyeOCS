@@ -39,6 +39,47 @@ func TestServiceCostAndRounding(t *testing.T) {
 	}
 }
 
+func TestMicrosToMinorCeilBoundaries(t *testing.T) {
+	cases := []struct {
+		micros int64
+		want   int64
+	}{
+		{0, 0},
+		{1, 1},
+		{5_000, 1},
+		{9_999, 1},
+		{10_000, 1},
+		{10_001, 2},
+		{15_000, 2},
+	}
+	for _, testCase := range cases {
+		got, err := microsToMinor(big.NewInt(testCase.micros), "ceil", 0)
+		if err != nil || got != testCase.want {
+			t.Fatalf("ceil %d 微元 => %d,%v，期望 %d", testCase.micros, got, err, testCase.want)
+		}
+	}
+	if got, err := microsToMinor(big.NewInt(10_001), "ceil", 5); err != nil || got != 5 {
+		t.Fatalf("ceil 最低收费 => %d,%v，期望 5", got, err)
+	}
+
+	// 最大可记账金额恰好整除时，ceil 不能因为加除数-1而溢出。
+	maxMicros := new(big.Int).Mul(big.NewInt(maxAmountMinor), big.NewInt(microsPerMinor))
+	if got, err := microsToMinor(maxMicros, "ceil", 0); err != nil || got != maxAmountMinor {
+		t.Fatalf("ceil 边界最大金额 => %d,%v", got, err)
+	}
+	justBelowMax := new(big.Int).Sub(maxMicros, big.NewInt(1))
+	if got, err := microsToMinor(justBelowMax, "ceil", 0); err != nil || got != maxAmountMinor {
+		t.Fatalf("ceil 最大金额少一微元 => %d,%v", got, err)
+	}
+	nextMinor := new(big.Int).Add(maxMicros, big.NewInt(1))
+	if _, err := microsToMinor(nextMinor, "ceil", 0); err == nil {
+		t.Fatal("ceil 超出最大金额未被拒绝")
+	}
+	if !validRounding("ceil") || !validRounding("floor") || !validRounding("half_up") || validRounding("unknown") {
+		t.Fatal("舍入规则兼容集合错误")
+	}
+}
+
 func TestCostOverflowRejected(t *testing.T) {
 	cost, err := tikuCostMicros(math.MaxInt64, math.MaxInt64, math.MaxInt64, math.MaxInt64)
 	if err != nil {

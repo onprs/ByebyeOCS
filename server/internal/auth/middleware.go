@@ -175,10 +175,13 @@ func (s *Service) Middleware(kind string, next http.Handler) http.Handler {
 		}
 		state, err := s.resolveSession(r.Context(), kind, presented, now)
 		if err != nil {
-			if presented.CookieBased {
+			code, _ := fault.Describe(err)
+			// 只有确认失效时才清除 Cookie。数据库短暂不可用时保留原 Cookie，
+			// 让客户端在服务恢复后继续使用同一会话，而不是被迫重新登录。
+			if presented.CookieBased && code == "unauthenticated" {
 				s.clearSessionCookie(w, kind)
 			}
-			if code, _ := fault.Describe(err); code == "unauthenticated" {
+			if code == "unauthenticated" {
 				web.Error(w, r, http.StatusUnauthorized, "unauthenticated", "登录已失效，请重新验证身份")
 				return
 			}

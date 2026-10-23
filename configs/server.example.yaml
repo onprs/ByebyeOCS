@@ -8,9 +8,11 @@ server:
   write_timeout: 15s
   idle_timeout: 1m
   shutdown_timeout: 10s
-  # 反向代理与主服务在同一主机时信任回环代理；跨主机代理请改成实际代理地址。
+  # 服务只监听回环地址，公开入口是同机反向代理或本机隧道。这里只信任回环来源
+  # 转发的一层 X-Forwarded-For；其他来源不会被当作真实客户端地址。
   trusted_proxies:
     - "127.0.0.1/32"
+    - "::1/128"
 
 database:
   # 相对路径以本配置文件所在目录为基准；文件必须仅服务用户可读。
@@ -51,11 +53,17 @@ payments:
   charging_enabled: false
   merchant_id: ""
   key_file: ""
+  # 支付回调的内部路由是 /payments/callbacks/zpay，只注册在管理员监听上。
+  # 按实际公网代理拓扑填写 notify_url，确保渠道 POST 最终到达该内部路由：
+  # https://admin.example.com/payments/callbacks/zpay
   notify_url: ""
   return_url: ""
 
 questions:
   enabled: false
+  # 默认按用户隔离题库缓存；仅在确认共享范围后开启。是否真正命中共享缓存
+  # 还取决于题库服务自身的共享缓存开关。
+  allow_shared_cache: false
   url: ""
   token_file: ""
   timeout: 95s

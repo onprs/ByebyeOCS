@@ -129,7 +129,10 @@ create_owned_dir() {
   if [[ -e "$path" && ! -d "$path" ]]; then
     die "路径已存在且不是目录：$path"
   fi
-  install -d -m "$mode" "$path"
+  # 缺失的父目录必须可遍历，否则自定义布局下服务用户无法进入 0700 的目标目录。
+  # 目标目录随后收紧到指定权限。
+  install -d -m 0755 "$path"
+  chmod "$mode" "$path"
   if [[ "${NO_SERVICE_USER:-0}" != 1 ]]; then
     chown "$owner:$group" "$path"
   fi

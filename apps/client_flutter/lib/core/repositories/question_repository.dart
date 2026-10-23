@@ -10,15 +10,31 @@ class QuestionRepository {
   final ApiClient _api;
 
   Future<List<QuestionOffering>> fetchOfferings() async {
-    final response = await _api.get('question-models');
-    final map = response.object;
-    final raw = map['items'] ?? response.data;
-    return asList(raw)
-        .map(asObject)
-        .whereType<Map<String, dynamic>>()
-        .map(QuestionOffering.parse)
-        .toList(growable: false)
-      ..sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    const pageSize = 100;
+    // 模型目录按游标分页；用户只能在已加载的条目中选择，必须读完当前目录。
+    final result = <QuestionOffering>[];
+    final seen = <String>{};
+    String? cursor;
+    for (var page = 0; page < 5; page++) {
+      final response = await _api.get('question-models', query: {
+        'limit': '$pageSize',
+        if (cursor != null) 'cursor': cursor,
+      });
+      final map = response.object;
+      final raw = map['items'] ?? response.data;
+      final items = asList(raw)
+          .map(asObject)
+          .whereType<Map<String, dynamic>>()
+          .map(QuestionOffering.parse)
+          .where((offering) => seen.add(offering.id))
+          .toList(growable: false);
+      result.addAll(items);
+      final next = readString(map, 'next_cursor');
+      if (next == null || next.isEmpty || next == cursor) break;
+      cursor = next;
+    }
+    result.sort((a, b) => a.sortOrder.compareTo(b.sortOrder));
+    return result;
   }
 
   Future<QuestionQuery> createQuery({

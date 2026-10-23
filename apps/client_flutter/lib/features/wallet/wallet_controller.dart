@@ -91,6 +91,10 @@ class WalletState {
     bool clearUsageError = false,
     bool clearActionError = false,
     bool clearNotice = false,
+    bool clearEntriesCursor = false,
+    bool clearOrdersCursor = false,
+    bool clearUsageCursor = false,
+    bool clearQueriesCursor = false,
   }) {
     return WalletState(
       wallet: wallet ?? this.wallet,
@@ -99,10 +103,14 @@ class WalletState {
       orders: orders ?? this.orders,
       usage: usage ?? this.usage,
       queries: queries ?? this.queries,
-      entriesCursor: entriesCursor ?? this.entriesCursor,
-      ordersCursor: ordersCursor ?? this.ordersCursor,
-      usageCursor: usageCursor ?? this.usageCursor,
-      queriesCursor: queriesCursor ?? this.queriesCursor,
+      entriesCursor: clearEntriesCursor
+          ? null
+          : entriesCursor ?? this.entriesCursor,
+      ordersCursor:
+          clearOrdersCursor ? null : ordersCursor ?? this.ordersCursor,
+      usageCursor: clearUsageCursor ? null : usageCursor ?? this.usageCursor,
+      queriesCursor:
+          clearQueriesCursor ? null : queriesCursor ?? this.queriesCursor,
       refreshing: refreshing ?? this.refreshing,
       creatingOrder: creatingOrder ?? this.creatingOrder,
       queryDetailsAvailable:
@@ -137,11 +145,16 @@ class WalletController extends AsyncNotifier<WalletState> {
   bool _loadingEntries = false;
   bool _loadingOrders = false;
   bool _loadingUsage = false;
+  bool _loadingQueries = false;
 
   @override
   Future<WalletState> build() async {
     ++_accountEpoch;
     _listEpoch++;
+    _loadingEntries = false;
+    _loadingOrders = false;
+    _loadingUsage = false;
+    _loadingQueries = false;
     ref.watch(sessionEpochProvider);
     final user = ref.watch(currentUserProvider);
     _events = ref.watch(realtimeServiceProvider).events.listen(_onEvent);
@@ -270,6 +283,14 @@ class WalletController extends AsyncNotifier<WalletState> {
           ordersCursor: orders.value?.nextCursor,
           usageCursor: usage.value?.nextCursor,
           queriesCursor: queries.value?.nextCursor,
+          clearEntriesCursor:
+              entries.value != null && entries.value!.nextCursor == null,
+          clearOrdersCursor:
+              orders.value != null && orders.value!.nextCursor == null,
+          clearUsageCursor:
+              usage.value != null && usage.value!.nextCursor == null,
+          clearQueriesCursor:
+              queries.value != null && queries.value!.nextCursor == null,
           refreshing: false,
           queryDetailsAvailable: queries.value != null,
           pricingError: pricing.error,
@@ -424,10 +445,14 @@ class WalletController extends AsyncNotifier<WalletState> {
           );
       if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
+      final known = latest.entries.map((item) => item.id).toSet();
+      final appended =
+          page.items.where((item) => known.add(item.id)).toList(growable: false);
       state = AsyncData(
         latest.copyWith(
-          entries: [...latest.entries, ...page.items],
+          entries: [...latest.entries, ...appended],
           entriesCursor: page.nextCursor,
+          clearEntriesCursor: page.nextCursor == null,
         ),
       );
     } catch (_) {
@@ -455,10 +480,14 @@ class WalletController extends AsyncNotifier<WalletState> {
           );
       if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
+      final known = latest.orders.map((item) => item.id).toSet();
+      final appended =
+          page.items.where((item) => known.add(item.id)).toList(growable: false);
       state = AsyncData(
         latest.copyWith(
-          orders: [...latest.orders, ...page.items],
+          orders: [...latest.orders, ...appended],
           ordersCursor: page.nextCursor,
+          clearOrdersCursor: page.nextCursor == null,
         ),
       );
     } catch (_) {
@@ -486,10 +515,14 @@ class WalletController extends AsyncNotifier<WalletState> {
           );
       if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
       final latest = state.valueOrNull ?? current;
+      final known = latest.usage.map((item) => item.id).toSet();
+      final appended =
+          page.items.where((item) => known.add(item.id)).toList(growable: false);
       state = AsyncData(
         latest.copyWith(
-          usage: [...latest.usage, ...page.items],
+          usage: [...latest.usage, ...appended],
           usageCursor: page.nextCursor,
+          clearUsageCursor: page.nextCursor == null,
         ),
       );
     } catch (_) {
@@ -500,6 +533,44 @@ class WalletController extends AsyncNotifier<WalletState> {
       );
     } finally {
       _loadingUsage = false;
+    }
+  }
+
+  Future<void> loadQueries() async {
+    final current = state.valueOrNull;
+    if (current == null ||
+        !current.queryDetailsAvailable ||
+        current.queriesCursor == null ||
+        _loadingQueries) {
+      return;
+    }
+    final epoch = _accountEpoch;
+    final listEpoch = _listEpoch;
+    _loadingQueries = true;
+    try {
+      final page = await ref.read(questionRepositoryProvider).fetchQueries(
+            cursor: current.queriesCursor,
+          );
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
+      final latest = state.valueOrNull ?? current;
+      final known = latest.queries.map((item) => item.id).toSet();
+      final appended =
+          page.items.where((item) => known.add(item.id)).toList(growable: false);
+      state = AsyncData(
+        latest.copyWith(
+          queries: [...latest.queries, ...appended],
+          queriesCursor: page.nextCursor,
+          clearQueriesCursor: page.nextCursor == null,
+        ),
+      );
+    } catch (_) {
+      if (epoch != _accountEpoch || listEpoch != _listEpoch) return;
+      final latest = state.valueOrNull ?? current;
+      state = AsyncData(
+        latest.copyWith(usageError: '更多题库查询记录暂时无法加载'),
+      );
+    } finally {
+      _loadingQueries = false;
     }
   }
 

@@ -7,6 +7,46 @@ import 'package:byebyeocs_client/features/wallet/wallet_page.dart';
 import '../helpers.dart';
 
 void main() {
+  testWidgets('打开订单详情时读取支付入口，无需先查询状态', (tester) async {
+    final detailCalls = <String>[];
+    final listOrder = <String, dynamic>{
+      ...orderFixtures[2],
+      'checkout_state': 'not_available',
+    }..remove('checkout_url');
+    final server = TestServer();
+
+    Future<http.Response> handler(http.Request request) {
+      if (request.method == 'GET' &&
+          request.url.path == '/api/v1/recharge-orders') {
+        return Future<http.Response>.value(
+          jsonResponse({
+            'items': [listOrder],
+            'next_cursor': '',
+          }),
+        );
+      }
+      if (request.method == 'GET' &&
+          request.url.path == '/api/v1/recharge-orders/o3') {
+        detailCalls.add('o3');
+        return Future<http.Response>.value(
+          jsonResponse({
+            ...orderFixtures[2],
+            'checkout_state': 'available',
+            'checkout_url': 'https://pay.example.test/checkout',
+          }),
+        );
+      }
+      return server.call(request);
+    }
+
+    await pumpTestPage(tester, const WalletPage(), handler: handler);
+    await tester.tap(find.text('查看订单'));
+    await settle(tester);
+
+    expect(detailCalls, ['o3']);
+    expect(find.text('去支付'), findsWidgets);
+  });
+
   testWidgets('修改充值金额后重试使用新的幂等键', (tester) async {
     final server = TestServer();
     final keys = <String>[];

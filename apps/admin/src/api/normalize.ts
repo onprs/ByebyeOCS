@@ -1147,7 +1147,6 @@ export function normalizeDashboard(raw: unknown): AdminDashboard {
   const taskCounts = pickObject(object, ['task_counts', 'counts']) ?? {}
   const tasks = pickObject(object, ['tasks'])
   const byState = pickObject(tasks, ['by_state'])
-  const syncs = pickObject(object, ['syncs'])
   const finance = normalizeFinance(object)
   return {
     generated_at: pickString(object, ['generated_at', 'updated_at']),
@@ -1163,7 +1162,6 @@ export function normalizeDashboard(raw: unknown): AdminDashboard {
       queued_tasks:
         pickNumber(taskCounts, ['queued', 'pending', 'queued_tasks']) ??
         pickNumber(byState, ['pending']) ??
-        pickNumber(syncs, ['queued']) ??
         pickNumber(object, ['queued_tasks', 'queue_depth']),
     },
     resources: normalizeResources(object),

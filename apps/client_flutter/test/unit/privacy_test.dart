@@ -2,15 +2,21 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+import 'package:byebyeocs_client/app/providers.dart';
 import 'package:byebyeocs_client/core/api/api_client.dart';
 import 'package:byebyeocs_client/core/config/app_config.dart';
+import 'package:byebyeocs_client/core/models/page.dart';
 import 'package:byebyeocs_client/core/platform/token_store.dart';
 import 'package:byebyeocs_client/core/models/data_request.dart';
 import 'package:byebyeocs_client/core/repositories/privacy_repository.dart';
 import 'package:byebyeocs_client/core/session/session_manager.dart';
+import 'package:byebyeocs_client/features/settings/privacy_controller.dart';
+
+import '../helpers.dart';
 
 void main() {
   test('导出列表解析状态，下载使用受保护 GET 并读取文件名', () async {
@@ -138,4 +144,93 @@ void main() {
       '账号已关闭',
     );
   });
+
+  test('导出翻页到末页后清除游标且不重复追加', () async {
+    final repository = _PagedPrivacyRepository();
+    final container = ProviderContainer(
+      overrides: [
+        currentUserProvider.overrideWithValue(testUser),
+        privacyRepositoryProvider.overrideWithValue(repository),
+      ],
+    );
+    addTearDown(container.dispose);
+    container.listen(privacyControllerProvider, (_, __) {});
+
+    await container.read(privacyControllerProvider.future);
+    final notifier = container.read(privacyControllerProvider.notifier);
+    expect(
+      container.read(privacyControllerProvider).valueOrNull?.exports.length,
+      1,
+    );
+    expect(
+      container
+          .read(privacyControllerProvider)
+          .valueOrNull
+          ?.exportsCursor,
+      'cursor-1',
+    );
+
+    await notifier.loadMoreExports();
+    final state = container.read(privacyControllerProvider).valueOrNull;
+    expect(state?.exports.map((item) => item.id), ['export-1', 'export-2']);
+    expect(state?.exportsCursor, isNull);
+
+    await notifier.loadMoreExports();
+    expect(repository.exportCalls, 2);
+  });
+}
+
+class _PagedPrivacyRepository extends PrivacyRepository {
+  _PagedPrivacyRepository()
+      : super(
+          api: ApiClient(
+            config: const AppConfig(
+              apiBaseUri: null,
+              channel: ClientChannel.web,
+            ),
+            session: SessionManager(
+              channel: ClientChannel.web,
+              store: InMemoryTokenStore(),
+            ),
+            httpClient: MockClient((request) async => http.Response('{}', 200)),
+          ),
+        );
+
+  int exportCalls = 0;
+
+  @override
+  Future<Page<DataRequest>> fetchExports({
+    String? cursor,
+    int limit = 20,
+  }) async {
+    exportCalls++;
+    if (cursor == null) {
+      return Page<DataRequest>(
+        items: [
+          DataRequest.parse({
+            'id': 'export-1',
+            'kind': 'export',
+            'status': 'ready',
+          }),
+        ],
+        nextCursor: 'cursor-1',
+      );
+    }
+    return Page<DataRequest>(
+      items: [
+        DataRequest.parse({
+          'id': 'export-2',
+          'kind': 'export',
+          'status': 'ready',
+        }),
+      ],
+    );
+  }
+
+  @override
+  Future<Page<DataRequest>> fetchDeletions({
+    String? cursor,
+    int limit = 20,
+  }) async =>
+      Page<DataRequest>(items: const <DataRequest>[]);
 }

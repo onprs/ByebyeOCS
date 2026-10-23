@@ -73,10 +73,11 @@ type runtimeFixture struct {
 }
 
 type fixtureOptions struct {
-	fork     questions.ForkClient
-	platform learning.Platform
-	executor learning.Executor
-	charging bool
+	fork        questions.ForkClient
+	platform    learning.Platform
+	executor    learning.Executor
+	charging    bool
+	sharedCache bool
 }
 
 func newRuntimeFixture(t *testing.T, options ...fixtureOptions) *runtimeFixture {
@@ -109,6 +110,7 @@ func newRuntimeFixture(t *testing.T, options ...fixtureOptions) *runtimeFixture 
 		deps.Executor = option.executor
 		cfg.Learning.ExecutionEnabled = option.executor != nil
 		cfg.Payments.ChargingEnabled = option.charging
+		cfg.Questions.AllowSharedCache = option.sharedCache
 		if option.fork != nil {
 			deps.Fork = option.fork
 			cfg.Questions.Enabled = true

@@ -77,6 +77,18 @@ printf 'KEEP-DATA\n' >"$DATA/sentinel"
 [[ -f "$CONFIG/config.yaml.example" && -f "$TIKU_CONFIG/ocs-tiku-fork.json.example" ]] || fail "install 示例配置"
 ok "安装保留现有配置/密钥/数据并生成示例"
 
+# 自定义布局的上级目录必须可遍历；否则 0700 的配置/数据目录对服务用户不可达。
+DEEP="$TMP/deep/layout"
+"$V1/deploy/install.sh" --prefix "$DEEP/opt" --config-dir "$DEEP/etc/byebyeocs" \
+  --data-dir "$DEEP/var/lib/byebyeocs" --tiku-config-dir "$DEEP/etc/tiku" \
+  --no-systemd --no-service-user >/dev/null
+for dir in "$DEEP" "$DEEP/etc" "$DEEP/var" "$DEEP/var/lib"; do
+  mode=$(stat -c %a "$dir")
+  (( (8#$mode & 1) != 0 )) || fail "自定义布局上级目录不可遍历：$dir $mode"
+done
+[[ "$(stat -c %a "$DEEP/etc/byebyeocs")" == 700 && "$(stat -c %a "$DEEP/var/lib/byebyeocs")" == 700 ]] || fail "自定义布局未收紧配置/数据目录"
+ok "自定义布局创建可遍历上级目录并收紧配置/数据目录"
+
 [[ -z "$(find "$PREFIX/releases/1.0.0" -type d ! -perm -005 -print -quit)" ]] || fail "专用服务用户无法遍历版本目录"
 [[ -z "$(find "$PREFIX/releases/1.0.0" -type f ! -perm -004 -print -quit)" ]] || fail "专用服务用户无法读取程序/静态资源"
 [[ "$(stat -c %a "$CONFIG")" == 700 && "$(stat -c %a "$DATA")" == 700 && "$(stat -c %a "$CONFIG/secrets/application.key")" == 600 ]] || fail "发布权限修复不得放宽私有配置和数据"
@@ -116,6 +128,9 @@ expect_fail "拒绝根目录配置" "$V1/deploy/install.sh" --prefix "$TMP/p2" -
 expect_fail "拒绝过宽的程序前缀" "$V1/deploy/install.sh" --prefix /etc --no-systemd --no-service-user
 expect_fail "拒绝共享系统数据目录" "$V1/deploy/install.sh" --prefix "$TMP/p3" --data-dir /var/lib --no-systemd --no-service-user
 expect_fail "拒绝 root 服务用户" "$V1/deploy/install.sh" --prefix "$TMP/p4" --service-user root --no-systemd --no-service-user
+expect_fail "拒绝无服务用户却安装 systemd 单元" "$V1/deploy/install.sh" --prefix "$TMP/p5" --no-service-user
+[[ ! -e "$TMP/p5" ]] || fail "被拒绝的 --no-service-user 组合仍创建了目录"
+expect_fail "拒绝只提供一个 Origin" "$V1/deploy/install.sh" --prefix "$TMP/p6" --user-origin https://learn.example.com --no-systemd --no-service-user
 
 # ---------- 卸载的破坏性路径保护：用假 rm 证明校验发生在删除之前 ----------
 PROTECTBIN="$TMP/protectbin"

@@ -240,7 +240,6 @@ function BillingPanel() {
   }, [billing.data])
 
   const configured = billing.data?.service.configured ?? false
-  const tikuConfigured = billing.data?.tiku.configured ?? false
   const automatic = billing.data?.automatic_charging ?? false
 
   const save = async () => {
@@ -366,7 +365,7 @@ function BillingPanel() {
                   />
                 </Field>
                 <Field label="取整方式">
-                  <Select label="取整方式" value={rounding} onChange={setRounding} options={[{ value: 'ceil', label: '向上取整' }, { value: 'floor', label: '向下取整' }]} disabled={saving || !canManage} />
+                  <Select label="取整方式" value={rounding} onChange={setRounding} options={[{ value: 'ceil', label: '向上取整' }, { value: 'floor', label: '向下取整' }, { value: 'half_up', label: '按四舍五入' }]} disabled={saving || !canManage} />
                 </Field>
               </div>
 
@@ -420,9 +419,9 @@ function BillingPanel() {
                 <label className="native-check"><input type="checkbox" checked={checkoutEnabled} onChange={event => setCheckoutEnabled(event.target.checked)} disabled={saving || !canManage} />启用 ZPay 收银台</label>
                 <label className="native-check"><input type="checkbox" checked={refundEnabled} onChange={event => setRefundEnabled(event.target.checked)} disabled={saving || !canManage} />启用 ZPay 退款</label>
               </div>
-              {serviceCharge && (!configured || !tikuConfigured) ? (
+              {serviceCharge && !configured ? (
                 <Callout tone="warning" icon={<CircleAlert size={15} />}>
-                  仍有计费条件未配置；保存前请先补全，页面不会自动启用扣费。
+                  服务价格尚未配置；保存前请先补全，页面不会自动启用扣费。
                 </Callout>
               ) : null}
               {error ? <div style={{ marginTop: 14 }}><ErrorState error={error} compact /></div> : null}
@@ -443,15 +442,17 @@ function BillingPanel() {
       <Card>
         <CardHeader
           title="题库计价"
-          subtitle="题库按 token 独立收费，公开模型价格在题库与模型页面按条目配置。"
+          subtitle="题库按公开模型的 token 价格单独计费，不在全局设置中维护费率。"
           actions={<Button size="sm" onClick={() => navigate('/questions')}>管理模型与价格</Button>}
         />
-        <div className="billing-status" style={{ margin: 18 }}>
-          <div><span>题库扣费</span><b>{billing.data?.tiku_charge_enabled ? '已启用' : '未启用'}</b></div>
-          <div><span>输入价格</span><b>{formatPriceMicros(billing.data?.tiku.input_micros_per_million ?? null)}</b></div>
-          <div><span>输出价格</span><b>{formatPriceMicros(billing.data?.tiku.output_micros_per_million ?? null)}</b></div>
-          <div><span>结算门槛</span><b>{billing.data?.tiku.settlement_threshold_micros ? `${billing.data.tiku.settlement_threshold_micros} 微元 / 1 分` : '未提供'}</b></div>
-          <div><span>计价状态</span><b>{tikuConfigured ? '已配置' : '未配置'}</b></div>
+        <div className="settings-body" style={{ paddingTop: 16 }}>
+          <div className="billing-status" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+            <div><span>题库扣费开关</span><b>{billing.data?.tiku_charge_enabled ? '已启用' : '未启用'}</b></div>
+            <div><span>计价方式</span><b>按公开模型 token 价格</b></div>
+          </div>
+          <p className="form-hint" style={{ marginTop: 10 }}>
+            输入、输出价格与缓存策略在“题库与模型”按条目维护；实际查询使用所选的已发布模型价格。
+          </p>
         </div>
       </Card>
     </div>

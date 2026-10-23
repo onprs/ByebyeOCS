@@ -81,6 +81,7 @@ class QuestionPrompt {
         'multiple' => '多选题',
         'judgement' => '判断题',
         'completion' => '填空题',
+        'shortanswer' => '简答题',
         _ => '单选题',
       };
 

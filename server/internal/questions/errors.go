@@ -92,6 +92,9 @@ func permanentForkQueryError(code string) *QueryError {
 	switch code {
 	case "model_disabled":
 		return newQueryError(code, "该模型已下架，请重新选择", http.StatusConflict, false)
+	case "model_not_configured":
+		// fork 配置中不存在该公开模型的引用；修复配置后同一幂等键可重新驱动。
+		return newQueryError("not_configured", "题库模型尚未配置，请联系管理员", http.StatusServiceUnavailable, false)
 	case "vision_unsupported", "budget_exceeded", "invalid_question", "invalid_mode", "invalid_scope":
 		return newQueryError(code, "题库请求无法处理", http.StatusUnprocessableEntity, false)
 	case "invalid_request", "invalid_scope_key", "budget_invalid", "idempotency_required", "idempotency_invalid", "validation_failed":

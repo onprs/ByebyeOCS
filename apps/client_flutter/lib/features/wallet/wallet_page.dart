@@ -382,13 +382,25 @@ class _WalletPageState extends ConsumerState<WalletPage> {
     if (data.queries.isNotEmpty) {
       slivers.addAll([
         SliverToBoxAdapter(
-          child: Text(
-            '题库查询',
-            style: TextStyle(
-              color: colors.text,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-            ),
+          child: Row(
+            children: [
+              Text(
+                '题库查询',
+                style: TextStyle(
+                  color: colors.text,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              if (data.queriesCursor != null)
+                TextButton(
+                  onPressed: () => ref
+                      .read(walletControllerProvider.notifier)
+                      .loadQueries(),
+                  child: const Text('更多'),
+                ),
+            ],
           ),
         ),
         const SliverToBoxAdapter(child: SizedBox(height: 8)),
@@ -1516,31 +1528,94 @@ StatusTone _stageTone(RechargeStage stage) {
   };
 }
 
-class _OrderDetailSheet extends ConsumerWidget {
+class _OrderDetailSheet extends ConsumerStatefulWidget {
   const _OrderDetailSheet({required this.orderId});
 
   final String orderId;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_OrderDetailSheet> createState() => _OrderDetailSheetState();
+}
+
+class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    // 列表接口不返回支付入口；打开详情时读取订单详情，恢复可用的收银台地址。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    final order = await ref
+        .read(walletControllerProvider.notifier)
+        .refreshOrder(widget.orderId);
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      if (order == null) {
+        _error = ref.read(walletControllerProvider).valueOrNull?.actionError ??
+            '订单状态暂时无法查询';
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final data = ref.watch(walletControllerProvider).valueOrNull;
-    final order = data?.orderById(orderId);
+    final order = data?.orderById(widget.orderId);
     final colors = context.colors;
     return Container(
       constraints: const BoxConstraints(maxWidth: 680),
       padding: const EdgeInsets.fromLTRB(22, 4, 22, 22),
       child: order == null
-          ? const SizedBox(
+          ? SizedBox(
               height: 280,
-              child: EmptyState(
-                title: '订单不存在',
-                message: '订单可能已失效，请重新刷新订单列表。',
-              ),
+              child: _loading
+                  ? const Center(
+                      child: SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2.2),
+                      ),
+                    )
+                  : _error != null
+                      ? ErrorPanel(
+                          message: _error!,
+                          compact: true,
+                          onRetry: _load,
+                        )
+                      : const EmptyState(
+                          title: '订单不存在',
+                          message: '订单可能已失效，请重新刷新订单列表。',
+                        ),
             )
           : Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
+                if (_loading) ...[
+                  const LinearProgressIndicator(minHeight: 2),
+                  const SizedBox(height: 10),
+                ],
+                if (_error != null) ...[
+                  InlineNotice(
+                    tone: StatusTone.warning,
+                    message: _error!,
+                    action: TextButton(
+                      onPressed: _load,
+                      child: const Text('重试'),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                ],
                 SheetHeader(
                   title: '充值订单',
                   subtitle: '支付状态与到账状态分别记录。',
@@ -1695,6 +1770,7 @@ class _OrderDetailSheet extends ConsumerWidget {
   }
 
   String _creditLabel(RechargeOrder order) {
+    if (order.paymentStatus == 'refunded') return '已退款';
     return switch (order.creditStatus) {
       'credited' => '已到账',
       'needs_review' => '待核对',
@@ -1713,13 +1789,9 @@ class _PricingSummary extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final service = pricing.service;
-    final tiku = pricing.tiku;
     final serviceText = service.active
         ? '${service.priceMicros == null ? '价格已发布' : formatMicrosYuan(service.priceMicros!)}${service.unitLabel == null ? '' : ' / ${service.unitLabel}'}'
         : '主服务单价待公布';
-    final tikuText = tiku.active
-        ? '输入 ${tiku.inputMicrosPerMillion == null ? '待公布' : '${formatMicrosYuan(tiku.inputMicrosPerMillion!)} / 百万 token'} · 输出 ${tiku.outputMicrosPerMillion == null ? '待公布' : '${formatMicrosYuan(tiku.outputMicrosPerMillion!)} / 百万 token'}'
-        : '题库单价待公布';
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
@@ -1761,7 +1833,9 @@ class _PricingSummary extends StatelessWidget {
           ),
           const SizedBox(height: 2),
           Text(
-            tikuText.startsWith('题库') ? tikuText : '题库：$tikuText',
+            pricing.automaticCharging
+                ? '题库：按所选公开模型的 token 价格单独计费。'
+                : '题库：按所选公开模型的 token 价格记录用量，自动扣费未开启。',
             style: TextStyle(
                 color: colors.textSecondary, fontSize: 11.5, height: 1.5),
           ),

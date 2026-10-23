@@ -17,8 +17,7 @@ import (
 )
 
 var (
-	courseLinkPattern = regexp.MustCompile(`stucoursemiddle\?courseid=(\d+)&clazzid=(\d+)&cpi=(\d+)`)
-	courseNamePattern = regexp.MustCompile(`class="course-name[^"]*"[^>]*title="([^"]*)"`)
+	courseLinkPattern = regexp.MustCompile(`stucoursemiddle\?[^\s"'<>]+`)
 	knowledgePattern  = regexp.MustCompile(`toOld\(\s*'(\d+)'\s*,\s*'(\d+)'\s*,\s*'(\d+)'`)
 	cardsPattern      = regexp.MustCompile(`\bmArg\s*=\s*`)
 )
@@ -137,26 +136,50 @@ func (p *Platform) ListCourses(ctx context.Context, sessionBytes []byte) ([]lear
 		return nil, err
 	}
 	page := string(payload)
-	links := courseLinkPattern.FindAllStringSubmatch(page, -1)
+	links := courseLinkPattern.FindAllString(page, -1)
 	if len(links) == 0 {
 		return nil, learning.Fail(learning.FailureCapabilityMissing, "课程列表结构未识别")
 	}
-	names := courseNamePattern.FindAllStringSubmatch(page, -1)
+	names := []string{}
+	parseHTMLDocument(payload).walk(func(node *htmlNode) bool {
+		for _, class := range strings.Fields(node.attr("class")) {
+			if strings.HasPrefix(class, "course-name") {
+				name := strings.TrimSpace(node.attr("title"))
+				if name == "" {
+					name = htmlNodeText(node)
+				}
+				names = append(names, name)
+				return false
+			}
+		}
+		return true
+	})
 	seen := map[string]bool{}
 	courses := make([]learning.PlatformCourse, 0, len(links))
-	for index, link := range links {
-		key := link[1] + "/" + link[2] + "/" + link[3]
+	for _, link := range links {
+		parsed, err := url.Parse(html.UnescapeString(link))
+		if err != nil {
+			return nil, learning.Fail(learning.FailureCapabilityMissing, "课程入口无法解析")
+		}
+		query := parsed.Query()
+		courseID, classID, cpi := query.Get("courseid"), query.Get("clazzid"), query.Get("cpi")
+		for _, field := range []string{"courseid", "clazzid", "cpi"} {
+			if len(query[field]) != 1 || !isDigits(query.Get(field)) || len(query.Get(field)) > 128 {
+				return nil, learning.Fail(learning.FailureCapabilityMissing, "课程入口身份不完整，未保存不完整列表")
+			}
+		}
+		key := courseID + "/" + classID + "/" + cpi
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
-		course := learning.PlatformCourse{
-			ExternalCourseID: link[1], ExternalClassID: link[2], CPI: link[3],
+		courses = append(courses, learning.PlatformCourse{ExternalCourseID: courseID, ExternalClassID: classID, CPI: cpi})
+	}
+	// 名称与去重后的课程对应；封面重复链接不再推进名称索引，数量不符时保留空名称。
+	if len(names) == len(courses) {
+		for index := range courses {
+			courses[index].Title = names[index]
 		}
-		if index < len(names) {
-			course.Title = strings.TrimSpace(html.UnescapeString(names[index][1]))
-		}
-		courses = append(courses, course)
 	}
 	return courses, nil
 }

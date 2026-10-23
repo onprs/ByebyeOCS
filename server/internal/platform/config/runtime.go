@@ -57,12 +57,15 @@ type Payments struct {
 	ReturnURL       string `yaml:"return_url"`
 }
 type Questions struct {
-	Enabled     bool          `yaml:"enabled"`
-	URL         string        `yaml:"url"`
-	TokenFile   string        `yaml:"token_file" json:"-"`
-	Token       string        `yaml:"-" json:"-"`
-	Timeout     time.Duration `yaml:"timeout"`
-	Concurrency int           `yaml:"concurrency"`
+	Enabled bool `yaml:"enabled"`
+	// AllowSharedCache 控制新查询是否允许使用跨用户共享缓存；默认按用户隔离。
+	// 是否真正命中共享缓存仍由题库服务自己的能力与配置决定。
+	AllowSharedCache bool          `yaml:"allow_shared_cache"`
+	URL              string        `yaml:"url"`
+	TokenFile        string        `yaml:"token_file" json:"-"`
+	Token            string        `yaml:"-" json:"-"`
+	Timeout          time.Duration `yaml:"timeout"`
+	Concurrency      int           `yaml:"concurrency"`
 }
 type Operations struct {
 	DiskProtection     bool          `yaml:"disk_protection"`
@@ -77,6 +80,9 @@ type Operations struct {
 func runtimeDefaults(cfg *Config) {
 	cfg.Mode = "production"
 	cfg.Auth = Auth{EncryptionKeyVersion: 1, CookieSecure: true, UserOrigin: "http://127.0.0.1:8090", AdminOrigin: "http://127.0.0.1:8091", SessionTTL: 12 * time.Hour}
+	// 服务只接受回环监听，公开入口必然是同机反向代理或本机隧道。默认信任
+	// 回环代理，使登录限流与客户端标识读取真实客户端地址；不信任其他来源。
+	cfg.Server.TrustedProxies = []string{"127.0.0.1/32", "::1/128"}
 	cfg.Storage = Storage{DataDir: "data"}
 	cfg.Learning = Learning{GlobalConcurrency: 4, AccountConcurrency: 1}
 	cfg.Questions = Questions{Timeout: 95 * time.Second, Concurrency: 2}
@@ -230,8 +236,9 @@ func validateRuntime(cfg *Config) error {
 		}
 		for _, address := range []string{cfg.Payments.NotifyURL, cfg.Payments.ReturnURL} {
 			parsed, err := url.Parse(address)
-			if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
-				return invalid("支付回调和返回地址必须为有效 HTTPS URL")
+			// 与ZPay客户端和渠道规则保持一致，在配置检查阶段拒绝带查询参数的地址。
+			if err != nil || parsed.Scheme != "https" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+				return invalid("支付回调和返回地址必须为不带查询参数的有效 HTTPS URL")
 			}
 		}
 	}

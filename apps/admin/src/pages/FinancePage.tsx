@@ -863,7 +863,7 @@ function RefundsPanel({
   )
 }
 
-const refundReviewStatuses = new Set(['reserved', 'submitted', 'unknown'])
+const refundReviewStatuses = new Set(['requested', 'reserved', 'submitted', 'unknown'])
 
 function refundNeedsReview(status: string): boolean {
   return refundReviewStatuses.has(status)
@@ -903,7 +903,7 @@ function RefundReviewDialog({
   useEffect(() => {
     if (refund) {
       idempotency.reset()
-      setOutcome(null)
+      setOutcome(refund.status === 'requested' ? 'failed' : null)
       setReason('')
       setError(null)
       setResult(null)
@@ -915,7 +915,14 @@ function RefundReviewDialog({
 
   if (!refund) return null
 
+  // requested 表示预占已提交但渠道请求一定未发出，只能按未退款释放预占。
+  const channelNotSent = refund.status === 'requested'
+
   const submit = async () => {
+    if (channelNotSent && outcome !== 'failed') {
+      setError(new Error('该退款尚未提交渠道，只能登记为未退款。'))
+      return
+    }
     if (!outcome) {
       setError(new Error('请选择退款核实结果：已退款或未退款。'))
       return
@@ -980,17 +987,25 @@ function RefundReviewDialog({
             <CircleAlert size={15} />
             <div>请先核对支付渠道的实际退款结果。这里只登记核实结果，不会再次发起渠道退款。</div>
           </div>
+          {channelNotSent ? (
+            <div className="callout" style={{ marginTop: 12 }}>
+              <ShieldCheck size={15} />
+              <div>该退款尚未提交渠道，只能登记为未退款并释放预占资金。</div>
+            </div>
+          ) : null}
           <div className="privacy-actions" role="group" aria-label="选择退款核实结果" style={{ marginTop: 14 }}>
-            <button
-              type="button"
-              className={`privacy-action ${outcome === 'succeeded' ? 'selected' : ''}`}
-              aria-pressed={outcome === 'succeeded'}
-              onClick={() => { setOutcome('succeeded'); setError(null) }}
-            >
-              <CheckCircle2 size={15} />
-              <b>已退款</b>
-              <span>渠道已确认退款成功，记录退款支出并完成本次退款。</span>
-            </button>
+            {channelNotSent ? null : (
+              <button
+                type="button"
+                className={`privacy-action ${outcome === 'succeeded' ? 'selected' : ''}`}
+                aria-pressed={outcome === 'succeeded'}
+                onClick={() => { setOutcome('succeeded'); setError(null) }}
+              >
+                <CheckCircle2 size={15} />
+                <b>已退款</b>
+                <span>渠道已确认退款成功，记录退款支出并完成本次退款。</span>
+              </button>
+            )}
             <button
               type="button"
               className={`privacy-action ${outcome === 'failed' ? 'selected' : ''}`}

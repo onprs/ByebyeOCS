@@ -77,14 +77,23 @@ func microsToMinor(micros *big.Int, rounding string, minCharge int64) (int64, er
 		return 0, fault.New("validation_failed", "计费金额无效")
 	}
 	value := new(big.Int).Set(micros)
+	divisor := big.NewInt(microsPerMinor)
 	switch rounding {
 	case "floor":
+		value.Quo(value, divisor)
+	case "ceil":
+		// 用整数商和余数向上取整，避免通过加 divisor-1 构造溢出。
+		quotient, remainder := new(big.Int).QuoRem(value, divisor, new(big.Int))
+		if remainder.Sign() != 0 {
+			quotient.Add(quotient, big.NewInt(1))
+		}
+		value = quotient
 	case "half_up":
 		value.Add(value, big.NewInt(microsPerMinor/2))
+		value.Quo(value, divisor)
 	default:
 		return 0, fault.New("validation_failed", "舍入规则无效")
 	}
-	value.Quo(value, big.NewInt(microsPerMinor))
 	if !value.IsInt64() {
 		return 0, fault.New("validation_failed", "计费金额超出允许范围")
 	}
@@ -117,6 +126,8 @@ func bigInt64(value *big.Int, field string) (int64, error) {
 	return value.Int64(), nil
 }
 
-func validRounding(value string) bool { return value == "floor" || value == "half_up" }
+func validRounding(value string) bool {
+	return value == "floor" || value == "half_up" || value == "ceil"
+}
 
 func trimSpace(value string) string { return strings.TrimSpace(value) }
