@@ -144,3 +144,39 @@ func TestProfileProbeRejectsUnsafeConfiguration(t *testing.T) {
 		t.Fatal("默认关闭的资料探针仍可访问")
 	}
 }
+
+func TestProfileProbeRetriesHTTPSAfterPlaintextDowngrade(t *testing.T) {
+	attempts := 0
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/account" {
+			w.Header().Set("Content-Type", "text/html")
+			io.WriteString(w, `<p id="uid">123456789</p>`)
+			return
+		}
+		attempts++
+		if cookie, err := r.Cookie("ws"); err != nil || cookie.Value != "1" {
+			http.SetCookie(w, &http.Cookie{Name: "ws", Value: "1", Path: "/", Secure: true})
+			w.Header().Set("Location", "http://"+r.Host+r.URL.Path)
+			w.WriteHeader(http.StatusFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html")
+		io.WriteString(w, `{"site":[{"fid":42,"schoolname":"测试学校"}]}`)
+	}))
+	defer server.Close()
+	options := newProfileOptions(server.URL+"/account", server.URL+"/org")
+	options.newClient = func(jar http.CookieJar) *http.Client {
+		return &http.Client{Jar: jar, Transport: server.Client().Transport}
+	}
+	probe, err := NewProfileSubjectProbe(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := probe.Probe(context.Background(), profileSession())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.School != "测试学校" || attempts < 2 {
+		t.Fatalf("明文降级后未重试 HTTPS: %+v attempts=%d", evidence, attempts)
+	}
+}

@@ -168,29 +168,55 @@ func (p *ProfileSubjectProbe) schoolName(ctx context.Context, client *http.Clien
 }
 
 func (p *ProfileSubjectProbe) fetch(ctx context.Context, client *http.Client, endpoint *url.URL, userAgent, accept string) ([]byte, error) {
-	if err := p.factory.limiter.wait(ctx, p.options.MinRequestInterval); err != nil {
-		return nil, learning.Fail(learning.FailureTransient, "账户资料查询等待被取消")
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return nil, learning.Fail(learning.FailurePermanent, "无法建立账户资料查询")
-	}
-	request.Header.Set("User-Agent", userAgent)
-	request.Header.Set("Accept", accept)
 	base := *endpoint
 	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 2 {
 			return errors.New("账户资料查询重定向次数过多")
 		}
-		if !sameOrigin(req.URL, &base) {
-			return errors.New("账户资料查询禁止跨域重定向")
+		if sameOrigin(req.URL, &base) {
+			return nil
 		}
-		return nil
+		// 学习通会先 302 到 HTTP 并下发 ws Cookie；不跟随明文降级，
+		// 由调用方在原 HTTPS 地址上重试一次。
+		if req.URL.Scheme == "http" && strings.EqualFold(req.URL.Host, base.Host) {
+			return http.ErrUseLastResponse
+		}
+		return errors.New("账户资料查询禁止跨域重定向")
 	}
-	response, err := client.Do(request)
-	if err != nil {
-		return nil, learning.Fail(learning.FailureTransient, "账户资料查询未完成")
+	var lastStatus int
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := p.factory.limiter.wait(ctx, p.options.MinRequestInterval); err != nil {
+			return nil, learning.Fail(learning.FailureTransient, "账户资料查询等待被取消")
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		if err != nil {
+			return nil, learning.Fail(learning.FailurePermanent, "无法建立账户资料查询")
+		}
+		request.Header.Set("User-Agent", userAgent)
+		request.Header.Set("Accept", accept)
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, learning.Fail(learning.FailureTransient, "账户资料查询未完成")
+		}
+		lastStatus = response.StatusCode
+		if response.StatusCode == http.StatusFound || response.StatusCode == http.StatusMovedPermanently || response.StatusCode == http.StatusTemporaryRedirect || response.StatusCode == http.StatusPermanentRedirect {
+			location, _ := url.Parse(response.Header.Get("Location"))
+			response.Body.Close()
+			if attempt == 0 && location != nil && location.Scheme == "http" && strings.EqualFold(location.Host, base.Host) {
+				continue
+			}
+			return nil, learning.Fail(learning.FailureTransient, "账户资料查询重定向未完成")
+		}
+		payload, err := p.readBody(response)
+		if err != nil {
+			return nil, err
+		}
+		return payload, nil
 	}
+	return nil, learning.Fail(learning.FailureTransient, fmt.Sprintf("账户资料查询未完成(%d)", lastStatus))
+}
+
+func (p *ProfileSubjectProbe) readBody(response *http.Response) ([]byte, error) {
 	defer response.Body.Close()
 	switch {
 	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
