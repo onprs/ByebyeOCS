@@ -30,7 +30,7 @@
 | --- | --- | --- |
 | POST `/auth/chaoxing/challenges` | 创建已批准方式的登录挑战 | 返回能力、到期与隐私版本，不假设 OAuth |
 | GET `/auth/chaoxing/challenges/{id}` | 查询扫码/验证状态 | 挑战绑定当前客户端、限次与过期 |
-| POST `/auth/chaoxing/challenges/{id}/verify` | 提交持有人完成的验证 | 敏感输入不记录；验证后关联内部用户 |
+| POST `/auth/chaoxing/challenges/{id}/verify` | 提交学习通账号与密码 | 只需要 account/password；学校由平台返回后写入身份；敏感输入不记录 |
 | POST `/auth/refresh` | 刷新 App 会话或轮换 Web 会话 | 一次性刷新链，复用撤销 |
 | POST `/auth/logout` | 撤销客户端会话 | 明确是否同时撤销云端执行授权 |
 | GET `/me` | 身份摘要与会话提示 | 无密码、Cookie 或外部令牌 |

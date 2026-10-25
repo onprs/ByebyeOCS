@@ -110,10 +110,8 @@ class AuthRepository {
 
   Future<LoginResult> verifyChallenge({
     required String id,
-    required String school,
     required String account,
     required String password,
-    String? verification,
   }) async {
     final headers = <String, String>{};
     if (!_session.isWeb && _session.challengeBinding != null) {
@@ -122,11 +120,8 @@ class AuthRepository {
     final response = await _api.post(
       'auth/chaoxing/challenges/$id/verify',
       body: {
-        'school': school.trim(),
         'account': account.trim(),
         'password': password,
-        if (verification != null && verification.trim().isNotEmpty)
-          'verification': verification.trim(),
       },
       authenticated: false,
       headers: headers.isEmpty ? null : headers,

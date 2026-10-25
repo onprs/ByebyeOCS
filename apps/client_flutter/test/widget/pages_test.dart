@@ -22,10 +22,10 @@ void main() {
     await pumpTestPage(tester, const LoginPage(), auth: anonymousState());
 
     expect(find.text('使用学习通身份进入'), findsOneWidget);
-    expect(find.text('学校'), findsOneWidget);
+    expect(find.text('学校'), findsNothing);
+    expect(find.text('验证码（如平台要求）'), findsNothing);
     expect(find.text('学习通账号'), findsOneWidget);
     expect(find.text('密码'), findsOneWidget);
-    expect(find.text('验证码（如平台要求）'), findsOneWidget);
     expect(find.text('验证并进入'), findsOneWidget);
     expect(find.text('学习通官方入口找回密码'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, '注册'), findsNothing);

@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -21,10 +20,8 @@ class LoginPage extends ConsumerStatefulWidget {
 }
 
 class _LoginPageState extends ConsumerState<LoginPage> {
-  final _schoolController = TextEditingController();
   final _accountController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _verificationController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _obscurePassword = true;
   bool _consent = false;
@@ -40,10 +37,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   @override
   void dispose() {
-    _schoolController.dispose();
     _accountController.dispose();
     _passwordController.dispose();
-    _verificationController.dispose();
     super.dispose();
   }
 
@@ -238,20 +233,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 ),
               ),
             TextFormField(
-              key: const Key('login-school'),
-              controller: _schoolController,
-              enabled: !login.submitting,
-              textInputAction: TextInputAction.next,
-              autofillHints: const [AutofillHints.organizationName],
-              decoration: const InputDecoration(
-                labelText: '学校',
-                hintText: '填写学习通中的学校名称',
-              ),
-              validator: (value) =>
-                  (value == null || value.trim().isEmpty) ? '请填写学校名称' : null,
-            ),
-            const SizedBox(height: 14),
-            TextFormField(
               key: const Key('login-account'),
               controller: _accountController,
               enabled: !login.submitting,
@@ -292,24 +273,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               validator: (value) =>
                   (value == null || value.isEmpty) ? '请填写学习通密码' : null,
             ),
-            const SizedBox(height: 14),
-            TextFormField(
-              key: const Key('login-verification'),
-              controller: _verificationController,
-              enabled: !login.submitting,
-              textInputAction: TextInputAction.done,
-              keyboardType: TextInputType.number,
-              inputFormatters: [
-                FilteringTextInputFormatter.allow(RegExp(r'[0-9A-Za-z]')),
-                LengthLimitingTextInputFormatter(12),
-              ],
-              decoration: const InputDecoration(
-                labelText: '验证码（如平台要求）',
-                hintText: '没有提示时可留空',
-              ),
-              onFieldSubmitted: (_) => _submit(),
-            ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 18),
             CheckboxListTile(
               value: _consent,
               onChanged: login.submitting
@@ -370,7 +334,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             ),
             const SizedBox(height: 12),
             Text(
-              '验证由学习通完成。平台不会保存学习通密码，也不会绕过验证码或身份校验。',
+              '身份由学习通验证。平台不会保存学习通密码，也不会绕过平台校验。',
               style: TextStyle(
                 color: colors.muted,
                 fontSize: 12,
@@ -410,7 +374,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
       builder: (context) => AlertDialog(
         title: const Text('身份验证与隐私'),
         content: const Text(
-            '请使用本人学习通账号。验证通过后，平台读取课程、章节与任务点信息，用于课程同步和任务安排。学习通密码仅用于本次验证，平台不保存。验证码与身份核验由学习通完成。'),
+            '请使用本人学习通账号。验证通过后，平台读取课程、章节与任务点信息，用于课程同步和任务安排。学习通密码仅用于本次验证，平台不保存；学校等身份信息以学习通返回为准。'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context), child: const Text('知道了'))
@@ -421,10 +385,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
 
   void _submit() {
     ref.read(loginControllerProvider.notifier).submit(
-          school: _schoolController.text,
           account: _accountController.text,
           password: _passwordController.text,
-          verification: _verificationController.text,
           consent: _consent,
         );
   }
