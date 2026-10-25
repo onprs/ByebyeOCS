@@ -516,7 +516,7 @@ class _LearningOverview extends StatelessWidget {
             ],
           ),
         );
-        if (!wide || course == null) return content;
+        if (!wide) return content;
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -524,7 +524,7 @@ class _LearningOverview extends StatelessWidget {
             SizedBox(
               width: 230,
               child: CourseArt(
-                seed: course!.id,
+                seed: course?.id ?? 'empty',
                 height: 280,
                 background: false,
               ),
