@@ -34,8 +34,9 @@ ProtectProc=invisible
 RestrictSUIDSGID=true
 LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-ReadOnlyPaths=@PREFIX@ @TIKU_CONFIG_DIR@
-ReadWritePaths=/run/ocs-tiku
+# 程序目录只读；配置目录由题库用户拥有，供维护面板原子写回模型配置和私密密钥。
+ReadOnlyPaths=@PREFIX@
+ReadWritePaths=/run/ocs-tiku @TIKU_CONFIG_DIR@
 CapabilityBoundingSet=
 AmbientCapabilities=
 TasksMax=128
