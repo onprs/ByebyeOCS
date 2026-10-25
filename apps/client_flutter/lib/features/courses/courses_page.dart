@@ -10,6 +10,7 @@ import '../../core/models/course.dart';
 import '../../app/scroll_controllers.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
+import 'course_sync_notice.dart';
 import 'courses_controller.dart';
 
 enum _CourseFilter { all, pending, confirmed }
@@ -46,6 +47,18 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
     final user = ref.watch(currentUserProvider);
     final capabilities = ref.watch(authCapabilitiesProvider);
     final scroll = ref.watch(tabScrollControllerProvider('courses'));
+    final syncState = async.valueOrNull;
+    final syncActive = syncState != null &&
+        (syncState.syncing ||
+            syncState.syncError != null ||
+            (syncState.syncResult?.needsAttention ?? false));
+    if (async.hasValue) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) {
+          ref.read(coursesControllerProvider.notifier).autoSyncIfNeeded();
+        }
+      });
+    }
     return SingleChildScrollView(
       key: const PageStorageKey('courses-scroll'),
       controller: scroll,
@@ -57,19 +70,15 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
           children: [
             PageHeader(
               title: '课程与任务点',
-              actions: [
-                AsyncButton(
-                  label: '同步课程',
-                  icon: Icons.sync,
-                  busy: async.valueOrNull?.syncing ?? false,
-                  onPressed: capabilities.courseSyncAvailable
-                      ? () => ref
-                          .read(coursesControllerProvider.notifier)
-                          .syncCourses()
-                      : null,
-                ),
-              ],
             ),
+            if (syncActive) ...[
+              CourseSyncNotice(
+                state: syncState,
+                onRetry: () =>
+                    ref.read(coursesControllerProvider.notifier).syncCourses(),
+              ),
+              const SizedBox(height: 16),
+            ],
             if (!capabilities.courseSyncAvailable)
               const Padding(
                 padding: EdgeInsets.only(bottom: 16),
@@ -248,7 +257,7 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
                   : Icons.search_off_outlined,
               title: data.courses.isEmpty ? '还没有同步课程' : '没有找到符合条件的课程',
               message: data.courses.isEmpty
-                  ? '同步学习通课程后，章节与任务点会显示在这里。'
+                  ? '课程同步完成后，章节与任务点会显示在这里。'
                   : '调整搜索词或筛选条件后再试。',
               action: data.courses.isEmpty
                   ? AsyncButton(

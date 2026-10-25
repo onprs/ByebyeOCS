@@ -199,6 +199,22 @@ func (s *Service) RequestCourseSync(ctx context.Context, actor Actor) (CourseSyn
 	return result, created, nil
 }
 
+func (s *Service) GetCourseSync(ctx context.Context, actor Actor, id string) (CourseSync, error) {
+	var item CourseSync
+	err := s.pool.QueryRow(ctx, `SELECT id::text, status, attempt_count, error_code, snapshot_version,
+		course_count, requested_at, started_at, finished_at
+		FROM public.learning_course_syncs WHERE id = $1 AND user_id = $2`, id, actor.ID).Scan(
+		&item.ID, &item.Status, &item.AttemptCount, &item.ErrorCode, &item.SnapshotVersion,
+		&item.CourseCount, &item.RequestedAt, &item.StartedAt, &item.FinishedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return item, errNotFound
+	}
+	if err != nil {
+		return item, errServiceUnavailable
+	}
+	return item, nil
+}
+
 func readCourseSync(ctx context.Context, querier rowQuerier, id string) (CourseSync, error) {
 	var item CourseSync
 	err := querier.QueryRow(ctx, `SELECT id::text, status, attempt_count, error_code, snapshot_version,

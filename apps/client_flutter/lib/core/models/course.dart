@@ -195,7 +195,10 @@ class CourseSyncResult {
   final String? errorCode;
 
   bool get accepted => status == 'queued' || status == 'running';
+  bool get running => accepted;
+  bool get succeeded => status == 'succeeded';
   bool get failed => status == 'failed';
+  bool get needsAttention => status == 'needs_attention' || status == 'failed';
 
   static CourseSyncResult parse(Object? raw, {bool created = false}) {
     final root = asObject(raw) ?? const <String, dynamic>{};

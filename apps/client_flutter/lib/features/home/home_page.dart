@@ -12,6 +12,7 @@ import '../../core/models/task.dart';
 import '../../core/models/wallet.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
+import '../courses/course_sync_notice.dart';
 import '../courses/courses_controller.dart';
 import '../plans/plans_controller.dart';
 import '../plans/task_visuals.dart';
@@ -34,6 +35,18 @@ class HomePage extends ConsumerWidget {
     final plans = plansAsync.valueOrNull?.plans ?? const <LearningPlan>[];
     final tasks = tasksAsync.valueOrNull?.tasks ?? const <LearningTask>[];
     final wallet = walletAsync.valueOrNull?.wallet;
+    if (coursesAsync.hasValue) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (context.mounted) {
+          ref.read(coursesControllerProvider.notifier).autoSyncIfNeeded();
+        }
+      });
+    }
+    final syncState = coursesAsync.valueOrNull;
+    final syncActive = syncState != null &&
+        (syncState.syncing ||
+            syncState.syncError != null ||
+            (syncState.syncResult?.needsAttention ?? false));
     final pendingPoints = courses.fold<int>(
       0,
       (sum, course) => sum + course.incompleteTaskPointCount,
@@ -78,6 +91,15 @@ class HomePage extends ConsumerWidget {
                 dateText: dateText,
                 connected: user?.platformActive ?? false,
               ),
+              if (syncActive) ...[
+                const SizedBox(height: 16),
+                CourseSyncNotice(
+                  state: syncState,
+                  onRetry: () => ref
+                      .read(coursesControllerProvider.notifier)
+                      .syncCourses(),
+                ),
+              ],
               const SizedBox(height: 22),
               LayoutBuilder(builder: (context, constraints) {
                 final overview = _LearningOverview(
@@ -85,6 +107,7 @@ class HomePage extends ConsumerWidget {
                   courseCount: coursesAsync.hasValue ? courses.length : null,
                   pendingPoints: pendingPoints,
                   loading: coursesAsync.isLoading,
+                  syncing: syncState?.syncing ?? false,
                   error: coursesAsync.hasError,
                   onOpenCourse: courses.isEmpty
                       ? null
@@ -352,6 +375,7 @@ class _LearningOverview extends StatelessWidget {
     required this.courseCount,
     required this.pendingPoints,
     required this.loading,
+    required this.syncing,
     required this.error,
     required this.onOpenCourse,
     required this.onOpenCourses,
@@ -362,6 +386,7 @@ class _LearningOverview extends StatelessWidget {
   final int? courseCount;
   final int pendingPoints;
   final bool loading;
+  final bool syncing;
   final bool error;
   final VoidCallback? onOpenCourse;
   final VoidCallback onOpenCourses;
@@ -413,7 +438,7 @@ class _LearningOverview extends StatelessWidget {
                     style: TextStyle(color: colors.textSecondary, fontSize: 14))
               else if (course == null)
                 Text(
-                  '从同步课程开始',
+                  syncing ? '正在同步课程' : '从同步课程开始',
                   style: TextStyle(
                     color: colors.text,
                     fontSize: wide ? 26 : 22,

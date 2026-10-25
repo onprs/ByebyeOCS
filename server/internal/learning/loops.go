@@ -718,6 +718,7 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 		return
 	}
+	s.opts.Logger.Info("课程同步会话已解析", "user_id", job.UserID, "bytes", len(session))
 	if scoped, ok := s.opts.Platform.(ScopedSessionPlatform); ok {
 		var cleanup func()
 		ctx, cleanup, err = scoped.BeginSession(ctx, session)
@@ -732,6 +733,8 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 	}
 	courses, err := s.opts.Platform.ListCourses(ctx, session)
 	if err != nil {
+		failure := failureOf(err)
+		s.opts.Logger.Warn("课程同步读取失败", "user_id", job.UserID, "class", string(failure.Class), "detail", failure.Detail, "session_bytes", len(session))
 		s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 		return
 	}
@@ -747,6 +750,7 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		return
 	}
 	var snapshotVersion int64
+	processed := 0
 	for _, course := range courses {
 		if err := s.assertCourseSyncLease(ctx, &job); err != nil {
 			return
@@ -777,6 +781,13 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		}
 		if version > snapshotVersion {
 			snapshotVersion = version
+		}
+		processed++
+		if err := s.updateCourseSyncProgress(ctx, &job, processed); err != nil {
+			if errors.Is(err, errLeaseLost) {
+				return
+			}
+			s.opts.Logger.Warn("课程同步进度写入失败", "user_id", job.UserID, "code", describe(err))
 		}
 	}
 	if err := s.finishCourseSync(ctx, &job, "succeeded", "", len(courses), snapshotVersion); err != nil {

@@ -123,7 +123,7 @@ void main() {
     expect(find.text('设计思维与创新方法'), findsOneWidget);
     expect(find.text('数据结构与算法'), findsOneWidget);
     expect(find.text('2 个任务点待完成'), findsOneWidget);
-    expect(find.text('同步课程'), findsWidgets);
+    expect(find.text('同步课程'), findsNothing);
     expect(find.text('全部 2'), findsOneWidget);
     expect(find.text('待完成 1'), findsOneWidget);
   });

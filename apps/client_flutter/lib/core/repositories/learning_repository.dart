@@ -38,6 +38,11 @@ class LearningRepository {
         created: response.statusCode == 202);
   }
 
+  Future<CourseSyncResult> fetchCourseSync(String id) async {
+    final response = await _api.get('course-syncs/$id');
+    return CourseSyncResult.parse(response.data);
+  }
+
   Future<Page<LearningPlan>> fetchPlans({
     String? cursor,
     int limit = 50,
