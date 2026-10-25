@@ -43,7 +43,7 @@ describe('用户答案报告处理入口', () => {
     api.review.mockRejectedValueOnce(new ApiError(503, { code: 'service_unavailable', message: '暂时无法保存', retryable: true, scope: 'request', request_id: 'req_fixture' }))
     show()
     await user.click(await screen.findByRole('button', { name: `处理报告 ${report.id}` }))
-    const dialog = await screen.findByRole('dialog', { name: '处理答案报告' })
+    const dialog = await screen.findByRole('region', { name: '处理答案报告' })
     await user.click(within(dialog).getByRole('button', { name: '保存处理结果' }))
     expect(api.review).not.toHaveBeenCalled()
     await user.type(within(dialog).getByLabelText('核对说明'), '已核对选项并处理该反馈')

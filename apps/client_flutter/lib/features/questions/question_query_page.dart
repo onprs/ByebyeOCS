@@ -52,9 +52,8 @@ class _QuestionQueryPageState extends ConsumerState<QuestionQueryPage> {
   }
 
   QuestionOffering? _resolveOffering(List<QuestionOffering> offerings) {
-    final available = offerings
-        .where((offering) => offering.healthy)
-        .toList(growable: false);
+    final available =
+        offerings.where((offering) => offering.healthy).toList(growable: false);
     if (available.isEmpty) return null;
     for (final offering in available) {
       if (offering.id == _modelId) return offering;
@@ -177,11 +176,9 @@ class _QuestionQueryPageState extends ConsumerState<QuestionQueryPage> {
     }
   }
 
-  Future<void> _report() async {
+  Future<bool> _report(String reason) async {
     final query = _query;
-    if (query == null || _reporting) return;
-    final reason = await askQuestionReportReason(context);
-    if (reason == null || !mounted) return;
+    if (query == null || _reporting) return false;
     setState(() {
       _reporting = true;
       _error = null;
@@ -191,24 +188,26 @@ class _QuestionQueryPageState extends ConsumerState<QuestionQueryPage> {
             queryId: query.id,
             reason: reason,
           );
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _reporting = false;
         _notice = '问题已提交复核';
       });
+      return true;
     } on ApiException catch (error) {
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _reporting = false;
         _error = error.userMessage;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _reporting = false;
         _error = '问题报告未完成';
       });
     }
+    return false;
   }
 
   @override
@@ -231,9 +230,7 @@ class _QuestionQueryPageState extends ConsumerState<QuestionQueryPage> {
               ),
             ),
             const PageHeader(
-              eyebrow: '题库查询',
               title: '按题查询答案',
-              description: '选择已发布模型，输入题目后查询答案；发现答案或缓存有误可以提交复核。',
             ),
             if (capabilities.questionsExplicitlyDisabled)
               const SectionCard(
@@ -246,7 +243,6 @@ class _QuestionQueryPageState extends ConsumerState<QuestionQueryPage> {
             else
               SectionCard(
                 title: '查询题目',
-                subtitle: '单独查询只返回答案，不写入课程任务；安排内的测验仍由任务自动完成。',
                 child: offeringsAsync.when(
                   loading: () => const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
@@ -398,12 +394,10 @@ class _QuestionQueryPageState extends ConsumerState<QuestionQueryPage> {
         ),
         const SizedBox(height: 7),
         Text(
-          !cacheAllowed
-              ? '该模型未启用答案缓存，每次都会调用模型。'
-              : mode.description,
+          !cacheAllowed ? '该模型未启用答案缓存，每次都会调用模型。' : mode.description,
           style: TextStyle(
             color: context.colors.textSecondary,
-            fontSize: 11.5,
+            fontSize: 12,
             height: 1.5,
           ),
         ),
@@ -462,7 +456,7 @@ class _QuestionQueryPageState extends ConsumerState<QuestionQueryPage> {
           '查询会使用所选模型；精确缓存命中时不会调用模型，token 为 0。',
           style: TextStyle(
             color: context.colors.muted,
-            fontSize: 11.5,
+            fontSize: 12,
             height: 1.5,
           ),
         ),

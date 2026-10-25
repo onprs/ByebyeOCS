@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:byebyeocs_client/core/models/plan.dart';
@@ -8,6 +9,42 @@ import 'package:byebyeocs_client/features/plans/plan_editor.dart';
 import '../helpers.dart';
 
 void main() {
+  for (final width in [390.0, 1440.0]) {
+    testWidgets('${width.toInt()}px 安排编辑保留草稿，键盘出现后保存入口可见', (tester) async {
+      final plan = LearningPlan.parse(Map<String, dynamic>.from(planFixture));
+      await pumpTestPage(
+        tester,
+        Builder(
+            builder: (context) => FilledButton(
+                  onPressed: () => showPlanEditor(context, plan: plan),
+                  child: const Text('编辑安排'),
+                )),
+        size: Size(width, 900),
+      );
+      await tester.tap(find.text('编辑安排'));
+      await settle(tester);
+      expect(find.byType(BottomSheet),
+          width < 760 ? findsOneWidget : findsNothing);
+      final editor = tester.getRect(find.byType(PlanEditorSheet));
+      expect(editor.right, closeTo(width, 1));
+      await tester.enterText(find.byType(TextField).first, '每周课程安排');
+      tester.view.viewInsets = const FakeViewPadding(bottom: 260);
+      addTearDown(tester.view.resetViewInsets);
+      await settle(tester);
+      expect(find.text('每周课程安排'), findsOneWidget);
+      final save = find.ancestor(
+        of: find.text('保存安排'),
+        matching: find.byType(FilledButton),
+      );
+      final bounds = tester.getRect(save);
+      expect(bounds.top, greaterThan(0));
+      expect(bounds.bottom, lessThanOrEqualTo(641));
+      await tester.tap(find.byTooltip('关闭'));
+      await settle(tester);
+      expect(find.byType(PlanEditorSheet), findsNothing);
+    });
+  }
+
   testWidgets('编辑面板内显示 ETag 版本冲突且不覆盖草稿', (tester) async {
     final plan = LearningPlan.parse(Map<String, dynamic>.from(planFixture));
     final server = TestServer(

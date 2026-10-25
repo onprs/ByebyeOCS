@@ -5,6 +5,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:byebyeocs_client/design/components.dart';
 import 'package:byebyeocs_client/features/questions/question_query_page.dart';
+import 'package:byebyeocs_client/features/questions/question_widgets.dart';
+import 'package:byebyeocs_client/core/models/question.dart';
 
 import '../helpers.dart';
 
@@ -54,6 +56,31 @@ const _pendingQuery = {
 };
 
 void main() {
+  testWidgets('问题报告在页内展开，失败保留草稿，成功后收起', (tester) async {
+    var attempts = 0;
+    await pumpTestPage(
+        tester,
+        QuestionResultCard(
+          query: QuestionQuery.parse(Map<String, dynamic>.from(_answeredQuery)),
+          reporting: false,
+          onReport: (reason) async {
+            attempts++;
+            return attempts > 1;
+          },
+        ));
+    await tester.tap(find.widgetWithText(AsyncButton, '报告答案问题'));
+    await settle(tester);
+    expect(find.byType(AlertDialog), findsNothing);
+    await tester.enterText(find.byType(TextField), '答案与题目要求不符');
+    await tester.tap(find.widgetWithText(AsyncButton, '提交'));
+    await settle(tester);
+    expect(find.text('答案与题目要求不符'), findsOneWidget);
+    await tester.tap(find.widgetWithText(AsyncButton, '提交'));
+    await settle(tester);
+    expect(attempts, 2);
+    expect(find.byType(TextField), findsNothing);
+  });
+
   testWidgets('独立题库查询提交题目并展示答案，可报告问题', (tester) async {
     Map<String, dynamic>? queryBody;
     Map<String, dynamic>? reportBody;
@@ -214,7 +241,8 @@ void main() {
   testWidgets('待处理查询可刷新结果', (tester) async {
     final server = TestServer(
       overrides: {
-        'POST /api/v1/question-queries': (_) async => jsonResponse(_pendingQuery),
+        'POST /api/v1/question-queries': (_) async =>
+            jsonResponse(_pendingQuery),
         'GET /api/v1/question-queries/q1': (_) async =>
             jsonResponse(_answeredQuery),
       },

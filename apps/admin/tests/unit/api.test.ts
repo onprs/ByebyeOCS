@@ -335,7 +335,7 @@ describe('金额与价格格式', () => {
   it('整数分按元显示，不通过浮点运算', () => {
     expect(formatMoneyMinor('123456')).toBe('¥1,234.56')
     expect(formatMoneyMinor('-5')).toBe('-¥0.05')
-    expect(formatMoneyMinor(null)).toBe('未提供')
+    expect(formatMoneyMinor(null)).toBe('—')
     expect(formatMoneyMinor('bad')).toBe('格式异常')
   })
 

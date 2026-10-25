@@ -79,7 +79,7 @@ class _ConnectServicePageState extends ConsumerState<ConnectServicePage> {
                             server.configured ? '切换学习服务' : '连接学习服务',
                             style: TextStyle(
                               color: colors.text,
-                              fontSize: 25,
+                              fontSize: 26,
                               fontWeight: FontWeight.w600,
                               letterSpacing: -0.6,
                             ),
@@ -89,7 +89,7 @@ class _ConnectServicePageState extends ConsumerState<ConnectServicePage> {
                             '输入服务提供方给出的 HTTPS 地址。切换服务会退出当前登录，并清除本机会话和用户缓存。',
                             style: TextStyle(
                               color: colors.textSecondary,
-                              fontSize: 13.5,
+                              fontSize: 14,
                               height: 1.7,
                             ),
                           ),
@@ -152,7 +152,7 @@ class _ConnectServicePageState extends ConsumerState<ConnectServicePage> {
                               '当前服务 ${server.baseUri}',
                               style: TextStyle(
                                 color: colors.muted,
-                                fontSize: 11,
+                                fontSize: 12,
                                 height: 1.5,
                               ),
                             ),
@@ -170,7 +170,7 @@ class _ConnectServicePageState extends ConsumerState<ConnectServicePage> {
                               '调试构建允许本机与私有网段的 HTTP 地址；正式包只接受 HTTPS。',
                               style: TextStyle(
                                 color: colors.muted,
-                                fontSize: 10.5,
+                                fontSize: 12,
                                 height: 1.5,
                               ),
                             ),
@@ -250,7 +250,7 @@ class _WebSameOriginNotice extends StatelessWidget {
                 'Web 使用同源服务',
                 style: TextStyle(
                   color: context.colors.text,
-                  fontSize: 20,
+                  fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -269,7 +269,7 @@ class _WebSameOriginNotice extends StatelessWidget {
                   '$baseUri',
                   style: TextStyle(
                     color: context.colors.muted,
-                    fontSize: 11,
+                    fontSize: 12,
                   ),
                 ),
               ],

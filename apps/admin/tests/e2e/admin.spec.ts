@@ -39,7 +39,8 @@ test.describe('管理员控制台', () => {
     await page.getByLabel(/动态验证码/).fill('000000')
     await page.getByRole('button', { name: /登录管理控制台/ }).click()
     await expect(page.getByText('用户名、密码或动态验证码不正确。')).toBeVisible()
-    await expect(page.getByText(/请求编号 req_e2e_401/)).toBeVisible()
+    await expect(page.getByRole('alert')).toHaveCount(1)
+    await expect(page.getByText(/请求编号 req_e2e_401/)).toHaveCount(0)
 
     await page.getByLabel('密码').fill('correct-horse')
     await page.getByLabel(/动态验证码/).fill('123456')

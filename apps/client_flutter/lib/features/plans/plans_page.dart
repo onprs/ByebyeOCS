@@ -90,9 +90,7 @@ class _PlansPageState extends ConsumerState<PlansPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         PageHeader(
-          eyebrow: '任务安排',
           title: '安排与实时进度',
-          description: '把课程、章节与任务类型组合成安排；完成以平台确认为准。',
           actions: [
             AsyncButton(
               label: '新建安排',
@@ -124,12 +122,7 @@ class _PlansPageState extends ConsumerState<PlansPage> {
             child: EmptyState(
               icon: Icons.calendar_month_outlined,
               title: '还没有任务安排',
-              message: '选择课程和章节范围，建立第一条学习安排。',
-              action: AsyncButton(
-                label: '新建安排',
-                icon: Icons.add,
-                onPressed: () => _openEditor(),
-              ),
+              message: '选择课程与章节范围，建立第一条学习安排。',
             ),
           )
         else
@@ -224,7 +217,7 @@ class _PlansPageState extends ConsumerState<PlansPage> {
                               plan.name,
                               style: TextStyle(
                                 color: context.colors.text,
-                                fontSize: wide ? 20 : 17.5,
+                                fontSize: AppTypography.fontSection,
                                 fontWeight: FontWeight.w600,
                                 letterSpacing: -0.3,
                               ),
@@ -257,7 +250,7 @@ class _PlansPageState extends ConsumerState<PlansPage> {
                           '${courseNames.isEmpty ? '${plan.courseIds.length} 门课程' : courseNames.join('、')} · ${plan.scopeLabel} · ${plan.priorityLabel}',
                           style: TextStyle(
                             color: context.colors.textSecondary,
-                            fontSize: 12.5,
+                            fontSize: 13,
                             height: 1.5,
                           ),
                         ),
@@ -367,7 +360,6 @@ class _PlansPageState extends ConsumerState<PlansPage> {
         SectionCard(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
           title: '任务进度',
-          subtitle: '执行观察、平台确认与媒体记录分别展示。',
           action: Wrap(
             spacing: 6,
             children: [
@@ -471,7 +463,7 @@ class _PlansPageState extends ConsumerState<PlansPage> {
                     '${group.title} · ${group.tasks.length}',
                     style: TextStyle(
                       color: context.colors.textSecondary,
-                      fontSize: 11.5,
+                      fontSize: 12,
                       fontWeight: FontWeight.w600,
                       letterSpacing: 0.4,
                     ),
@@ -610,7 +602,7 @@ class _PlanSelector extends StatelessWidget {
                         plan.name,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 13.5),
+                        style: const TextStyle(fontSize: 14),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -697,7 +689,7 @@ class _PlanList extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   color: colors.text,
-                                  fontSize: 13.5,
+                                  fontSize: 14,
                                   fontWeight: FontWeight.w600,
                                 ),
                               ),
@@ -726,7 +718,7 @@ class _PlanList extends StatelessWidget {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             color: colors.textSecondary,
-                            fontSize: 11.5,
+                            fontSize: 12,
                           ),
                         ),
                         const SizedBox(height: 3),
@@ -734,7 +726,7 @@ class _PlanList extends StatelessWidget {
                           '${plan.scopeLabel} · ${plan.priorityLabel}${plan.questionPolicy.enabled ? ' · 题库策略已开启' : ''}',
                           style: TextStyle(
                             color: colors.muted,
-                            fontSize: 11,
+                            fontSize: 12,
                           ),
                         ),
                       ],
@@ -782,7 +774,7 @@ class _TaskFilterChip extends StatelessWidget {
           label,
           style: TextStyle(
             color: selected ? accent : colors.textSecondary,
-            fontSize: 11.5,
+            fontSize: 12,
             fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
           ),
         ),
@@ -812,13 +804,13 @@ class _MetaChip extends StatelessWidget {
         children: [
           Text(
             '$label ',
-            style: TextStyle(color: colors.muted, fontSize: 11),
+            style: TextStyle(color: colors.muted, fontSize: 12),
           ),
           Text(
             value,
             style: TextStyle(
               color: colors.textSecondary,
-              fontSize: 11.5,
+              fontSize: 12,
               fontWeight: FontWeight.w500,
             ),
           ),
@@ -895,7 +887,7 @@ class _TaskRow extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: colors.text,
-                              fontSize: 13.5,
+                              fontSize: 14,
                               fontWeight: FontWeight.w600,
                               height: 1.4,
                             ),
@@ -911,7 +903,7 @@ class _TaskRow extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: colors.textSecondary,
-                              fontSize: 11.5,
+                              fontSize: 12,
                             ),
                           ),
                         ],
@@ -965,7 +957,7 @@ class _TaskRow extends StatelessWidget {
                     taskFailureLabel(task),
                     style: TextStyle(
                       color: colors.danger,
-                      fontSize: 11.5,
+                      fontSize: 12,
                     ),
                   ),
                 ],
@@ -1016,7 +1008,7 @@ class _TaskFact extends StatelessWidget {
         const SizedBox(width: 4),
         Text(
           text,
-          style: TextStyle(color: color, fontSize: 11.5),
+          style: TextStyle(color: color, fontSize: 12),
         ),
       ],
     );

@@ -34,287 +34,257 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final privacyAsync = ref.watch(privacyControllerProvider);
     final colors = context.colors;
     return SingleChildScrollView(
-      padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
+      key: const PageStorageKey('settings-scroll'),
       child: ResponsiveContent(
         maxWidth: 960,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const PageHeader(
-              eyebrow: '个人设置',
-              title: '身份、外观与隐私',
-              description: '管理学习通身份状态、外观偏好、通知与数据请求。',
-            ),
-            _IdentityCard(
-              ref: ref,
-              user: user,
-              auth: auth,
-              onReverify: _logoutForReverify,
-            ),
-            if (!kIsWeb) ...[
-              const SizedBox(height: 14),
-              _ServerConnectionCard(
-                config: ref.watch(serverConfigProvider),
-                onOpen: () => context.go('/connect'),
-              ),
-            ],
-            const SizedBox(height: 14),
-            SectionCard(
-              title: '外观',
-              subtitle: '选择配色与浅深模式。未登录时使用本机选择，登录后跟随账户偏好。',
-              action: appearance.syncing
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : null,
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          const PageHeader(title: '设置'),
+          SectionGroup(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  LayoutBuilder(
-                    builder: (context, constraints) {
-                      final columns = constraints.maxWidth >= 620 ? 3 : 1;
-                      final spacing = 10.0;
-                      final width =
-                          (constraints.maxWidth - spacing * (columns - 1)) /
-                              columns;
-                      return Wrap(
-                        spacing: spacing,
-                        runSpacing: spacing,
-                        children: [
-                          for (final id in ColorSchemeId.values)
-                            SizedBox(
-                              width: width,
-                              child: _PaletteChoice(
-                                id: id,
-                                selected: appearance.colorScheme == id,
-                                onTap: () => _changeColorScheme(id),
-                              ),
-                            ),
-                        ],
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    '浅深模式',
-                    style: TextStyle(
-                      color: colors.textSecondary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  SegmentedButton<AppThemeMode>(
-                    segments: const [
-                      ButtonSegment(
-                        value: AppThemeMode.system,
-                        label: Text('跟随系统'),
-                      ),
-                      ButtonSegment(
-                        value: AppThemeMode.light,
-                        label: Text('浅色'),
-                      ),
-                      ButtonSegment(
-                        value: AppThemeMode.dark,
-                        label: Text('深色'),
-                      ),
-                    ],
-                    selected: {appearance.themeMode},
-                    showSelectedIcon: false,
-                    onSelectionChanged: (value) async {
-                      await ref
-                          .read(appearanceControllerProvider.notifier)
-                          .setThemeMode(value.first);
-                      await _savePreferences(themeMode: value.first);
-                    },
-                  ),
-                  if (appearance.error != null) ...[
-                    const SizedBox(height: 12),
-                    InlineNotice(
-                      tone: StatusTone.warning,
-                      message: appearance.error!,
-                      action: TextButton(
-                        onPressed: () => ref
-                            .read(preferencesControllerProvider.notifier)
-                            .reload(),
-                        child: const Text('重新加载'),
-                      ),
-                    ),
-                  ] else if (appearance.notice != null) ...[
-                    const SizedBox(height: 12),
-                    InlineNotice(
-                      tone: StatusTone.success,
-                      message: appearance.notice!,
-                    ),
-                  ],
-                  if (preferencesAsync.hasError) ...[
-                    const SizedBox(height: 12),
-                    InlineNotice(
-                      tone: StatusTone.neutral,
-                      icon: Icons.cloud_off_outlined,
-                      message: '账户偏好暂时无法读取，本机外观选择仍然生效。',
-                      action: TextButton(
-                        onPressed: () => ref
-                            .read(preferencesControllerProvider.notifier)
-                            .reload(),
-                        child: const Text('重试'),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            SectionCard(
-              title: '通知',
-              subtitle: '通知偏好保存到账户，跨设备保持一致。',
-              child: preferencesAsync.when(
-                loading: () => const LoadingList(rows: 2, height: 48),
-                error: (error, _) => ErrorPanel(
-                  message:
-                      error is ApiException ? error.userMessage : '通知偏好暂时无法加载',
-                  compact: true,
-                  onRetry: () =>
-                      ref.read(preferencesControllerProvider.notifier).reload(),
-                ),
-                data: (snapshot) => Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    Material(
-                      color: Colors.transparent,
-                      child: SwitchListTile(
-                        value: snapshot.preferences.taskAttention,
-                        onChanged: appearance.syncing
-                            ? null
-                            : (value) => _savePreferences(taskAttention: value),
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('任务需要处理时提醒'),
-                        subtitle: const Text('身份失效、平台限制或任务需要人工处理时显示提醒。'),
+                _IdentityCard(
+                    ref: ref,
+                    user: user,
+                    auth: auth,
+                    onReverify: _logoutForReverify),
+                if (!kIsWeb)
+                  _ServerConnectionCard(
+                      config: ref.watch(serverConfigProvider),
+                      onOpen: () => context.go('/connect')),
+                Divider(height: 1, color: colors.border),
+                SectionCard(
+                  title: '外观与通知',
+                  action: appearance.syncing
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : null,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          const columns = 3;
+                          const spacing = 8.0;
+                          final width =
+                              (constraints.maxWidth - spacing * (columns - 1)) /
+                                  columns;
+                          return Wrap(
+                            spacing: spacing,
+                            runSpacing: spacing,
+                            children: [
+                              for (final id in ColorSchemeId.values)
+                                SizedBox(
+                                  width: width,
+                                  child: _PaletteChoice(
+                                    id: id,
+                                    selected: appearance.colorScheme == id,
+                                    onTap: () => _changeColorScheme(id),
+                                  ),
+                                ),
+                            ],
+                          );
+                        },
                       ),
-                    ),
-                    Divider(color: context.colors.border),
-                    Material(
-                      color: Colors.transparent,
-                      child: SwitchListTile(
-                        value: snapshot.preferences.walletChanges,
-                        onChanged: appearance.syncing
-                            ? null
-                            : (value) => _savePreferences(walletChanges: value),
-                        contentPadding: EdgeInsets.zero,
-                        title: const Text('钱包状态变化时提醒'),
-                        subtitle: const Text('充值到账与账本变动会在应用内提示。'),
+                      const SizedBox(height: 16),
+                      Text(
+                        '浅深模式',
+                        style: TextStyle(
+                          color: colors.textSecondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 14),
-            if (!auth.capabilities.questionsExplicitlyDisabled)
-              SectionCard(
-                title: '题库查询',
-                subtitle: '输入题目后查询答案；发现答案或缓存有误可以报告复核。',
-                action: TextButton.icon(
-                  onPressed: () => context.go('/questions'),
-                  icon: const Icon(Icons.arrow_forward, size: 15),
-                  label: const Text('打开'),
-                ),
-                child: Text(
-                  '单独查询不写入课程任务，安排内的测验仍由任务自动完成。',
-                  style: TextStyle(
-                    color: colors.textSecondary,
-                    fontSize: 11.5,
-                    height: 1.5,
-                  ),
-                ),
-              ),
-            const SizedBox(height: 14),
-            SectionCard(
-              title: '数据与隐私',
-              subtitle: '导出和删除的处理状态与文件以下发结果为准。',
-              action: TextButton.icon(
-                onPressed: privacyAsync.valueOrNull?.refreshing == true
-                    ? null
-                    : () =>
-                        ref.read(privacyControllerProvider.notifier).refresh(),
-                icon: const Icon(Icons.refresh, size: 15),
-                label: const Text('刷新状态'),
-              ),
-              child: _buildPrivacy(context, privacyAsync),
-            ),
-            const SizedBox(height: 14),
-            SectionCard(
-              title: '帮助与安全',
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _FaqItem(
-                    question: '为什么任务显示等待验证？',
-                    answer: '执行结束后需要再次查询学习通。平台确认前不会计为完成，也不会因本地计时自动变为成功。',
-                  ),
-                  Divider(height: 20, color: colors.border),
-                  _FaqItem(
-                    question: '支付成功但余额没有变化？',
-                    answer: '支付成功和余额到账是两个步骤。请回到钱包查询订单状态，余额以账户流水为准。',
-                  ),
-                  Divider(height: 20, color: colors.border),
-                  _FaqItem(
-                    question: '学习通密码忘记怎么办？',
-                    answer: '请在学习通官方入口找回密码。本平台不会重置学习通密码，也不会接收你的密码用于后续自动登录。',
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: colors.surface,
-                borderRadius: colors.cardRadius,
-                border: Border.all(color: colors.border),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          '退出登录',
-                          style: TextStyle(
-                            color: colors.text,
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w600,
+                      const SizedBox(height: 8),
+                      SegmentedButton<AppThemeMode>(
+                        segments: const [
+                          ButtonSegment(
+                            value: AppThemeMode.system,
+                            label: Text('跟随系统'),
+                          ),
+                          ButtonSegment(
+                            value: AppThemeMode.light,
+                            label: Text('浅色'),
+                          ),
+                          ButtonSegment(
+                            value: AppThemeMode.dark,
+                            label: Text('深色'),
+                          ),
+                        ],
+                        selected: {appearance.themeMode},
+                        showSelectedIcon: false,
+                        onSelectionChanged: (value) async {
+                          await ref
+                              .read(appearanceControllerProvider.notifier)
+                              .setThemeMode(value.first);
+                          await _savePreferences(themeMode: value.first);
+                        },
+                      ),
+                      if (appearance.error != null) ...[
+                        const SizedBox(height: 12),
+                        InlineNotice(
+                          tone: StatusTone.warning,
+                          message: appearance.error!,
+                          action: TextButton(
+                            onPressed: () => ref
+                                .read(preferencesControllerProvider.notifier)
+                                .reload(),
+                            child: const Text('重新加载'),
                           ),
                         ),
-                        const SizedBox(height: 3),
-                        Text(
-                          '退出会清除本机会话与用户缓存。持续安排是否继续运行以当前授权状态为准。',
-                          style: TextStyle(
-                            color: colors.textSecondary,
-                            fontSize: 11.5,
-                            height: 1.5,
+                      ] else if (appearance.notice != null) ...[
+                        const SizedBox(height: 12),
+                        InlineNotice(
+                          tone: StatusTone.success,
+                          message: appearance.notice!,
+                        ),
+                      ],
+                      if (preferencesAsync.hasError) ...[
+                        const SizedBox(height: 12),
+                        InlineNotice(
+                          tone: StatusTone.neutral,
+                          icon: Icons.cloud_off_outlined,
+                          message: '账户偏好暂时无法读取，本机外观选择仍然生效。',
+                          action: TextButton(
+                            onPressed: () => ref
+                                .read(preferencesControllerProvider.notifier)
+                                .reload(),
+                            child: const Text('重试'),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                Divider(height: 1, color: colors.border),
+                SectionCard(
+                  title: '通知偏好',
+                  child: preferencesAsync.when(
+                    loading: () => const LoadingList(rows: 2, height: 48),
+                    error: (error, _) => ErrorPanel(
+                      message: error is ApiException
+                          ? error.userMessage
+                          : '通知偏好暂时无法加载',
+                      compact: true,
+                      onRetry: () => ref
+                          .read(preferencesControllerProvider.notifier)
+                          .reload(),
+                    ),
+                    data: (snapshot) => Column(
+                      children: [
+                        Material(
+                          color: Colors.transparent,
+                          child: SwitchListTile(
+                            value: snapshot.preferences.taskAttention,
+                            onChanged: appearance.syncing
+                                ? null
+                                : (value) =>
+                                    _savePreferences(taskAttention: value),
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('任务需要处理时提醒'),
+                          ),
+                        ),
+                        Divider(color: context.colors.border),
+                        Material(
+                          color: Colors.transparent,
+                          child: SwitchListTile(
+                            value: snapshot.preferences.walletChanges,
+                            onChanged: appearance.syncing
+                                ? null
+                                : (value) =>
+                                    _savePreferences(walletChanges: value),
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('钱包状态变化时提醒'),
                           ),
                         ),
                       ],
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  AsyncButton(
-                    label: '退出登录',
-                    icon: Icons.logout,
-                    busy: auth.busy,
-                    variant: AsyncButtonVariant.outline,
-                    onPressed: _logout,
+                ),
+                Divider(height: 1, color: colors.border),
+                SectionCard(
+                  title: '数据与隐私',
+                  action: TextButton.icon(
+                    onPressed: privacyAsync.valueOrNull?.refreshing == true
+                        ? null
+                        : () => ref
+                            .read(privacyControllerProvider.notifier)
+                            .refresh(),
+                    icon: const Icon(Icons.refresh, size: 15),
+                    label: const Text('刷新状态'),
                   ),
-                ],
-              ),
-            ),
-          ],
-        ),
+                  child: _buildPrivacy(context, privacyAsync),
+                ),
+                Divider(height: 1, color: colors.border),
+                SectionCard(
+                    title: '帮助',
+                    child: Column(children: [
+                      if (!auth.capabilities.questionsExplicitlyDisabled)
+                        ListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('题库查询'),
+                            trailing: const Icon(Icons.chevron_right, size: 16),
+                            onTap: () => context.go('/questions')),
+                      ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('常见问题'),
+                          trailing: const Icon(Icons.chevron_right, size: 16),
+                          onTap: _showHelp),
+                      const SizedBox(height: 12),
+                      Align(
+                          alignment: Alignment.centerRight,
+                          child: AsyncButton(
+                              label: '退出登录',
+                              icon: Icons.logout,
+                              busy: auth.busy,
+                              variant: AsyncButtonVariant.outline,
+                              onPressed: _logout)),
+                    ])),
+              ])),
+        ]),
       ),
     );
+  }
+
+  void _showHelp() {
+    showAdaptivePanel<void>(
+        context: context,
+        builder: (context) => SafeArea(
+                child: SizedBox(
+              height: MediaQuery.sizeOf(context).height * .8,
+              child: Column(children: [
+                Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: SheetHeader(
+                        title: '常见问题',
+                        trailing: IconButton(
+                            tooltip: '关闭',
+                            onPressed: () => Navigator.pop(context),
+                            icon: const Icon(Icons.close, size: 20)))),
+                Expanded(
+                    child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const _FaqItem(
+                                  question: '为什么任务显示等待验证？',
+                                  answer: '执行结束后会再次查询学习通。平台确认前不会计为完成。'),
+                              Divider(height: 32, color: context.colors.border),
+                              const _FaqItem(
+                                  question: '支付成功但余额没有变化？',
+                                  answer: '请回到钱包查询订单状态，余额以账户流水为准。'),
+                              Divider(height: 32, color: context.colors.border),
+                              const _FaqItem(
+                                  question: '学习通密码忘记怎么办？',
+                                  answer: '请在学习通官方入口找回密码。'),
+                            ]))),
+              ]),
+            )));
   }
 
   Future<void> _changeColorScheme(ColorSchemeId id) async {
@@ -431,7 +401,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             '还没有导出申请。',
             style: TextStyle(
               color: context.colors.textSecondary,
-              fontSize: 11.5,
+              fontSize: 12,
             ),
           )
         else
@@ -472,7 +442,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             '还没有删除申请。',
             style: TextStyle(
               color: context.colors.textSecondary,
-              fontSize: 11.5,
+              fontSize: 12,
             ),
           )
         else
@@ -577,7 +547,7 @@ class _IdentityCard extends StatelessWidget {
                   initial,
                   style: TextStyle(
                     color: colors.accent,
-                    fontSize: 18,
+                    fontSize: 16,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -687,7 +657,7 @@ class _IdentityFact extends StatelessWidget {
         children: [
           Text(
             label,
-            style: TextStyle(color: context.colors.muted, fontSize: 10.5),
+            style: TextStyle(color: context.colors.muted, fontSize: 12),
           ),
           const SizedBox(height: 3),
           Text(
@@ -718,83 +688,49 @@ class _PaletteChoice extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final dark = Theme.of(context).brightness == Brightness.dark;
-    final palette =
-        AppPalette.resolve(id, dark ? Brightness.dark : Brightness.light);
+    final palette = AppPalette.resolve(id, Theme.of(context).brightness);
     return Semantics(
-      button: true,
-      selected: selected,
-      label: '${id.label}配色',
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: colors.cardRadius,
-        child: Container(
-          padding: const EdgeInsets.all(12),
-          decoration: BoxDecoration(
-            color: palette.background,
-            borderRadius: colors.cardRadius,
-            border: Border.all(
-              color: selected ? colors.accent : colors.border,
-              width: selected ? 1.6 : 1,
-            ),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+        button: true,
+        selected: selected,
+        label: '${id.label}配色',
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: colors.cardRadius,
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+                color: palette.background,
+                border:
+                    Border.all(color: selected ? colors.accent : colors.border),
+                borderRadius: colors.cardRadius),
+            child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  for (final color in [
-                    palette.surface,
-                    palette.accent,
-                    palette.heroBg,
-                    palette.sidebar,
-                  ])
-                    Container(
-                      width: 20,
-                      height: 20,
-                      margin: const EdgeInsets.only(right: 5),
-                      decoration: BoxDecoration(
-                        color: color,
-                        shape: BoxShape.circle,
-                        border: Border.all(color: palette.border),
-                      ),
-                    ),
-                  const Spacer(),
-                  if (selected)
-                    Icon(
-                      Icons.check_circle,
-                      size: 17,
-                      color: palette.accent,
-                    ),
-                ],
-              ),
-              const SizedBox(height: 10),
-              Text(
-                id.label,
-                style: TextStyle(
-                  color: palette.text,
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 2),
-              Text(
-                switch (id) {
-                  ColorSchemeId.graphite => '清晰克制，信息密度高',
-                  ColorSchemeId.grove => '暖白与森林绿，舒展留白',
-                  ColorSchemeId.indigo => '墨蓝与靛蓝，品牌感更强',
-                },
-                style: TextStyle(
-                  color: palette.textSecondary,
-                  fontSize: 10.5,
-                  height: 1.4,
-                ),
-              ),
-            ],
+                  ClipRRect(
+                      borderRadius: BorderRadius.circular(6),
+                      child: Container(
+                          height: 32,
+                          color: palette.surface,
+                          child: Row(children: [
+                            Container(width: 12, color: palette.sidebar),
+                            const SizedBox(width: 8),
+                            Expanded(
+                                child: Container(
+                                    height: 8, color: palette.accentSoft)),
+                            const SizedBox(width: 8),
+                          ]))),
+                  const SizedBox(height: 8),
+                  Row(children: [
+                    Expanded(
+                        child: Text(id.label,
+                            style:
+                                TextStyle(color: palette.text, fontSize: 13))),
+                    if (selected)
+                      Icon(Icons.check, size: 14, color: palette.accent)
+                  ]),
+                ]),
           ),
-        ),
-      ),
-    );
+        ));
   }
 }
 
@@ -824,9 +760,7 @@ class _DataRequestTile extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(12),
         decoration: BoxDecoration(
-          color: colors.surfaceSubtle,
-          borderRadius: BorderRadius.circular(colors.radius - 2),
-          border: Border.all(color: colors.border),
+          border: Border(bottom: BorderSide(color: colors.border)),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -842,7 +776,7 @@ class _DataRequestTile extends StatelessWidget {
                         request.isExport ? '账户数据导出' : '账户数据删除',
                         style: TextStyle(
                           color: colors.text,
-                          fontSize: 12.5,
+                          fontSize: 13,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -850,7 +784,7 @@ class _DataRequestTile extends StatelessWidget {
                       Text(
                         '提交于 ${formatDateTime(request.createdAt)}'
                         '${request.updatedAt == null ? '' : ' · 更新于 ${formatDateTime(request.updatedAt)}'}',
-                        style: TextStyle(color: colors.muted, fontSize: 10.5),
+                        style: TextStyle(color: colors.muted, fontSize: 12),
                       ),
                     ],
                   ),
@@ -868,7 +802,7 @@ class _DataRequestTile extends StatelessWidget {
                 request.detailLabel!,
                 style: TextStyle(
                   color: colors.textSecondary,
-                  fontSize: 11.5,
+                  fontSize: 12,
                   height: 1.5,
                 ),
               ),
@@ -939,7 +873,7 @@ class _DataActionRow extends StatelessWidget {
                 description,
                 style: TextStyle(
                   color: colors.textSecondary,
-                  fontSize: 11.5,
+                  fontSize: 12,
                   height: 1.55,
                 ),
               ),
@@ -978,7 +912,7 @@ class _FaqItem extends StatelessWidget {
           question,
           style: TextStyle(
             color: colors.text,
-            fontSize: 12.5,
+            fontSize: 13,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -987,7 +921,7 @@ class _FaqItem extends StatelessWidget {
           answer,
           style: TextStyle(
             color: colors.textSecondary,
-            fontSize: 11.5,
+            fontSize: 12,
             height: 1.55,
           ),
         ),
@@ -1007,7 +941,6 @@ class _ServerConnectionCard extends StatelessWidget {
     final colors = context.colors;
     return SectionCard(
       title: '服务连接',
-      subtitle: '切换服务会退出当前登录，并清除本机会话、令牌与用户缓存。',
       action: OutlinedButton.icon(
         onPressed: onOpen,
         icon: const Icon(Icons.link, size: 15),
@@ -1018,7 +951,7 @@ class _ServerConnectionCard extends StatelessWidget {
         children: [
           Text(
             config.configured ? '当前服务' : '尚未连接服务',
-            style: TextStyle(color: colors.muted, fontSize: 10.5),
+            style: TextStyle(color: colors.muted, fontSize: 12),
           ),
           const SizedBox(height: 3),
           Text(

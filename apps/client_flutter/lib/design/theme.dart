@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import '../core/models/preferences.dart';
 import 'palette.dart';
 
+export 'palette.dart' show AppMetrics, AppTypography;
+
 const _sansFallback = <String>[
   'BboCjk',
   'Noto Sans CJK SC',
@@ -12,19 +14,14 @@ const _sansFallback = <String>[
   'WenQuanYi Micro Hei',
 ];
 
-const _serifFallback = <String>[
-  'BboCjk',
-  'Noto Serif CJK SC',
-  'Source Han Serif SC',
-  'Songti SC',
-  'SimSun',
-  'serif',
-];
-
 class AppTheme {
   const AppTheme._();
 
-  static ThemeData build(ColorSchemeId scheme, Brightness brightness) {
+  static ThemeData build(
+    ColorSchemeId scheme,
+    Brightness brightness, {
+    bool compact = false,
+  }) {
     final palette = AppPalette.resolve(scheme, brightness);
     final colors = AppColors.fromPalette(
       palette,
@@ -34,7 +31,9 @@ class AppTheme {
       useMaterial3: true,
       brightness: brightness,
       visualDensity: VisualDensity.standard,
-      materialTapTargetSize: MaterialTapTargetSize.padded,
+      materialTapTargetSize: compact
+          ? MaterialTapTargetSize.shrinkWrap
+          : MaterialTapTargetSize.padded,
     );
     final colorScheme = base.colorScheme.copyWith(
       primary: colors.accent,
@@ -57,8 +56,7 @@ class AppTheme {
       scrim: Colors.black54,
     );
     final textTheme = _textTheme(base.textTheme, colors, brightness, scheme);
-    final headingFallback =
-        scheme == ColorSchemeId.grove ? _serifFallback : _sansFallback;
+    const headingFallback = _sansFallback;
     final headings = textTheme.copyWith(
       displayLarge: textTheme.displayLarge?.copyWith(
         fontFamilyFallback: headingFallback,
@@ -92,9 +90,11 @@ class AppTheme {
     final buttonShape =
         RoundedRectangleBorder(borderRadius: colors.buttonRadius);
     final buttonStyle = ButtonStyle(
-      minimumSize: const WidgetStatePropertyAll(Size(0, 48)),
-      padding: const WidgetStatePropertyAll(
-        EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      minimumSize: WidgetStatePropertyAll(
+        Size(0, compact ? AppMetrics.controlHeight : AppMetrics.touchHeight),
+      ),
+      padding: WidgetStatePropertyAll(
+        EdgeInsets.symmetric(horizontal: 16, vertical: compact ? 10 : 12),
       ),
       shape: WidgetStatePropertyAll(buttonShape),
       textStyle: WidgetStatePropertyAll(
@@ -107,7 +107,7 @@ class AppTheme {
     );
 
     final border = OutlineInputBorder(
-      borderRadius: BorderRadius.circular(palette.radius - 1),
+      borderRadius: BorderRadius.circular(AppMetrics.radiusSm),
       borderSide: BorderSide(color: colors.border),
     );
 
@@ -147,10 +147,11 @@ class AppTheme {
       ),
       inputDecorationTheme: InputDecorationThemeData(
         filled: true,
-        fillColor: colors.surfaceSubtle,
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 14,
-          vertical: 15,
+        fillColor: colors.surface,
+        isDense: compact,
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: compact ? 12 : 16,
         ),
         hintStyle: TextStyle(
           color: colors.muted,
@@ -169,8 +170,8 @@ class AppTheme {
         focusedErrorBorder: border.copyWith(
           borderSide: BorderSide(color: colors.danger, width: 1.6),
         ),
-        errorStyle: TextStyle(color: colors.danger, fontSize: 12.5),
-        helperStyle: TextStyle(color: colors.textSecondary, fontSize: 12.5),
+        errorStyle: TextStyle(color: colors.danger, fontSize: 13),
+        helperStyle: TextStyle(color: colors.textSecondary, fontSize: 13),
       ),
       filledButtonTheme: FilledButtonThemeData(style: buttonStyle),
       elevatedButtonTheme: ElevatedButtonThemeData(
@@ -191,7 +192,10 @@ class AppTheme {
       textButtonTheme: TextButtonThemeData(
         style: ButtonStyle(
           foregroundColor: WidgetStatePropertyAll(colors.accent),
-          minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
+          minimumSize: WidgetStatePropertyAll(Size(
+            0,
+            compact ? AppMetrics.controlHeight : AppMetrics.touchHeight,
+          )),
           padding: const WidgetStatePropertyAll(
             EdgeInsets.symmetric(horizontal: 10, vertical: 10),
           ),
@@ -202,7 +206,9 @@ class AppTheme {
       ),
       iconButtonTheme: IconButtonThemeData(
         style: ButtonStyle(
-          minimumSize: const WidgetStatePropertyAll(Size(44, 44)),
+          minimumSize: WidgetStatePropertyAll(Size.square(
+            compact ? AppMetrics.controlHeight : AppMetrics.touchHeight,
+          )),
           iconSize: const WidgetStatePropertyAll(20),
           foregroundColor: WidgetStatePropertyAll(colors.textSecondary),
           shape: WidgetStatePropertyAll(
@@ -361,7 +367,7 @@ class AppTheme {
         style: ButtonStyle(
           minimumSize: const WidgetStatePropertyAll(Size(0, 44)),
           textStyle: const WidgetStatePropertyAll(
-            TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600),
+            TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
           ),
           foregroundColor: WidgetStateProperty.resolveWith((states) {
             if (states.contains(WidgetState.selected)) return colors.accent;
@@ -413,34 +419,27 @@ class AppTheme {
           fontFamilyFallback: _sansFallback,
         )
         .copyWith(
-          bodyLarge: base.bodyLarge?.copyWith(fontSize: 15.5, height: 1.65),
-          bodyMedium: base.bodyMedium?.copyWith(fontSize: 14.5, height: 1.6),
-          bodySmall: base.bodySmall?.copyWith(fontSize: 12.5, height: 1.5),
+          bodyLarge: base.bodyLarge?.copyWith(fontSize: 14, height: 1.6),
+          bodyMedium: base.bodyMedium
+              ?.copyWith(fontSize: AppTypography.fontBody, height: 1.6),
+          bodySmall: base.bodySmall
+              ?.copyWith(fontSize: AppTypography.fontSecondary, height: 1.5),
           titleMedium: base.titleMedium?.copyWith(
-            fontSize: 15.5,
+            fontSize: 16,
             fontWeight: FontWeight.w600,
           ),
           titleSmall: base.titleSmall?.copyWith(
-            fontSize: 13.5,
+            fontSize: 14,
             fontWeight: FontWeight.w600,
           ),
           labelLarge: base.labelLarge?.copyWith(
             fontSize: 14,
             fontWeight: FontWeight.w600,
           ),
-          labelMedium: base.labelMedium?.copyWith(fontSize: 12.5),
-          labelSmall: base.labelSmall?.copyWith(fontSize: 11.5),
+          labelMedium: base.labelMedium?.copyWith(fontSize: 13),
+          labelSmall: base.labelSmall?.copyWith(fontSize: 12),
         );
-    return text.copyWith(
-      bodyLarge: text.bodyLarge?.copyWith(
-        fontFamilyFallback:
-            scheme == ColorSchemeId.grove ? _serifFallback : null,
-      ),
-      bodyMedium: text.bodyMedium?.copyWith(
-        fontFamilyFallback:
-            scheme == ColorSchemeId.grove ? _serifFallback : null,
-      ),
-    );
+    return text;
   }
 }
 

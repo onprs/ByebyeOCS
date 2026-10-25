@@ -118,7 +118,7 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
                           course.title,
                           style: TextStyle(
                             color: colors.text,
-                            fontSize: narrow ? 24 : 30,
+                            fontSize: narrow ? 26 : AppTypography.fontTitle,
                             fontWeight: FontWeight.w600,
                             letterSpacing: -0.7,
                             height: 1.25,
@@ -181,7 +181,6 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
             final chapterCard = SectionCard(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
               title: '课程内容',
-              subtitle: '任务点计入课程进度；普通附件仅作为学习资料。',
               action: SegmentedButton<_CourseTab>(
                 segments: const [
                   ButtonSegment(
@@ -297,7 +296,6 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
             children: [
               SheetHeader(
                 title: attachment.title,
-                subtitle: '普通学习资料 · 不计入任务点',
               ),
               const SizedBox(height: 18),
               Text(
@@ -305,7 +303,7 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
                 style: TextStyle(
                   color: sheetContext.colors.textSecondary,
                   height: 1.65,
-                  fontSize: 13.5,
+                  fontSize: 14,
                 ),
               ),
               const SizedBox(height: 20),
@@ -367,7 +365,7 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
                 style: TextStyle(
                   color: sheetContext.colors.textSecondary,
                   height: 1.65,
-                  fontSize: 13.5,
+                  fontSize: 14,
                 ),
               ),
               const SizedBox(height: 20),
@@ -437,7 +435,7 @@ class _ChapterTileState extends State<_ChapterTile> {
                       chapter.title,
                       style: TextStyle(
                         color: colors.text,
-                        fontSize: 14.5,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -472,7 +470,7 @@ class _ChapterTileState extends State<_ChapterTile> {
                     '本章没有内容条目',
                     style: TextStyle(
                       color: colors.textSecondary,
-                      fontSize: 12.5,
+                      fontSize: 13,
                     ),
                   ),
                 ),
@@ -552,7 +550,7 @@ class _AttachmentRow extends StatelessWidget {
                     attachment.title,
                     style: TextStyle(
                       color: colors.text,
-                      fontSize: 13.5,
+                      fontSize: 14,
                       height: 1.4,
                     ),
                   ),
@@ -563,7 +561,7 @@ class _AttachmentRow extends StatelessWidget {
                         : '普通附件 · 不计入任务点',
                     style: TextStyle(
                       color: colors.muted,
-                      fontSize: 11.5,
+                      fontSize: 12,
                     ),
                   ),
                 ],
@@ -647,7 +645,7 @@ class _TaskPointFacts extends StatelessWidget {
             value,
             style: TextStyle(
               color: context.colors.text,
-              fontSize: 12.5,
+              fontSize: 13,
               fontWeight: FontWeight.w500,
             ),
           ),
@@ -693,7 +691,7 @@ class _CourseSummaryCard extends StatelessWidget {
                       '${(progress * 100).round()}%',
                       style: TextStyle(
                         color: colors.text,
-                        fontSize: 23,
+                        fontSize: 26,
                         fontWeight: FontWeight.w600,
                         fontFeatures: const [FontFeature.tabularFigures()],
                       ),
@@ -702,7 +700,7 @@ class _CourseSummaryCard extends StatelessWidget {
                       '平台已确认',
                       style: TextStyle(
                         color: colors.textSecondary,
-                        fontSize: 11,
+                        fontSize: 12,
                       ),
                     ),
                   ],
@@ -725,7 +723,7 @@ class _CourseSummaryCard extends StatelessWidget {
               '最近同步 ${formatDateTime(course.syncedAt)}',
               style: TextStyle(
                 color: colors.muted,
-                fontSize: 11.5,
+                fontSize: 12,
               ),
             ),
           ),
@@ -742,7 +740,7 @@ class _CourseSummaryCard extends StatelessWidget {
             value,
             style: TextStyle(
               color: context.colors.text,
-              fontSize: 17,
+              fontSize: 16,
               fontWeight: FontWeight.w600,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
@@ -752,7 +750,7 @@ class _CourseSummaryCard extends StatelessWidget {
             label,
             style: TextStyle(
               color: context.colors.textSecondary,
-              fontSize: 11.5,
+              fontSize: 12,
             ),
           ),
         ],

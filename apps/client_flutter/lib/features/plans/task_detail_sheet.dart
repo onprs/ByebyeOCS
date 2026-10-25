@@ -19,10 +19,8 @@ Future<void> showTaskDetailSheet(
   BuildContext context,
   String taskId,
 ) {
-  return showModalBottomSheet<void>(
+  return showAdaptivePanel<void>(
     context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
     builder: (context) => TaskDetailSheet(taskId: taskId),
   );
 }
@@ -40,14 +38,14 @@ class TaskDetailSheet extends ConsumerWidget {
     final wide = media.size.width >= 760;
     return Container(
       constraints: BoxConstraints(
-        maxWidth: wide ? 860 : double.infinity,
-        maxHeight: height * 0.94,
+        maxWidth: AppMetrics.drawerWidth,
+        maxHeight: wide ? height : height * 0.9,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(22, 4, 14, 12),
+            padding: const EdgeInsets.fromLTRB(20, 16, 12, 16),
             child: Row(
               children: [
                 Expanded(
@@ -178,7 +176,7 @@ class _TaskDetailBodyState extends ConsumerState<_TaskDetailBody> {
                   ].whereType<String>().join(' · '),
                   style: TextStyle(
                     color: colors.textSecondary,
-                    fontSize: 12.5,
+                    fontSize: 13,
                     height: 1.5,
                   ),
                 ),
@@ -390,7 +388,7 @@ class _EvidenceCard extends StatelessWidget {
                   title,
                   style: TextStyle(
                     color: colors.textSecondary,
-                    fontSize: 11.5,
+                    fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -412,7 +410,7 @@ class _EvidenceCard extends StatelessWidget {
             detail,
             style: TextStyle(
               color: colors.textSecondary,
-              fontSize: 11.5,
+              fontSize: 12,
               height: 1.5,
             ),
           ),
@@ -422,7 +420,7 @@ class _EvidenceCard extends StatelessWidget {
               note!,
               style: TextStyle(
                 color: colors.textSecondary,
-                fontSize: 11,
+                fontSize: 12,
                 height: 1.5,
               ),
             ),
@@ -484,7 +482,7 @@ class _FactsGrid extends StatelessWidget {
                 children: [
                   Text(
                     fact.$1,
-                    style: TextStyle(color: colors.muted, fontSize: 10.5),
+                    style: TextStyle(color: colors.muted, fontSize: 12),
                   ),
                   const SizedBox(height: 3),
                   Text(
@@ -537,7 +535,7 @@ class _BillingCard extends StatelessWidget {
                   '费用记录',
                   style: TextStyle(
                     color: colors.text,
-                    fontSize: 12.5,
+                    fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -546,14 +544,14 @@ class _BillingCard extends StatelessWidget {
                   text,
                   style: TextStyle(
                     color: colors.textSecondary,
-                    fontSize: 11.5,
+                    fontSize: 12,
                     height: 1.5,
                   ),
                 ),
                 if (billing.priceVersion != null && billing.hasPublishedPrice)
                   Text(
                     '价格版本 ${billing.priceVersion}',
-                    style: TextStyle(color: colors.muted, fontSize: 10.5),
+                    style: TextStyle(color: colors.muted, fontSize: 12),
                   ),
               ],
             ),
@@ -576,11 +574,10 @@ class _HistorySection extends StatelessWidget {
     return SectionCard(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
       title: '执行历史',
-      subtitle: '任务尝试和你的暂停、取消操作会分别保留；是否完成以平台确认为准。',
       child: !hasContent
           ? Text(
               '还没有执行记录。',
-              style: TextStyle(color: colors.textSecondary, fontSize: 12.5),
+              style: TextStyle(color: colors.textSecondary, fontSize: 13),
             )
           : Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -663,7 +660,7 @@ class _HistoryRow extends StatelessWidget {
                         title,
                         style: TextStyle(
                           color: colors.text,
-                          fontSize: 12.5,
+                          fontSize: 13,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -672,7 +669,7 @@ class _HistoryRow extends StatelessWidget {
                       status,
                       style: TextStyle(
                         color: colors.textSecondary,
-                        fontSize: 11,
+                        fontSize: 12,
                       ),
                     ),
                   ],
@@ -683,7 +680,7 @@ class _HistoryRow extends StatelessWidget {
                     detail,
                     style: TextStyle(
                       color: colors.textSecondary,
-                      fontSize: 11.5,
+                      fontSize: 12,
                       height: 1.5,
                     ),
                   ),
@@ -695,7 +692,7 @@ class _HistoryRow extends StatelessWidget {
             const SizedBox(width: 10),
             Text(
               formatShortDateTime(time),
-              style: TextStyle(color: colors.muted, fontSize: 10.5),
+              style: TextStyle(color: colors.muted, fontSize: 12),
             ),
           ],
         ],
@@ -782,7 +779,7 @@ class _Actions extends StatelessWidget {
                   : '当前状态暂无可执行的操作。',
               style: TextStyle(
                 color: context.colors.textSecondary,
-                fontSize: 12.5,
+                fontSize: 13,
               ),
             ),
           ),
@@ -869,7 +866,6 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
     return SectionCard(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
       title: '题库答案',
-      subtitle: '单独查询只展示答案；安排内的测验由平台自动提交。',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -979,7 +975,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
           padding: const EdgeInsets.only(bottom: 8),
           child: Text(
             '单独查询不影响安排已冻结的模型与模式。',
-            style: TextStyle(color: colors.muted, fontSize: 11, height: 1.5),
+            style: TextStyle(color: colors.muted, fontSize: 12, height: 1.5),
           ),
         ),
         DropdownButtonFormField<String>(
@@ -1043,12 +1039,10 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
         ),
         const SizedBox(height: 7),
         Text(
-          !cacheAllowed
-              ? '该模型未启用答案缓存，每次都会调用模型。'
-              : mode.description,
+          !cacheAllowed ? '该模型未启用答案缓存，每次都会调用模型。' : mode.description,
           style: TextStyle(
             color: colors.textSecondary,
-            fontSize: 11.5,
+            fontSize: 12,
             height: 1.5,
           ),
         ),
@@ -1162,11 +1156,9 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
     }
   }
 
-  Future<void> _report() async {
+  Future<bool> _report(String reason) async {
     final query = _query;
-    if (query == null || _reporting) return;
-    final reason = await askQuestionReportReason(context);
-    if (reason == null || !mounted) return;
+    if (query == null || _reporting) return false;
     setState(() {
       _reporting = true;
       _error = null;
@@ -1176,26 +1168,27 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
             queryId: query.id,
             reason: reason,
           );
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _reporting = false;
         _notice = '问题已提交复核';
       });
+      return true;
     } on ApiException catch (error) {
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _reporting = false;
         _error = error.userMessage;
       });
     } catch (_) {
-      if (!mounted) return;
+      if (!mounted) return false;
       setState(() {
         _reporting = false;
         _error = '问题报告未完成';
       });
     }
+    return false;
   }
-
 }
 
 Future<QuestionPrompt?> _askQuestionPrompt(BuildContext context) {

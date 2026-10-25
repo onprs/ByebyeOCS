@@ -4,7 +4,6 @@ import {
   CircleAlert,
   Clock3,
   FileDown,
-  LockKeyhole,
   RefreshCw,
   ShieldCheck,
   Trash2,
@@ -113,7 +112,7 @@ export function PrivacyRequestsPage() {
     <>
       <PageHeader
         title="隐私与数据请求"
-        description="复核删除申请，并查看导出申请状态。完成删除会关闭账号并清除会话与身份密文；账务与审计按保留策略保留。"
+
         actions={
           <Button onClick={() => requests.reload()} loading={requests.loading}>
             <RefreshCw size={14} /> 刷新
@@ -123,7 +122,7 @@ export function PrivacyRequestsPage() {
 
       <div className="system-strip">
         <span>
-          <ShieldCheck size={13} />
+          <ShieldCheck size={14} />
           <b>删除复核需要再次验证管理员身份</b>
           <span className="strip-secondary">阻断只显示计数，不暴露金额、题目或身份内容</span>
         </span>
@@ -132,7 +131,7 @@ export function PrivacyRequestsPage() {
       <Card>
         {requests.loading && !requests.data ? <LoadingBlock rows={5} /> : null}
         {requests.error && !requests.data ? (
-          <div style={{ padding: 18 }}><ErrorState error={requests.error} onRetry={requests.reload} /></div>
+          <div className="u-padding-18px" ><ErrorState error={requests.error} onRetry={requests.reload} /></div>
         ) : null}
         {requests.error && requests.data ? <RefreshError error={requests.error} onRetry={requests.reload} /> : null}
         {requests.data?.items.length ? (
@@ -164,14 +163,14 @@ export function PrivacyRequestsPage() {
                         </td>
                         <td>
                           <Badge tone={item.kind === 'deletion' ? 'violet' : 'blue'}>
-                            {item.kind === 'deletion' ? <Trash2 size={10} /> : <FileDown size={10} />}
+                            {item.kind === 'deletion' ? <Trash2 size={14} /> : <FileDown size={14} />}
                             {kindLabels[item.kind] ?? item.kind}
                           </Badge>
                         </td>
-                        <td className="mono">{item.user_id ?? '未提供'}</td>
+                        <td className="mono">{item.user_id ?? '—'}</td>
                         <td><Badge tone={statusTone[item.status] ?? 'neutral'} dot>{statusLabels[item.status] ?? item.status}</Badge></td>
-                        <td className="muted" style={{ whiteSpace: 'normal', maxWidth: 300 }}>
-                          {item.review_reason ?? '未提供'}
+                        <td className="muted u-white-space-normal u-max-width-300px" >
+                          {item.review_reason ?? '—'}
                         </td>
                         <td className="muted">
                           <div>{formatDateTime(item.created_at)}</div>
@@ -181,7 +180,7 @@ export function PrivacyRequestsPage() {
                         <td>
                           {actionable ? (
                             <Button size="sm" variant={item.status === 'deferred' ? 'secondary' : 'ghost'} onClick={() => setReviewing(item)}>
-                              <FileDown size={12} /> {item.status === 'deferred' ? '继续复核' : '复核'}
+                              <FileDown size={14} /> {item.status === 'deferred' ? '继续复核' : '复核'}
                             </Button>
                           ) : null}
                         </td>
@@ -207,9 +206,7 @@ export function PrivacyRequestsPage() {
         ) : null}
       </Card>
 
-      <div className="card-footer-link" style={{ border: 0, paddingLeft: 2 }}>
-        <LockKeyhole size={12} /> 完成删除后用户不能登录；旧会话不会恢复。驳回或延后不会自动恢复旧会话、安排或任务执行。
-      </div>
+
 
       <ReviewDialog
         request={reviewing}
@@ -322,7 +319,7 @@ function ReviewDialog({
                   onClick={() => { setAction(item); setError(null) }}
                   aria-pressed={action === item}
                 >
-                  {item === 'defer' ? <Clock3 size={15} /> : item === 'complete' ? <Trash2 size={15} /> : <X size={15} />}
+                  {item === 'defer' ? <Clock3 size={16} /> : item === 'complete' ? <Trash2 size={16} /> : <X size={16} />}
                   <b>{actionLabels[item]}</b>
                   <span>
                     {item === 'defer'
@@ -342,10 +339,10 @@ function ReviewDialog({
             {action === 'complete' ? (
               <>
                 <div className="callout callout-warning">
-                  <CircleAlert size={15} />
+                  <CircleAlert size={16} />
                   <div>完成删除后不可恢复旧会话；钱包、订单、退款、对账与审计不会被删除。存在未结资金或运行活动时会被阻断。</div>
                 </div>
-                <label className="native-check" style={{ marginTop: 12 }}>
+                <label className="native-check u-margin-top-12px" >
                   <input type="checkbox" checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)} />
                   我已核对阻断情况并确认永久关闭该账号
                 </label>
@@ -353,10 +350,10 @@ function ReviewDialog({
             ) : null}
 
             {error ? (
-              <div style={{ marginTop: 14 }}>
+              <div className="u-margin-top-14px" >
                 {blockers.length ? (
                   <div className="callout callout-danger" role="alert">
-                    <CircleAlert size={15} />
+                    <CircleAlert size={16} />
                     <div>
                       <b>{errorMessage ?? '存在未结资金或运行中的活动，暂不能完成删除。'}</b>
                       <div className="blocker-list">
@@ -371,7 +368,7 @@ function ReviewDialog({
                   <ErrorState error={error} compact />
                 )}
                 {isStepUpRequired(error) ? (
-                  <div style={{ marginTop: 8 }}>
+                  <div className="u-margin-top-8px" >
                     <Button size="sm" onClick={() => setStepUpOpen(true)}>重新验证管理员身份</Button>
                   </div>
                 ) : null}

@@ -27,14 +27,14 @@ class QuestionPromptView extends StatelessWidget {
         children: [
           Text(
             prompt.typeLabel,
-            style: TextStyle(color: colors.muted, fontSize: 11),
+            style: TextStyle(color: colors.muted, fontSize: 12),
           ),
           const SizedBox(height: 5),
           Text(
             prompt.title,
             style: TextStyle(
               color: colors.text,
-              fontSize: 13.5,
+              fontSize: 14,
               height: 1.55,
               fontWeight: FontWeight.w500,
             ),
@@ -45,7 +45,7 @@ class QuestionPromptView extends StatelessWidget {
               prompt.options,
               style: TextStyle(
                 color: colors.textSecondary,
-                fontSize: 12.5,
+                fontSize: 13,
                 height: 1.65,
               ),
             ),
@@ -54,7 +54,7 @@ class QuestionPromptView extends StatelessWidget {
             const SizedBox(height: 6),
             Text(
               '题目包含 ${prompt.images.isNotEmpty ? prompt.images.length : prompt.imageCount} 张图片',
-              style: TextStyle(color: colors.muted, fontSize: 11),
+              style: TextStyle(color: colors.muted, fontSize: 12),
             ),
           ],
         ],
@@ -76,7 +76,7 @@ class QuestionResultCard extends StatelessWidget {
 
   final QuestionQuery query;
   final bool reporting;
-  final VoidCallback? onReport;
+  final Future<bool> Function(String reason)? onReport;
   final bool refreshing;
   final Future<void> Function()? onRefresh;
 
@@ -133,7 +133,7 @@ class QuestionResultCard extends StatelessWidget {
           const SizedBox(height: 5),
           Text(
             '${query.modelName ?? '平台模型'} · ${query.cacheLabel}',
-            style: TextStyle(color: colors.textSecondary, fontSize: 11.5),
+            style: TextStyle(color: colors.textSecondary, fontSize: 12),
           ),
           const SizedBox(height: 10),
           Container(
@@ -154,7 +154,7 @@ class QuestionResultCard extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             query.pricing.label,
-            style: TextStyle(color: colors.textSecondary, fontSize: 11.5),
+            style: TextStyle(color: colors.textSecondary, fontSize: 12),
           ),
           if (query.cacheHit) ...[
             const SizedBox(height: 4),
@@ -164,7 +164,7 @@ class QuestionResultCard extends StatelessWidget {
                   : '使用 ${formatShortDateTime(query.cacheCreatedAt)} 的精确缓存；本次未调用模型，token 为 0。',
               style: TextStyle(
                 color: colors.success,
-                fontSize: 11,
+                fontSize: 12,
                 height: 1.5,
               ),
             ),
@@ -173,7 +173,7 @@ class QuestionResultCard extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               '题目内容已按保留规则清理，历史答案仍可查看。',
-              style: TextStyle(color: colors.textSecondary, fontSize: 11),
+              style: TextStyle(color: colors.textSecondary, fontSize: 12),
             ),
           ],
           const SizedBox(height: 10),
@@ -189,13 +189,8 @@ class QuestionResultCard extends StatelessWidget {
                   variant: AsyncButtonVariant.outline,
                   onPressed: onRefresh,
                 ),
-              AsyncButton(
-                label: '报告答案问题',
-                icon: Icons.flag_outlined,
-                busy: reporting,
-                variant: AsyncButtonVariant.outline,
-                onPressed: query.answer == null ? null : onReport,
-              ),
+              if (query.answer != null && onReport != null)
+                _InlineQuestionReport(busy: reporting, onSubmit: onReport!),
             ],
           ),
         ],
@@ -218,7 +213,7 @@ class _TokenValue extends StatelessWidget {
         children: [
           Text(
             label,
-            style: TextStyle(color: context.colors.muted, fontSize: 10),
+            style: TextStyle(color: context.colors.muted, fontSize: 12),
           ),
           const SizedBox(height: 2),
           Text(
@@ -236,64 +231,78 @@ class _TokenValue extends StatelessWidget {
   }
 }
 
-/// 报告答案或缓存问题；返回去空格后的原因，取消时返回 null。
-Future<String?> askQuestionReportReason(BuildContext context) {
-  return showDialog<String>(
-    context: context,
-    builder: (_) => const _QuestionReportDialog(),
-  );
-}
-
-class _QuestionReportDialog extends StatefulWidget {
-  const _QuestionReportDialog();
-
+class _InlineQuestionReport extends StatefulWidget {
+  const _InlineQuestionReport({required this.busy, required this.onSubmit});
+  final bool busy;
+  final Future<bool> Function(String reason) onSubmit;
   @override
-  State<_QuestionReportDialog> createState() => _QuestionReportDialogState();
+  State<_InlineQuestionReport> createState() => _InlineQuestionReportState();
 }
 
-class _QuestionReportDialogState extends State<_QuestionReportDialog> {
-  final _controller = TextEditingController();
-
+class _InlineQuestionReportState extends State<_InlineQuestionReport> {
+  final _reason = TextEditingController();
+  bool _open = false;
+  bool _empty = false;
+  bool _sending = false;
+  bool get _busy => widget.busy || _sending;
   @override
   void dispose() {
-    _controller.dispose();
+    _reason.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('报告答案问题'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('说明答案或缓存的问题，平台会标记待复核，不会直接删除账务记录。'),
-          const SizedBox(height: 12),
-          TextField(
-            controller: _controller,
-            autofocus: true,
-            maxLength: 200,
-            maxLines: 3,
-            decoration: const InputDecoration(hintText: '例如：答案与题目不符'),
-          ),
-        ],
+    if (!_open) {
+      return AsyncButton(
+          label: '报告答案问题',
+          icon: Icons.flag_outlined,
+          variant: AsyncButtonVariant.outline,
+          onPressed: () => setState(() => _open = true));
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      TextField(
+        controller: _reason,
+        autofocus: true,
+        enabled: !_busy,
+        maxLength: 200,
+        maxLines: 3,
+        decoration: InputDecoration(
+            labelText: '问题说明', errorText: _empty ? '请填写问题说明' : null),
       ),
-      actions: [
+      const SizedBox(height: 8),
+      Wrap(spacing: 8, children: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('取消'),
-        ),
-        FilledButton(
-          onPressed: () {
-            final value = _controller.text.trim();
-            if (value.isEmpty) return;
-            Navigator.of(context).pop(value);
-          },
-          child: const Text('提交'),
-        ),
-      ],
-    );
+            onPressed: _busy ? null : () => setState(() => _open = false),
+            child: const Text('取消')),
+        AsyncButton(
+            label: '提交',
+            busy: _busy,
+            onPressed: () async {
+              if (_busy) return;
+              final reason = _reason.text.trim();
+              if (reason.isEmpty) {
+                setState(() => _empty = true);
+                return;
+              }
+              setState(() {
+                _empty = false;
+                _sending = true;
+              });
+              try {
+                final saved = await widget.onSubmit(reason);
+                if (mounted && saved) {
+                  setState(() {
+                    _open = false;
+                    _reason.clear();
+                  });
+                }
+              } finally {
+                if (mounted) setState(() => _sending = false);
+              }
+            }),
+      ]),
+    ]);
   }
 }
 

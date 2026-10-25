@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import {
-  ArrowRight,
   CheckCircle2,
   ChevronRight,
   CircleAlert,
@@ -10,7 +9,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import {
   createReconciliation,
   createRefund,
@@ -200,9 +199,8 @@ export function FinancePage() {
   return (
     <>
       <PageHeader
-        eyebrow="财务与对账"
         title="财务与订单"
-        description="用户支付与余额到账分别记录。汇总、订单、钱包流水、退款、人工调整与对账可在本页核对。"
+
         actions={
           <>
             <Button onClick={refresh} loading={summary.loading || billing.loading}>
@@ -237,32 +235,32 @@ export function FinancePage() {
       <section className="metric-band finance-metrics">
         <div className="metric">
           <div className="metric-label">钱包可用余额</div>
-          <div className="metric-value" style={{ fontSize: 22 }}>{current ? formatMoneyMinor(current.wallets.available_minor) : <span className="muted" style={{ fontSize: 15 }}>未提供</span>}</div>
+          <div className="metric-value u-font-size-26px" >{current ? formatMoneyMinor(current.wallets.available_minor) : <span className="muted u-font-size-14px" >—</span>}</div>
           <div className="metric-foot"><span>{current ? `${formatNumber(current.wallets.count)} 个钱包 · 冻结 ${formatNumber(current.wallets.frozen_count)}` : '汇总未载入'}</span><Badge tone="green">全量</Badge></div>
         </div>
         <div className="metric">
           <div className="metric-label">支付成功未入账</div>
-          <div className="metric-value" style={{ fontSize: 21 }}>{current ? formatMoneyMinor(current.paid_not_credited.amount_minor) : <span className="muted" style={{ fontSize: 15 }}>未提供</span>}</div>
+          <div className="metric-value u-font-size-16px" >{current ? formatMoneyMinor(current.paid_not_credited.amount_minor) : <span className="muted u-font-size-14px" >—</span>}</div>
           <div className="metric-foot"><span>{current ? `${formatNumber(current.paid_not_credited.count)} 笔 · 等待账本处理` : '汇总未载入'}</span></div>
         </div>
         <div className="metric">
           <div className="metric-label">订单待核对</div>
-          <div className="metric-value" style={{ fontSize: 21 }}>{current ? formatMoneyMinor(current.orders_needs_review.amount_minor) : <span className="muted" style={{ fontSize: 15 }}>未提供</span>}</div>
+          <div className="metric-value u-font-size-16px" >{current ? formatMoneyMinor(current.orders_needs_review.amount_minor) : <span className="muted u-font-size-14px" >—</span>}</div>
           <div className="metric-foot"><span>{current ? `${formatNumber(current.orders_needs_review.count)} 笔 · 以账本为准` : '汇总未载入'}</span></div>
         </div>
         <div className="metric">
           <div className="metric-label">退款处理中</div>
-          <div className="metric-value" style={{ fontSize: 21 }}>{current ? formatMoneyMinor(current.refunds_open.amount_minor) : <span className="muted" style={{ fontSize: 15 }}>未提供</span>}</div>
+          <div className="metric-value u-font-size-16px" >{current ? formatMoneyMinor(current.refunds_open.amount_minor) : <span className="muted u-font-size-14px" >—</span>}</div>
           <div className="metric-foot"><span>{current ? `${formatNumber(current.refunds_open.count)} 笔 · 不含已成功` : '汇总未载入'}</span></div>
         </div>
       </section>
 
       {summary.error && summary.data ? <RefreshError error={summary.error} onRetry={summary.reload} /> : null}
       {summary.error && !summary.data ? (
-        <div style={{ marginBottom: 16 }}><ErrorState error={summary.error} onRetry={summary.reload} compact /></div>
+        <div className="u-margin-bottom-16px" ><ErrorState error={summary.error} onRetry={summary.reload} compact /></div>
       ) : null}
       {billing.error ? (
-        <div style={{ marginBottom: 16 }}><ErrorState error={billing.error} onRetry={billing.reload} compact /></div>
+        <div className="u-margin-bottom-16px" ><ErrorState error={billing.error} onRetry={billing.reload} compact /></div>
       ) : null}
 
       {rangeMetrics ? (
@@ -339,10 +337,7 @@ export function FinancePage() {
         ) : null}
       </Card>
 
-      <div className="card-footer-link" style={{ border: 0, paddingLeft: 2 }}>
-        <ShieldCheck size={12} /> 付款返回不会直接增加余额。金额以最小单位保存，账本流水只能通过调整或对账流程更正。
-        <Link to="/settings?section=billing">查看计费设置 <ArrowRight size={12} /></Link>
-      </div>
+
 
       <AdjustmentDialog
         open={adjustOpen}
@@ -414,7 +409,7 @@ function OrdersPanel({
           </label>
         </div>
         <Button size="sm" variant="ghost" onClick={resetFilters}>
-          <X size={13} /> 清除筛选
+          <X size={14} /> 清除筛选
         </Button>
       </div>
 
@@ -422,7 +417,7 @@ function OrdersPanel({
       {orders.loading && !orders.data ? (
         <LoadingBlock rows={5} />
       ) : orders.error && !orders.data ? (
-        <div style={{ padding: 18 }}><ErrorState error={orders.error} onRetry={orders.reload} /></div>
+        <div className="u-padding-18px" ><ErrorState error={orders.error} onRetry={orders.reload} /></div>
       ) : orders.data?.items.length ? (
         <>
           <div className="table-scroll">
@@ -446,15 +441,15 @@ function OrdersPanel({
                       <button className="cell-button" onClick={() => setDetailId(order.id)}>
                         <span className="cell-stack">
                           <span className="cell-primary mono">{order.id}</span>
-                          <span className="cell-sub">{order.merchant_order_no ?? '商户订单号未提供'}</span>
+                          <span className="cell-sub">{order.merchant_order_no ?? '—'}</span>
                         </span>
                       </button>
                     </td>
-                    <td className="mono">{order.user_id ?? '未提供'}</td>
+                    <td className="mono">{order.user_id ?? '—'}</td>
                     <td className="cell-primary"><Money minor={order.amount_minor} /></td>
                     <td><Badge tone={order.payment_status === 'paid' ? 'green' : order.payment_status === 'failed' ? 'red' : 'neutral'}>{paymentLabel(order.payment_status)}</Badge></td>
                     <td><Badge tone={order.credit_status === 'credited' ? 'green' : order.credit_status === 'needs_review' ? 'red' : 'amber'}>{creditLabel(order.credit_status)}</Badge></td>
-                    <td>{order.channel ?? order.provider ?? '未提供'}</td>
+                    <td>{order.channel ?? order.provider ?? '—'}</td>
                     <td className="muted">{formatDateTime(order.created_at)}</td>
                     <td>
                       <IconButton label={`查看订单 ${order.id}`} onClick={() => setDetailId(order.id)}>
@@ -466,7 +461,6 @@ function OrdersPanel({
               </tbody>
             </table>
           </div>
-          <p className="mobile-scroll-hint">左右滑动查看完整表格</p>
           <Pagination
             hasPrevious={cursor.hasPrevious}
             hasNext={Boolean(orders.data.next_cursor)}
@@ -529,22 +523,22 @@ function OrdersPanel({
             </div>
             <dl className="detail-list">
               <div><dt>本地订单</dt><dd className="mono">{detail.id}</dd></div>
-              <div><dt>用户编号</dt><dd className="mono">{detail.user_id ?? '未提供'}</dd></div>
-              <div><dt>钱包编号</dt><dd className="mono">{detail.wallet_id ?? '未提供'}</dd></div>
-              <div><dt>商户订单号</dt><dd className="mono">{detail.merchant_order_no ?? '未提供'}</dd></div>
-              <div><dt>支付渠道</dt><dd>{[detail.provider, detail.channel].filter(Boolean).join(' · ') || '未提供'}</dd></div>
+              <div><dt>用户编号</dt><dd className="mono">{detail.user_id ?? '—'}</dd></div>
+              <div><dt>钱包编号</dt><dd className="mono">{detail.wallet_id ?? '—'}</dd></div>
+              <div><dt>商户订单号</dt><dd className="mono">{detail.merchant_order_no ?? '—'}</dd></div>
+              <div><dt>支付渠道</dt><dd>{[detail.provider, detail.channel].filter(Boolean).join(' · ') || '—'}</dd></div>
               <div><dt>用户支付</dt><dd>{paymentLabel(detail.payment_status)}</dd></div>
               <div><dt>支付时间</dt><dd>{formatDateTime(detail.paid_at)}</dd></div>
               <div><dt>余额到账</dt><dd>{creditLabel(detail.credit_status)}</dd></div>
               <div><dt>到账时间</dt><dd>{formatDateTime(detail.credited_at)}</dd></div>
-              <div><dt>迟到支付</dt><dd>{detail.late_payment === null ? '未提供' : detail.late_payment ? '是' : '否'}</dd></div>
-              <div><dt>结账状态</dt><dd>{detail.checkout_state ?? '未提供'}</dd></div>
+              <div><dt>迟到支付</dt><dd>{detail.late_payment === null ? '—' : detail.late_payment ? '是' : '否'}</dd></div>
+              <div><dt>结账状态</dt><dd>{detail.checkout_state ?? '—'}</dd></div>
               <div><dt>创建时间</dt><dd>{formatDateTime(detail.created_at)}</dd></div>
               <div><dt>过期时间</dt><dd>{formatDateTime(detail.expires_at)}</dd></div>
               <div><dt>关闭时间</dt><dd>{formatDateTime(detail.closed_at)}</dd></div>
             </dl>
-            <div className="callout" style={{ marginTop: 16 }}>
-              <ShieldCheck size={15} />
+            <div className="callout u-margin-top-16px" >
+              <ShieldCheck size={16} />
               <div>支付成功与余额到账是两项独立事实。付款返回、渠道成功或页面跳转都不直接增加余额。</div>
             </div>
           </>
@@ -636,7 +630,7 @@ function WalletPanel({
           <Button size="sm" onClick={load} loading={entries.loading}>读取流水</Button>
           {canAdjust && walletId ? (
             <Button size="sm" variant="ghost" onClick={() => onAdjust({ walletId, userId: target?.userId ?? null })}>
-              <Wallet size={13} /> 调整此钱包
+              <Wallet size={14} /> 调整此钱包
             </Button>
           ) : null}
         </div>
@@ -656,30 +650,30 @@ function WalletPanel({
       {target?.orderId ? (
         <div className="wallet-context">
           <span>来源订单 <b className="mono">{target.orderId}</b></span>
-          <span>用户编号 <b className="mono">{target.userId ?? '未提供'}</b></span>
-          <span>钱包编号 <b className="mono">{walletId || '未提供'}</b></span>
+          <span>用户编号 <b className="mono">{target.userId ?? '—'}</b></span>
+          <span>钱包编号 <b className="mono">{walletId || '—'}</b></span>
         </div>
       ) : null}
 
       {walletId && activeSnapshot ? (
         <div className="wallet-context">
-          <span>用户编号 <b className="mono">{target?.userId ?? '未提供'}</b></span>
+          <span>用户编号 <b className="mono">{target?.userId ?? '—'}</b></span>
           <span>可用余额 <b>{formatMoneyMinor(activeSnapshot.available_minor)}</b></span>
           <span>预占金额 <b>{formatMoneyMinor(activeSnapshot.reserved_minor)}</b></span>
           <span>题库计费尾差 <b>{formatPriceMicros(activeSnapshot.tiku_accrued_micros)}</b></span>
-          <span>钱包状态 <b>{activeSnapshot.frozen === null ? '未提供' : activeSnapshot.frozen ? `已冻结${activeSnapshot.frozen_reason ? ` · ${activeSnapshot.frozen_reason}` : ''}` : '正常'}</b></span>
+          <span>钱包状态 <b>{activeSnapshot.frozen === null ? '—' : activeSnapshot.frozen ? `已冻结${activeSnapshot.frozen_reason ? ` · ${activeSnapshot.frozen_reason}` : ''}` : '正常'}</b></span>
         </div>
       ) : null}
 
       {!walletId ? (
         <div className="finance-empty-inline">
-          <Wallet size={18} />
+          <Wallet size={16} />
           <p>从订单详情选择“钱包流水”，或在下方输入钱包编号。账本不会用用户列表推算余额。</p>
         </div>
       ) : entries.loading && !entries.data ? (
         <LoadingBlock rows={4} />
       ) : entries.error ? (
-        <div style={{ padding: 18 }}><ErrorState error={entries.error} onRetry={entries.reload} /></div>
+        <div className="u-padding-18px" ><ErrorState error={entries.error} onRetry={entries.reload} /></div>
       ) : entries.data?.list.items.length ? (
         <>
           <div className="table-scroll">
@@ -705,14 +699,13 @@ function WalletPanel({
                     <td className={Number(entry.reserved_delta_minor) > 0 ? 'positive-text' : Number(entry.reserved_delta_minor) < 0 ? 'negative-text' : ''}>
                       <Money minor={entry.reserved_delta_minor} signed={Number(entry.reserved_delta_minor) > 0} />
                     </td>
-                    <td className="muted" style={{ whiteSpace: 'normal', maxWidth: 280 }}>{entry.description ?? '未提供'}</td>
-                    <td className="mono muted">{entry.business_id ?? '未提供'}</td>
+                    <td className="muted u-white-space-normal u-max-width-280px" >{entry.description ?? '—'}</td>
+                    <td className="mono muted">{entry.business_id ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="mobile-scroll-hint">左右滑动查看完整表格</p>
           <Pagination
             hasPrevious={cursor.hasPrevious}
             hasNext={Boolean(entries.data.list.next_cursor)}
@@ -771,7 +764,7 @@ function RefundsPanel({
           <p>退款请求、渠道处理状态与原订单分别记录。</p>
         </div>
         <Button size="sm" onClick={() => refunds.reload()} loading={refunds.loading}>
-          <RefreshCw size={13} /> 刷新
+          <RefreshCw size={14} /> 刷新
         </Button>
       </div>
       <div className="table-toolbar">
@@ -786,12 +779,12 @@ function RefundsPanel({
             <input value={userId} onChange={event => setUserId(event.target.value)} className="mono" placeholder="用户 UUID" aria-label="按用户筛选退款" />
           </label>
         </div>
-        <Button size="sm" variant="ghost" onClick={clear}><X size={13} /> 清除筛选</Button>
+        <Button size="sm" variant="ghost" onClick={clear}><X size={14} /> 清除筛选</Button>
       </div>
       {refunds.loading && !refunds.data ? (
         <LoadingBlock rows={4} />
       ) : refunds.error && !refunds.data ? (
-        <div style={{ padding: 18 }}><ErrorState error={refunds.error} onRetry={refunds.reload} /></div>
+        <div className="u-padding-18px" ><ErrorState error={refunds.error} onRetry={refunds.reload} /></div>
       ) : refunds.data?.items.length ? (
         <>
           <div className="table-scroll">
@@ -814,11 +807,11 @@ function RefundsPanel({
                   <tr key={refund.id}>
                     <td className="mono">{refund.id}</td>
                     <td className="mono">{refund.order_id}</td>
-                    <td className="mono">{refund.user_id ?? '未提供'}</td>
+                    <td className="mono">{refund.user_id ?? '—'}</td>
                     <td className="cell-primary"><Money minor={refund.amount_minor} /></td>
-                    <td>{refund.kind ? refundKindOptions.find(option => option.value === refund.kind)?.label ?? refund.kind : '未提供'}</td>
+                    <td>{refund.kind ? refundKindOptions.find(option => option.value === refund.kind)?.label ?? refund.kind : '—'}</td>
                     <td><Badge tone={refundTone(refund.status)}>{refund.status_label ?? refund.status}</Badge></td>
-                    <td className="muted" style={{ whiteSpace: 'normal', maxWidth: 260 }}>{refund.reason ?? '未提供'}</td>
+                    <td className="muted u-white-space-normal u-max-width-260px" >{refund.reason ?? '—'}</td>
                     <td className="muted">
                       <div>{formatDateTime(refund.created_at)}</div>
                       <div>{formatDateTime(refund.completed_at)}</div>
@@ -831,7 +824,7 @@ function RefundsPanel({
                           aria-label={`复核退款 ${refund.id}`}
                           onClick={() => setReviewing(refund)}
                         >
-                          <FileCheck2 size={12} /> 复核结果
+                          <FileCheck2 size={14} /> 复核结果
                         </Button>
                       ) : null}
                     </td>
@@ -840,7 +833,6 @@ function RefundsPanel({
               </tbody>
             </table>
           </div>
-          <p className="mobile-scroll-hint">左右滑动查看完整表格</p>
           <Pagination
             hasPrevious={cursor.hasPrevious}
             hasNext={Boolean(refunds.data.next_cursor)}
@@ -978,22 +970,22 @@ function RefundReviewDialog({
           <CheckCircle2 size={16} />
           <div>
             {result.status === 'succeeded' ? '已记录为已退款。' : '已记录为未退款。'}
-            <div className="form-hint" style={{ marginTop: 6 }}>退款状态：{statusLabel(result.status)}</div>
+            <div className="form-hint u-margin-top-6px" >退款状态：{statusLabel(result.status)}</div>
           </div>
         </div>
       ) : (
         <>
           <div className="callout callout-warning">
-            <CircleAlert size={15} />
+            <CircleAlert size={16} />
             <div>请先核对支付渠道的实际退款结果。这里只登记核实结果，不会再次发起渠道退款。</div>
           </div>
           {channelNotSent ? (
-            <div className="callout" style={{ marginTop: 12 }}>
-              <ShieldCheck size={15} />
+            <div className="callout u-margin-top-12px" >
+              <ShieldCheck size={16} />
               <div>该退款尚未提交渠道，只能登记为未退款并释放预占资金。</div>
             </div>
           ) : null}
-          <div className="privacy-actions" role="group" aria-label="选择退款核实结果" style={{ marginTop: 14 }}>
+          <div className="privacy-actions u-margin-top-14px" role="group" aria-label="选择退款核实结果" >
             {channelNotSent ? null : (
               <button
                 type="button"
@@ -1001,7 +993,7 @@ function RefundReviewDialog({
                 aria-pressed={outcome === 'succeeded'}
                 onClick={() => { setOutcome('succeeded'); setError(null) }}
               >
-                <CheckCircle2 size={15} />
+                <CheckCircle2 size={16} />
                 <b>已退款</b>
                 <span>渠道已确认退款成功，记录退款支出并完成本次退款。</span>
               </button>
@@ -1012,7 +1004,7 @@ function RefundReviewDialog({
               aria-pressed={outcome === 'failed'}
               onClick={() => { setOutcome('failed'); setError(null) }}
             >
-              <CircleAlert size={15} />
+              <CircleAlert size={16} />
               <b>未退款</b>
               <span>渠道没有退款，预占金额退回可用余额并结束本次退款。</span>
             </button>
@@ -1027,10 +1019,10 @@ function RefundReviewDialog({
             />
           </Field>
           {error ? (
-            <div style={{ marginTop: 12 }}>
+            <div className="u-margin-top-12px" >
               <ErrorState error={error} compact />
               {requiresReauth(error) ? (
-                <div style={{ marginTop: 8 }}>
+                <div className="u-margin-top-8px" >
                   <Button size="sm" onClick={() => setStepUpOpen(true)}>重新验证管理员身份</Button>
                 </div>
               ) : null}
@@ -1100,7 +1092,7 @@ function WalletSearchBox({
                   <b>{item.display_name || '未命名用户'}</b>
                   <small className="mono">{item.user_id} · 可用 {formatMoneyMinor(item.wallet.available_minor)} · 预占 {formatMoneyMinor(item.wallet.reserved_minor)}</small>
                 </span>
-                <ChevronRight size={13} />
+                <ChevronRight size={14} />
               </button>
             ))
           ) : !results.loading && !results.error ? (
@@ -1128,7 +1120,7 @@ function AuditPanel({ onAdjust, canAdjust }: { onAdjust: () => void; canAdjust: 
         </div>
         <div className="table-toolbar-group">
           <Button size="sm" onClick={() => audit.reload()} loading={audit.loading}>
-            <RefreshCw size={13} /> 刷新
+            <RefreshCw size={14} /> 刷新
           </Button>
           {canAdjust ? (
             <Button size="sm" variant="primary" onClick={onAdjust}>
@@ -1141,7 +1133,7 @@ function AuditPanel({ onAdjust, canAdjust }: { onAdjust: () => void; canAdjust: 
       {audit.loading && !audit.data ? (
         <LoadingBlock rows={5} />
       ) : audit.error && !audit.data ? (
-        <div style={{ padding: 18 }}><ErrorState error={audit.error} onRetry={audit.reload} /></div>
+        <div className="u-padding-18px" ><ErrorState error={audit.error} onRetry={audit.reload} /></div>
       ) : audit.data?.items.length ? (
         <>
           <div className="audit-list finance-audit-list">
@@ -1151,7 +1143,7 @@ function AuditPanel({ onAdjust, canAdjust }: { onAdjust: () => void; canAdjust: 
                 <span>
                   <b>{event.action_label ?? event.action}</b>
                   <p>
-                    资源 {event.resource_type ?? '未提供'} · <span className="mono">{event.resource_id ?? '未提供'}</span>
+                    资源 {event.resource_type ?? '—'} · <span className="mono">{event.resource_id ?? '—'}</span>
                     {event.reason ? <><br />原因：{event.reason}</> : null}
                   </p>
                   <small className="form-hint">
@@ -1234,11 +1226,11 @@ function ReconciliationPanel({
         <div className="table-toolbar-group">
           {canReconcile ? (
             <Button size="sm" variant="primary" onClick={openNew}>
-              <FileCheck2 size={13} /> 发起对账
+              <FileCheck2 size={14} /> 发起对账
             </Button>
           ) : null}
           <Button size="sm" onClick={() => list.reload()} loading={list.loading}>
-            <RefreshCw size={13} /> 刷新
+            <RefreshCw size={14} /> 刷新
           </Button>
         </div>
       </div>
@@ -1270,7 +1262,7 @@ function ReconciliationPanel({
       {list.loading && !list.data ? (
         <LoadingBlock rows={4} />
       ) : list.error && !list.data ? (
-        <div style={{ padding: 18 }}><ErrorState error={list.error} onRetry={list.reload} /></div>
+        <div className="u-padding-18px" ><ErrorState error={list.error} onRetry={list.reload} /></div>
       ) : list.data?.items.length ? (
         <>
           <div className="table-scroll">
@@ -1301,7 +1293,7 @@ function ReconciliationPanel({
                       <span className="cell-sub">实际 {formatMoneyMinor(item.actual_minor)}</span>
                       <span className="cell-sub">差异 {formatMoneyMinor(item.difference_minor)}</span>
                     </td>
-                    <td className="muted" style={{ whiteSpace: 'normal', minWidth: 180 }}>
+                    <td className="muted u-white-space-normal u-min-width-180px" >
                       {item.findings.length ? item.findings.map(finding => <div key={finding.key}>{finding.key}: {finding.value}</div>) : '无'}
                     </td>
                     <td className="muted">
@@ -1313,7 +1305,6 @@ function ReconciliationPanel({
               </tbody>
             </table>
           </div>
-          <p className="mobile-scroll-hint">左右滑动查看完整表格</p>
           <Pagination
             hasPrevious={cursor.hasPrevious}
             hasNext={Boolean(list.data.next_cursor)}
@@ -1451,15 +1442,15 @@ function ReconciliationDialog({
             <textarea rows={3} value={reason} onChange={event => setReason(event.target.value)} maxLength={500} />
           </Field>
           {error ? (
-            <div style={{ marginTop: 12 }}>
+            <div className="u-margin-top-12px" >
               <ErrorState error={error} compact />
               {describeError(error).status === 403 ? (
-                <div style={{ marginTop: 8 }}><Button size="sm" onClick={() => setStepUpOpen(true)}>重新验证管理员身份</Button></div>
+                <div className="u-margin-top-8px" ><Button size="sm" onClick={() => setStepUpOpen(true)}>重新验证管理员身份</Button></div>
               ) : null}
             </div>
           ) : null}
-          <div className="callout callout-warning" style={{ marginTop: 12 }}>
-            <CircleAlert size={15} />
+          <div className="callout callout-warning u-margin-top-12px" >
+            <CircleAlert size={16} />
             <div>对账会冻结存在差异的钱包，需人工复核后再处理。</div>
           </div>
         </>
@@ -1582,7 +1573,7 @@ function AdjustmentDialog({
             <div>
               调整已写入账本。
               <br />
-              流水 {result.journalId ?? '未提供编号'}
+              流水 {result.journalId ?? '—'}
               {result.amount ? ` · 金额 ${formatMoneyMinor(result.amount)}` : ''}
               {result.available ? ` · 调整后可用 ${formatMoneyMinor(result.available)}` : ''}
             </div>
@@ -1623,17 +1614,17 @@ function AdjustmentDialog({
               我已核对钱包、调整方向、金额与原因，并确认执行本次调整。
             </label>
             {error ? (
-              <div style={{ marginTop: 12 }}>
+              <div className="u-margin-top-12px" >
                 <ErrorState error={error} compact />
                 {errorDetails?.status === 403 ? (
-                  <div style={{ marginTop: 8 }}>
+                  <div className="u-margin-top-8px" >
                     <Button size="sm" onClick={() => setStepUpOpen(true)}>重新验证管理员身份</Button>
                   </div>
                 ) : null}
               </div>
             ) : null}
-            <div className="callout callout-warning" style={{ marginTop: 14 }}>
-              <ShieldCheck size={15} />
+            <div className="callout callout-warning u-margin-top-14px" >
+              <ShieldCheck size={16} />
               <div>正常到账余额原则上不退回。异常资金、预占释放与账务更正应使用对账或退款流程。</div>
             </div>
           </>
@@ -1730,10 +1721,10 @@ function RefundDialog({
       ) : (
         <>
           <div className="callout callout-warning">
-            <CircleAlert size={15} />
+            <CircleAlert size={16} />
             <div>退款按原订单实际可退金额与审批条件处理。正常到账余额原则上不退回，已消费余额不支持用户主动退回。</div>
           </div>
-          <div className="field-row" style={{ marginTop: 16 }}>
+          <div className="field-row u-margin-top-16px" >
             <Field label="退款类型" required>
               <Select label="退款类型" value={kind} onChange={setKind} options={refundKindOptions} />
             </Field>
@@ -1745,10 +1736,10 @@ function RefundDialog({
             <textarea rows={3} value={reason} onChange={event => setReason(event.target.value)} maxLength={500} />
           </Field>
           {error ? (
-            <div style={{ marginTop: 12 }}>
+            <div className="u-margin-top-12px" >
               <ErrorState error={error} compact />
               {describeError(error).status === 403 ? (
-                <div style={{ marginTop: 8 }}><Button size="sm" onClick={() => setStepUpOpen(true)}>重新验证管理员身份</Button></div>
+                <div className="u-margin-top-8px" ><Button size="sm" onClick={() => setStepUpOpen(true)}>重新验证管理员身份</Button></div>
               ) : null}
             </div>
           ) : null}

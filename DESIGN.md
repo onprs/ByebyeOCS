@@ -23,7 +23,8 @@
 | `apps/admin/` | 正式 React/TypeScript 管理端 | 调用真实管理 API；无生产演示控制 |
 | `apps/client_flutter/` | 同一 Flutter Web/Android/iOS 工程 | Web 使用同源 Cookie，原生使用安全令牌存储 |
 | `api/openapi.yaml` | 实际 REST/SSE 契约 | 金额字符串、版本、权限、CSRF、幂等及错误语义 |
-| `deploy/`、`scripts/`、`configs/` | 原生构建、安装、代理、备份、恢复与检查 | 面向公开用户，不依赖维护者私有环境 |
+| `deploy/`、`configs/`、部署与打包脚本 | 原生构建、安装、代理、备份、恢复与检查 | 面向公开用户，不依赖维护者私有环境 |
+| `design/`、设计变量生成脚本 | 正式三端共享颜色、字级与尺寸 | 开发维护入口；生成 CSS 与 Dart 随各端构建 |
 | `prototypes/` | 已确认的三方向 React 视觉原型 | 合成数据，不承担正式账本或认证 |
 | `chaoxing-progress-research/` | 历史研究 | 保留原状；不读取实际凭据，不原样暴露实验开关 |
 
@@ -40,6 +41,8 @@
 ## 4. 外观
 
 首次默认 `graphite` 石墨：中性色、低饱和蓝、小圆角、细分隔线和紧凑排版。保留暖白/森林绿的 `grove` 青禾，以及墨蓝/靛蓝的 `indigo`。三套均支持浅色、深色及跟随系统。
+
+正式 UI 已依据[线上评审](docs/design/ui-review-online.md)完成首轮三端收敛。三种配色共用几何和密度；`design/tokens.json` 生成 CSS 与 Dart，统一 1,280px 内容区、可读字号、控件高度和详情/编辑面板，表格工作区按需放宽到 1,440px。正式组件规范与开发维护命令见[设计系统](docs/design/design-system.md)。本轮完成本地构建与浏览器检查，线上仍为此前部署版本。
 
 用户与管理员偏好独立保存并通过各自 API 同步。外观改变不改变业务数据。用排版、间距、边框组织层次，不堆砌彩色 KPI、渐变或装饰；状态不能只靠颜色表达。产品界面只呈现面向用户的状态和操作说明，开发和验证说明留在文档。
 

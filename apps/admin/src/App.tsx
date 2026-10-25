@@ -20,7 +20,7 @@ import { Button, EmptyState, PageHeader } from './components'
 function NotFoundPage() {
   return (
     <>
-      <PageHeader title="页面不存在" description="当前地址没有对应的管理页面。" />
+      <PageHeader title="页面不存在"  />
       <div className="card">
         <EmptyState
           title="未找到此页面"

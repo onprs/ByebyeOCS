@@ -83,7 +83,7 @@ class _ReceiptCard extends StatelessWidget {
             '删除申请已提交',
             style: TextStyle(
               color: colors.text,
-              fontSize: 23,
+              fontSize: 26,
               fontWeight: FontWeight.w600,
               letterSpacing: -0.4,
             ),
@@ -118,7 +118,7 @@ class _ReceiptCard extends StatelessWidget {
                         '最后已知状态',
                         style: TextStyle(
                           color: colors.textSecondary,
-                          fontSize: 11.5,
+                          fontSize: 12,
                         ),
                       ),
                     ),
@@ -201,7 +201,7 @@ class _ReceiptCard extends StatelessWidget {
             label,
             style: TextStyle(
               color: context.colors.textSecondary,
-              fontSize: 11.5,
+              fontSize: 12,
             ),
           ),
         ),
@@ -211,7 +211,7 @@ class _ReceiptCard extends StatelessWidget {
                   value,
                   style: TextStyle(
                     color: context.colors.text,
-                    fontSize: 11.5,
+                    fontSize: 12,
                     fontFamily: 'monospace',
                     height: 1.5,
                   ),
@@ -220,7 +220,7 @@ class _ReceiptCard extends StatelessWidget {
                   value,
                   style: TextStyle(
                     color: context.colors.text,
-                    fontSize: 11.5,
+                    fontSize: 12,
                     height: 1.5,
                   ),
                 ),

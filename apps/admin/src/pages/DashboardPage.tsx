@@ -4,20 +4,17 @@ import {
   ArrowRight,
   CheckCheck,
   CircleAlert,
-  Clock3,
   Cpu,
   Database,
   Gauge,
   HardDrive,
   ListTodo,
   RefreshCw,
-  Server,
-  ShieldCheck,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { hasPermission } from '../auth/permissions'
-import { getDashboard, getFinanceSummary, getHealth, getRuntimeSettings, listTasks } from '../api/endpoints'
+import { getDashboard, getHealth, getRuntimeSettings, listTasks } from '../api/endpoints'
 import type { AdminEvent, DashboardMetric, RuntimeResource } from '../api/types'
 import {
   Badge,
@@ -33,18 +30,10 @@ import {
 } from '../components'
 import {
   formatDateTime,
-  formatMoneyMinor,
   formatNumber,
 } from '../lib/format'
 import { useAdminEvents } from '../lib/useAdminEvents'
 import { useAsync } from '../lib/hooks'
-
-function metricTone(metric: DashboardMetric) {
-  if (metric.key.includes('attention') || metric.key.includes('failed')) return <Badge tone="amber">需关注</Badge>
-  if (metric.key.includes('running')) return <Badge tone="blue">执行中</Badge>
-  if (metric.key.includes('confirmed')) return <Badge tone="green">已确认</Badge>
-  return null
-}
 
 function resourceBadge(resource: RuntimeResource) {
   if (resource.state === 'healthy') return <Badge tone="green" dot>健康</Badge>
@@ -54,11 +43,11 @@ function resourceBadge(resource: RuntimeResource) {
 }
 
 function resourceIcon(key: string) {
-  if (key.includes('cpu')) return <Cpu size={13} />
-  if (key.includes('memory')) return <HardDrive size={13} />
-  if (key.includes('worker')) return <Gauge size={13} />
-  if (key.includes('tiku') || key.includes('question')) return <Database size={13} />
-  return <Activity size={13} />
+  if (key.includes('cpu')) return <Cpu size={14} />
+  if (key.includes('memory')) return <HardDrive size={14} />
+  if (key.includes('worker')) return <Gauge size={14} />
+  if (key.includes('tiku') || key.includes('question')) return <Database size={14} />
+  return <Activity size={14} />
 }
 
 function throughputPath(points: Array<{ observed: number | null; confirmed: number | null }>, key: 'observed' | 'confirmed'): string {
@@ -91,7 +80,6 @@ export function DashboardPage() {
   const navigate = useNavigate()
   const { me } = useAuth()
   const canReadEvents = hasPermission(me, 'events.read')
-  const canReadBilling = hasPermission(me, 'billing.read')
   const canReadOperations = hasPermission(me, 'operations.read')
   const dashboard = useAsync(() => getDashboard().then(response => response.data), [])
   const health = useAsync(() => getHealth('ready').then(response => response.data), [])
@@ -102,10 +90,6 @@ export function DashboardPage() {
         limit: 5,
       }).then(response => response.data),
     [],
-  )
-  const financeSummary = useAsync(
-    () => (canReadBilling ? getFinanceSummary().then(response => response.data) : Promise.resolve(null)),
-    [canReadBilling],
   )
   const runtimeInfo = useAsync(
     () => (canReadOperations ? getRuntimeSettings().then(response => response.data) : Promise.resolve(null)),
@@ -128,7 +112,6 @@ export function DashboardPage() {
         dashboard.reload()
         health.reload()
         tasksPreview.reload()
-        financeSummary.reload()
       }, 1200)
     },
   })
@@ -148,7 +131,7 @@ export function DashboardPage() {
       const left = a.occurred_at ? Date.parse(a.occurred_at) : 0
       const right = b.occurred_at ? Date.parse(b.occurred_at) : 0
       return right - left
-    }).slice(0, 6)
+    }).slice(0, 5)
   }, [data?.events, liveEvents])
 
   const attentionMetric = data?.metrics.find(metric => metric.key.includes('attention'))
@@ -162,7 +145,7 @@ export function DashboardPage() {
       <>
         <PageHeader
           title="运行总览"
-          description="服务运行、任务吞吐、资源状态与需要处理的异常。"
+
         />
         <LoadingBlock rows={5} />
       </>
@@ -174,7 +157,7 @@ export function DashboardPage() {
       <>
         <PageHeader
           title="运行总览"
-          description="服务运行、任务吞吐、资源状态与需要处理的异常。"
+
         />
         <ErrorState error={dashboard.error} onRetry={dashboard.reload} />
       </>
@@ -199,11 +182,11 @@ export function DashboardPage() {
     <>
       <PageHeader
         title="运行总览"
-        description="服务运行、任务吞吐、资源状态与需要处理的异常。"
+
         actions={
           <>
-            <span className="form-hint">{generatedAt ? `生成于 ${formatDateTime(generatedAt)}` : '未提供生成时间'}</span>
-            <Button onClick={() => { dashboard.reload(); health.reload(); tasksPreview.reload(); financeSummary.reload(); runtimeInfo.reload() }} loading={dashboard.loading || tasksPreview.loading || financeSummary.loading}>
+            <span className="form-hint">{generatedAt ? `生成于 ${formatDateTime(generatedAt)}` : '—'}</span>
+            <Button onClick={() => { dashboard.reload(); health.reload(); tasksPreview.reload(); runtimeInfo.reload() }} loading={dashboard.loading || tasksPreview.loading}>
               <RefreshCw size={14} /> 刷新
             </Button>
           </>
@@ -217,7 +200,7 @@ export function DashboardPage() {
         </span>
         {attentionValue !== null && attentionValue > 0 ? (
           <button className="strip-action" onClick={() => navigate('/tasks?group=attention')}>
-            <CircleAlert size={13} /> {formatNumber(attentionValue)} 项需要关注 <ArrowRight size={12} />
+            <CircleAlert size={14} /> {formatNumber(attentionValue)} 项需要关注 <ArrowRight size={14} />
           </button>
         ) : data.sections_unavailable.length ? (
           <span className="strip-secondary">部分汇总暂未提供：{data.sections_unavailable.join('、')}</span>
@@ -226,10 +209,7 @@ export function DashboardPage() {
 
       <section className="metric-band" aria-label="关键指标">
         {metricSlots.slice(0, 4).map(metric => (
-          <Metric key={metric.key} label={metric.label} value={metric.value} unit={metric.unit}>
-            {metric.hint ? <span>{metric.hint}</span> : null}
-            {metricTone(metric)}
-          </Metric>
+          <Metric key={metric.key} label={metric.label} value={metric.value} unit={metric.unit} />
         ))}
       </section>
 
@@ -237,7 +217,7 @@ export function DashboardPage() {
         <Card>
           <CardHeader
             title={chartPoints.length ? '任务运行趋势' : '任务状态分布'}
-            subtitle={chartPoints.length ? '执行观察与平台确认分别统计，不以观察进度推断平台完成。' : '暂无趋势数据，展示当前任务分布。'}
+
             actions={
               chartPoints.length ? (
                 <div className="chart-legend">
@@ -312,22 +292,20 @@ export function DashboardPage() {
           ) : (
             <div className="chart-empty">暂无趋势或状态数据</div>
           )}
-          <div className="queue-facts">
-            <span>执行中 <b>{formatNumber(data.limits.running_tasks)}</b></span>
-            <span>等待队列 <b>{formatNumber(data.limits.queued_tasks)}</b></span>
-            <span>等待验证 <b>{formatNumber(Number(data.metrics.find(metric => metric.key === 'waiting_verification')?.value ?? NaN))}</b></span>
-            <span>需要关注 <b>{formatNumber(attentionValue)}</b></span>
-          </div>
-          <div className="card-footer-link">
-            <ShieldCheck size={11} /> 平台确认需要查询依据，观察进度不等于完成。
-            <button onClick={() => navigate('/tasks')}>查看任务 <ArrowRight size={12} /></button>
-          </div>
-        </Card>
+          {chartPoints.length ? (
+            <div className="queue-facts">
+              <span>执行中 <b>{formatNumber(data.limits.running_tasks)}</b></span>
+              <span>等待队列 <b>{formatNumber(data.limits.queued_tasks)}</b></span>
+              <span>等待验证 <b>{formatNumber(Number(data.metrics.find(metric => metric.key === 'waiting_verification')?.value ?? NaN))}</b></span>
+              <span>需要关注 <b>{formatNumber(attentionValue)}</b></span>
+            </div>
+          ) : null}
+   </Card>
 
         <Card>
           <CardHeader
             title="运行资源"
-            subtitle="运行状态与当前并发。"
+
             actions={
               healthReady ? <Badge tone="green" dot>就绪</Badge> : healthUnavailable ? <Badge tone="amber">未确认</Badge> : null
             }
@@ -340,9 +318,9 @@ export function DashboardPage() {
                     <span>{resourceIcon(resource.key)} {resource.label}</span>
                   </div>
                   <div className="resource-row-value">
-                    {resource.value ?? '未提供'}
+                    {resource.value ?? '—'}
                     {resource.unit ? <small>{resource.unit}</small> : null}
-                    {resourceBadge(resource) ? <span style={{ marginLeft: 6 }}>{resourceBadge(resource)}</span> : null}
+                    {resourceBadge(resource) ? <span className="u-margin-left-6px" >{resourceBadge(resource)}</span> : null}
                   </div>
                 </div>
               ))}
@@ -355,12 +333,9 @@ export function DashboardPage() {
             <span>账号默认并发 <b>{formatNumber(Number.isFinite(accountConcurrency) ? accountConcurrency : null)}</b></span>
             <span>执行中任务 <b>{formatNumber(data.limits.running_tasks)}</b></span>
             <span>等待队列 <b>{formatNumber(data.limits.queued_tasks)}</b></span>
-            <span>同一任务 <b>{data.limits.task_exclusive === null ? '未提供' : data.limits.task_exclusive ? '独占执行' : '未启用独占'}</b></span>
+            <span>同一任务 <b>{data.limits.task_exclusive === null ? '—' : data.limits.task_exclusive ? '独占执行' : '未启用独占'}</b></span>
           </div>
-          <div className="card-footer-link">
-            <Server size={11} /> 执行名额与并发限制
-            <button onClick={() => navigate('/settings?section=runtime')}>运行设置 <ArrowRight size={12} /></button>
-          </div>
+
         </Card>
       </div>
 
@@ -368,8 +343,8 @@ export function DashboardPage() {
         <Card>
           <CardHeader
             title="正在处理"
-            subtitle="执行、验证与需要关注的任务。"
-            actions={<Badge tone="blue"><ListTodo size={11} /> {tasksPreview.data?.items.length ?? 0} 项</Badge>}
+
+            actions={<Badge tone="blue"><ListTodo size={14} /> {tasksPreview.data?.items.length ?? 0} 项</Badge>}
           />
           {tasksPreview.loading && !tasksPreview.data ? (
             <LoadingBlock rows={3} />
@@ -388,9 +363,9 @@ export function DashboardPage() {
                 >
                   <div className="compact-row-main">
                     <b>{task.title}</b>
-                    <span>{task.course_title ?? '未提供课程'}</span>
+                    <span>{task.course_title ?? '—'}</span>
                   </div>
-                  <span className="compact-row-user mono">{task.user_id ?? '未提供'}</span>
+                  <span className="compact-row-user mono">{task.user_id ?? '—'}</span>
                   <TaskStateBadge state={task.state} label={task.state_label ?? undefined} />
                 </button>
               ))}
@@ -402,54 +377,13 @@ export function DashboardPage() {
           ) : (
             <EmptyState title="暂无进行中的任务" description="当前没有执行、验证或需要关注的任务。" />
           )}
-          <div className="card-footer-link">
-            <Activity size={11} /> 最近更新 {formatDateTime(tasksPreview.data?.items[0]?.updated_at ?? null)}
-            <button onClick={() => navigate('/tasks')}>全部任务 <ArrowRight size={12} /></button>
-          </div>
-        </Card>
 
-        <Card>
-          <CardHeader
-            title="财务摘要"
-            subtitle="支付成功与余额到账分别记录，汇总覆盖完整账本。"
-            actions={financeSummary.data ? <Badge tone="blue">全量</Badge> : null}
-          />
-          {!canReadBilling ? (
-            <EmptyState title="当前角色没有财务读取权限" description="财务页面需要财务读取权限。" />
-          ) : financeSummary.loading && !financeSummary.data ? (
-            <LoadingBlock rows={3} />
-          ) : financeSummary.error ? (
-            <div style={{ padding: 16 }}>
-              <ErrorState error={financeSummary.error} onRetry={financeSummary.reload} compact />
-            </div>
-          ) : financeSummary.data ? (
-            <>
-              <div className="finance-summary">
-                <div className="finance-summary-main">
-                  <span>钱包可用余额</span>
-                  <b>{formatMoneyMinor(financeSummary.data.current.wallets.available_minor)}</b>
-                </div>
-                <div className="finance-summary-grid">
-                  <span>钱包 <b>{formatNumber(financeSummary.data.current.wallets.count)} 个 · 冻结 {formatNumber(financeSummary.data.current.wallets.frozen_count)} 个</b></span>
-                  <span>支付成功未入账 <b>{formatMoneyMinor(financeSummary.data.current.paid_not_credited.amount_minor)} · {formatNumber(financeSummary.data.current.paid_not_credited.count)} 笔</b></span>
-                  <span>订单待核对 <b>{formatMoneyMinor(financeSummary.data.current.orders_needs_review.amount_minor)} · {formatNumber(financeSummary.data.current.orders_needs_review.count)} 笔</b></span>
-                  <span>退款处理中 <b>{formatMoneyMinor(financeSummary.data.current.refunds_open.amount_minor)} · {formatNumber(financeSummary.data.current.refunds_open.count)} 笔</b></span>
-                </div>
-              </div>
-              <div className="card-footer-link">
-                <ShieldCheck size={11} /> 付款返回不会直接增加余额
-                <button onClick={() => navigate('/finance')}>财务详情 <ArrowRight size={12} /></button>
-              </div>
-            </>
-          ) : (
-            <EmptyState title="暂无财务摘要" description="账本尚未产生可汇总的记录。" />
-          )}
         </Card>
 
         <Card>
           <CardHeader
             title="实时事件"
-            subtitle="运行状态变化会实时显示；连接中断时显示为已断开。"
+
             actions={
               canReadEvents ? (
                 <Badge tone={live.connection === 'connected' ? 'green' : live.connection === 'connecting' ? 'blue' : 'amber'} dot>
@@ -486,7 +420,7 @@ export function DashboardPage() {
                   }}
                 >
                   <span className={`event-icon ${eventTone(event)}`}>
-                    {event.type.includes('confirm') ? <CheckCheck size={12} /> : event.type.includes('attention') ? <CircleAlert size={12} /> : <Activity size={12} />}
+                    {event.type.includes('confirm') ? <CheckCheck size={14} /> : event.type.includes('attention') ? <CircleAlert size={14} /> : <Activity size={14} />}
                   </span>
                   <span className="event-copy">
                     <b>{event.title}</b>
@@ -499,25 +433,11 @@ export function DashboardPage() {
           ) : (
             <EmptyState title="暂无实时事件" description="暂无可显示的事件，运行状态以页面摘要为准。" />
           )}
-          <div className="card-footer-link">
-            {!canReadEvents ? (
-              <><ShieldCheck size={11} /> 当前角色没有事件读取权限</>
-            ) : live.connection === 'connected' ? (
-              <><Clock3 size={11} /> 事件持续接收中</>
-            ) : (
-              <><CircleAlert size={11} /> 事件流未连接，可刷新页面获取最新状态</>
-            )}
-            {canReadEvents && live.connection !== 'connected' ? (
-              <button onClick={() => { live.reconnect(); dashboard.reload(); tasksPreview.reload(); financeSummary.reload() }}>重试连接 <RefreshCw size={11} /></button>
-            ) : null}
-          </div>
+
         </Card>
       </div>
 
-      <div className="dashboard-footer">
-        <span><ShieldCheck size={11} /> 需要关注的异常会显示最新状态</span>
-        <Button variant="ghost" size="sm" onClick={() => navigate('/settings')}>查看配置 <ArrowRight size={12} /></Button>
-      </div>
+
     </>
   )
 }

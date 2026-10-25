@@ -682,7 +682,7 @@ function displayValue(value: unknown): string {
       .map(([key, item]) => `${key} ${displayValue(item)}`)
       .join('；')
   }
-  return '未提供'
+  return '—'
 }
 
 function formatFindings(value: unknown): Array<{ key: string; value: string }> {
@@ -1055,7 +1055,7 @@ function normalizeCapabilityResources(object: JsonObject): RuntimeResource[] {
     resources.push({
       key,
       label,
-      value: value || (enabled === false ? '未启用' : enabled === true ? '可用' : '未提供'),
+      value: value || (enabled === false ? '未启用' : enabled === true ? '可用' : '—'),
       unit: null,
       state: mapServiceState(null, enabled),
     })

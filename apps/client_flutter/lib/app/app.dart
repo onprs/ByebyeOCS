@@ -29,7 +29,14 @@ class ByebyeOcsApp extends ConsumerWidget {
         GlobalCupertinoLocalizations.delegate,
       ],
       builder: (context, child) {
-        return LifecycleScope(child: child ?? const SizedBox.shrink());
+        return Theme(
+          data: AppTheme.build(
+            appearance.colorScheme,
+            Theme.of(context).brightness,
+            compact: MediaQuery.sizeOf(context).width >= 760,
+          ),
+          child: LifecycleScope(child: child ?? const SizedBox.shrink()),
+        );
       },
     );
   }

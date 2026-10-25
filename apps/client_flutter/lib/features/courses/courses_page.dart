@@ -51,9 +51,7 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             PageHeader(
-              eyebrow: '我的课程',
               title: '课程与任务点',
-              description: '从学习通同步课程，区分真实任务点与普通学习资料。',
               actions: [
                 AsyncButton(
                   label: '同步课程',
@@ -91,7 +89,7 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
                         '学习通身份 · ${user.displayLabel} · ${user.schoolLabel}',
                         style: TextStyle(
                           color: context.colors.textSecondary,
-                          fontSize: 12.5,
+                          fontSize: 13,
                         ),
                       ),
                     ),
@@ -349,7 +347,7 @@ class _FilterChip extends StatelessWidget {
           label,
           style: TextStyle(
             color: selected ? colors.accent : colors.textSecondary,
-            fontSize: 12.5,
+            fontSize: 13,
             fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
           ),
         ),
@@ -431,7 +429,7 @@ class _CourseCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              CourseArt(seed: course.id, height: 104),
+              CourseArt(seed: course.id),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                 child: Column(
@@ -449,7 +447,7 @@ class _CourseCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: colors.textSecondary,
-                              fontSize: 11.5,
+                              fontSize: 12,
                             ),
                           ),
                         ),
@@ -475,7 +473,7 @@ class _CourseCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: colors.text,
-                        fontSize: 16.5,
+                        fontSize: 16,
                         fontWeight: FontWeight.w600,
                         height: 1.35,
                       ),
@@ -487,7 +485,7 @@ class _CourseCard extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(
                         color: colors.textSecondary,
-                        fontSize: 12.5,
+                        fontSize: 13,
                       ),
                     ),
                     const SizedBox(height: 14),
@@ -514,7 +512,7 @@ class _CourseCard extends StatelessWidget {
                           ' / ${course.taskPointCount}',
                           style: TextStyle(
                             color: colors.muted,
-                            fontSize: 12.5,
+                            fontSize: 13,
                           ),
                         ),
                       ],
@@ -530,7 +528,7 @@ class _CourseCard extends StatelessWidget {
                                 ? '课程暂无任务点'
                                 : course.incompleteTaskPointCount > 0
                                     ? '${course.incompleteTaskPointCount} 个任务点待完成'
-                                    : '每一步，都已记录',
+                                    : '任务点已全部确认',
                             style: TextStyle(
                               color: course.incompleteTaskPointCount > 0
                                   ? colors.textSecondary

@@ -56,15 +56,15 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         {items.map(item => (
           <div className={`toast ${item.tone}`} key={item.id} role={item.tone === 'error' ? 'alert' : 'status'}>
             {item.tone === 'success' ? (
-              <CheckCircle2 size={15} />
+              <CheckCircle2 size={16} />
             ) : item.tone === 'error' || item.tone === 'warning' ? (
-              <AlertCircle size={15} />
+              <AlertCircle size={16} />
             ) : (
-              <Info size={15} />
+              <Info size={16} />
             )}
             <span className="toast-copy">{item.message}</span>
             <button className="toast-close" aria-label="关闭提示" onClick={() => remove(item.id)}>
-              <X size={13} />
+              <X size={14} />
             </button>
           </div>
         ))}

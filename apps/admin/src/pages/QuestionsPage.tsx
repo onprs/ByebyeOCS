@@ -86,7 +86,7 @@ function usageRate(usage: QuestionUsageSummary | null): number | null {
 }
 
 function usageCostLabel(usage: QuestionUsageSummary | null): string {
-  if (!usage) return '未提供'
+  if (!usage) return '—'
   if (usage.cost_state === 'unpriced') return '价格待公布'
   if (usage.automatic_charging === false) return '自动扣费未启用'
   if (usage.cost_micros) return formatPriceMicros(usage.cost_micros)
@@ -167,9 +167,8 @@ export function QuestionsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="题库"
         title="题库查询与用量"
-        description="核对查询、token 用量与答案报告；公开模型、价格与缓存策略在题库维护面板管理。"
+
         actions={
           <>
             <Button onClick={refreshAll} loading={modelsLoading || usage.loading || queries.loading}>
@@ -199,8 +198,8 @@ export function QuestionsPage() {
         </div>
         <div className="metric">
           <div className="metric-label">精确缓存命中</div>
-          <div className="metric-value">{rate === null ? <span className="muted" style={{ fontSize: 15 }}>未提供</span> : `${rate.toFixed(1)}%`}</div>
-          <div className="metric-foot"><span>{usage.data?.cache_hits === null || usage.data?.cache_hits === undefined ? '命中次数未提供' : `${formatNumber(usage.data.cache_hits)} 次命中`}</span></div>
+          <div className="metric-value">{rate === null ? <span className="muted u-font-size-14px" >—</span> : `${rate.toFixed(1)}%`}</div>
+          <div className="metric-foot"><span>{usage.data?.cache_hits === null || usage.data?.cache_hits === undefined ? '—' : `${formatNumber(usage.data.cache_hits)} 次命中`}</span></div>
         </div>
         <div className="metric">
           <div className="metric-label">Token 用量</div>
@@ -209,7 +208,7 @@ export function QuestionsPage() {
         </div>
         <div className="metric">
           <div className="metric-label">成本状态</div>
-          <div className="metric-value" style={{ fontSize: 17 }}>{usageCostLabel(usage.data)}</div>
+          <div className="metric-value u-font-size-16px" >{usageCostLabel(usage.data)}</div>
           <div className="metric-foot">
             {usage.data?.incomplete_queries ? <Badge tone="amber">{usage.data.incomplete_queries} 次用量不完整</Badge> : <span>实际扣费受计费配置约束</span>}
           </div>
@@ -217,17 +216,17 @@ export function QuestionsPage() {
       </section>
 
       {usage.error && !usage.data ? (
-        <div style={{ marginBottom: 16 }}><ErrorState error={usage.error} onRetry={usage.reload} compact /></div>
+        <div className="u-margin-bottom-16px" ><ErrorState error={usage.error} onRetry={usage.reload} compact /></div>
       ) : null}
 
       <Card>
         <CardHeader
           title="模型与价格"
-          subtitle="只读目录；公开条目、价格版本、默认与缓存策略在题库维护面板修改。"
+
           actions={
             <div className="card-header-actions">
               {models.length ? <Badge tone="blue">{models.length} 个条目</Badge> : null}
-              <Button size="sm" onClick={openTikuPanel}><ExternalLink size={13} /> 题库面板</Button>
+              <Button size="sm" onClick={openTikuPanel}><ExternalLink size={14} /> 题库面板</Button>
             </div>
           }
         />
@@ -235,7 +234,7 @@ export function QuestionsPage() {
         {modelsLoading && !models.length ? (
           <LoadingBlock rows={3} />
         ) : modelsError && !models.length ? (
-          <div style={{ padding: 18 }}><ErrorState error={modelsError} onRetry={() => void loadModels()} /></div>
+          <div className="u-padding-18px" ><ErrorState error={modelsError} onRetry={() => void loadModels()} /></div>
         ) : models.length ? (
           <div className="table-scroll">
             <table className="data-table">
@@ -295,7 +294,7 @@ export function QuestionsPage() {
           <EmptyState
             title="题库尚未发布公开模型"
             description="在题库维护面板发布模型、价格与缓存策略后，用户才能选择模型。"
-            action={<Button variant="primary" onClick={openTikuPanel}><ExternalLink size={13} /> 打开题库面板</Button>}
+            action={<Button variant="primary" onClick={openTikuPanel}><ExternalLink size={14} /> 打开题库面板</Button>}
           />
         )}
       </Card>
@@ -311,7 +310,7 @@ export function QuestionsPage() {
             <div><span>不完整用量</span><b>不自动扣费</b></div>
           </div>
           <div className="model-table-note">
-            <Sparkles size={12} /> 结算以实际 token 与查询冻结的价格版本为依据；页面展示不参与计费。
+            <Sparkles size={14} /> 结算以实际 token 与查询冻结的价格版本为依据；页面展示不参与计费。
           </div>
         </Card>
         <Card>
@@ -323,7 +322,7 @@ export function QuestionsPage() {
             <div><span>答案报告</span><b>本页复核</b></div>
           </div>
           <div className="model-table-note">
-            <ShieldCheck size={12} /> 题库面板使用独立维护账号；本页不保存密钥或改写价格。
+            <ShieldCheck size={14} /> 题库面板使用独立维护账号；本页不保存密钥或改写价格。
           </div>
         </Card>
       </div>
@@ -331,10 +330,10 @@ export function QuestionsPage() {
       <Card className="section-gap">
         <CardHeader
           title="查询与用量"
-          subtitle="跨用户查询展示模型、作答方式、缓存与 token 分解。"
+
           actions={
             <Button size="sm" onClick={() => { queries.reload(); usage.reload() }} loading={queries.loading}>
-              <RefreshCw size={13} /> 刷新
+              <RefreshCw size={14} /> 刷新
             </Button>
           }
         />
@@ -384,7 +383,7 @@ export function QuestionsPage() {
         {queries.loading && !queries.data ? (
           <LoadingBlock rows={4} />
         ) : queries.error && !queries.data ? (
-          <div style={{ padding: 18 }}><ErrorState error={queries.error} onRetry={queries.reload} /></div>
+          <div className="u-padding-18px" ><ErrorState error={queries.error} onRetry={queries.reload} /></div>
         ) : visibleQueries.length ? (
           <>
             <div className="table-scroll">
@@ -408,15 +407,15 @@ export function QuestionsPage() {
                       <td>
                         <button className="cell-button" onClick={() => setQueryDetail(query)}>
                           <span className="cell-stack">
-                            <span className="cell-primary">{query.question_title ?? '题目内容已过期或未提供'}</span>
+                            <span className="cell-primary">{query.question_title ?? '—'}</span>
                             {query.content_expired ? <span className="cell-sub">题目与答案已过保留期</span> : null}
                             <span className="cell-sub mono">{query.id}</span>
                           </span>
                         </button>
                       </td>
-                      <td className="mono muted">{query.user_ref ?? '未提供'}</td>
-                      <td>{query.model_display_name ?? query.model_id ?? '未提供'}</td>
-                      <td>{query.mode === 'cache_first' ? '缓存优先' : query.mode === 'always_llm' ? '每次模型' : query.mode ?? '未提供'}</td>
+                      <td className="mono muted">{query.user_ref ?? '—'}</td>
+                      <td>{query.model_display_name ?? query.model_id ?? '—'}</td>
+                      <td>{query.mode === 'cache_first' ? '缓存优先' : query.mode === 'always_llm' ? '每次模型' : query.mode ?? '—'}</td>
                       <td>{query.cache_hit ? <Badge tone="green">命中 · 0 token</Badge> : <span className="muted">未命中</span>}</td>
                       <td>{formatNumber(query.total_tokens)}</td>
                       <td><Badge tone={queryStatusTone(query.status)}>{query.status_label ?? query.status}</Badge></td>
@@ -431,7 +430,6 @@ export function QuestionsPage() {
                 </tbody>
               </table>
             </div>
-            <p className="mobile-scroll-hint">左右滑动查看完整表格</p>
             <Pagination
               hasPrevious={queryCursor.hasPrevious}
               hasNext={Boolean(queries.data?.next_cursor)}
@@ -449,9 +447,7 @@ export function QuestionsPage() {
 
       <QuestionReportsPanel canManage={canManage} />
 
-      <div className="card-footer-link" style={{ border: 0, paddingLeft: 2 }}>
-        <ShieldCheck size={12} /> 模型密钥与上游地址不会在此页面显示；公开条目、价格版本、查询事实与用量汇总用于核对。
-      </div>
+
 
       <QueryDetailDialog
         query={queryDetail}
@@ -479,7 +475,7 @@ function SearchFilter({ value, onChange }: { value: string; onChange: (value: st
       />
       {value ? (
         <button type="button" aria-label="清除搜索" onClick={() => onChange('')}>
-          <X size={12} />
+          <X size={14} />
         </button>
       ) : null}
     </label>
@@ -535,24 +531,24 @@ function QueryDetailDialog({
     <>
       <Modal open={Boolean(query)} onClose={onClose} title="题库查询详情" description={query.id} drawer wide>
         <div className="account-detail-header">
-          <span className="workspace-icon" style={{ width: 40, height: 40 }}><Sparkles size={18} /></span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <h2>{query.question_title ?? '题目内容已过期或未提供'}</h2>
-            <p>{query.model_display_name ?? query.model_id ?? '未提供模型'} · {query.mode === 'cache_first' ? '缓存优先' : query.mode === 'always_llm' ? '每次模型' : query.mode ?? '未提供作答方式'}</p>
+          <span className="workspace-icon u-width-40px u-height-40px" ><Sparkles size={16} /></span>
+          <div className="u-flex-1 u-min-width-0" >
+            <h2>{query.question_title ?? '—'}</h2>
+            <p>{query.model_display_name ?? query.model_id ?? '—'} · {query.mode === 'cache_first' ? '缓存优先' : query.mode === 'always_llm' ? '每次模型' : query.mode ?? '—'}</p>
           </div>
           <Badge tone={query.cache_hit ? 'green' : 'neutral'}>{query.cache_hit ? '缓存命中' : '未命中缓存'}</Badge>
         </div>
         <dl className="detail-list">
-          <div><dt>用户摘要</dt><dd className="mono">{query.user_ref ?? '未提供'}</dd></div>
+          <div><dt>用户摘要</dt><dd className="mono">{query.user_ref ?? '—'}</dd></div>
           <div><dt>状态</dt><dd>{query.status_label ?? query.status}</dd></div>
-          <div><dt>缓存条目</dt><dd className="mono">{query.cache_entry_id ? truncateMiddle(query.cache_entry_id, 10, 8) : '未提供'}</dd></div>
+          <div><dt>缓存条目</dt><dd className="mono">{query.cache_entry_id ? truncateMiddle(query.cache_entry_id, 10, 8) : '—'}</dd></div>
           <div><dt>输入 token</dt><dd>{formatNumber(query.input_tokens)}</dd></div>
           <div><dt>输出 token</dt><dd>{formatNumber(query.output_tokens)}</dd></div>
           <div><dt>总 token</dt><dd>{formatNumber(query.total_tokens)}</dd></div>
           <div><dt>用量完整性</dt><dd>{query.usage_complete ? '完整' : '待核对，不自动扣费'}</dd></div>
-          <div><dt>价格状态</dt><dd>{query.pricing_state ? pricingStateLabels[query.pricing_state] ?? query.pricing_state : '未提供'}</dd></div>
-          <div><dt>计费状态</dt><dd>{query.billing_state ? billingStateLabels[query.billing_state] ?? query.billing_state : '未提供'}{query.charged ? ' · 已扣费' : ''}</dd></div>
-          <div><dt>成本</dt><dd>{query.cost_micros ? formatPriceMicros(query.cost_micros) : '未提供'}</dd></div>
+          <div><dt>价格状态</dt><dd>{query.pricing_state ? pricingStateLabels[query.pricing_state] ?? query.pricing_state : '—'}</dd></div>
+          <div><dt>计费状态</dt><dd>{query.billing_state ? billingStateLabels[query.billing_state] ?? query.billing_state : '—'}{query.charged ? ' · 已扣费' : ''}</dd></div>
+          <div><dt>成本</dt><dd>{query.cost_micros ? formatPriceMicros(query.cost_micros) : '—'}</dd></div>
           <div><dt>查询时间</dt><dd>{formatDateTime(query.created_at)}</dd></div>
         </dl>
         {query.answer_preview ? (
@@ -575,14 +571,14 @@ function QueryDetailDialog({
           </div>
         ) : null}
         {query.usage_complete ? null : (
-          <div className="callout callout-warning" style={{ marginTop: 14 }}>
-            <CircleAlert size={15} />
+          <div className="callout callout-warning u-margin-top-14px" >
+            <CircleAlert size={16} />
             <div>用量不完整的查询不会自动扣费，需要人工核对用量记录。</div>
           </div>
         )}
         <div className="detail-actions">
           {canManage && query.cache_hit && query.cache_entry_id ? (
-            <Button variant="danger" onClick={() => setInvalidateOpen(true)}><X size={13} /> 标记缓存失效</Button>
+            <Button variant="danger" onClick={() => setInvalidateOpen(true)}><X size={14} /> 标记缓存失效</Button>
           ) : null}
           <Button variant="ghost" onClick={onClose}>关闭</Button>
         </div>

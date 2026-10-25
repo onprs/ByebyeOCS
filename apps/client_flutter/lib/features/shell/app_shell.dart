@@ -6,10 +6,15 @@ import '../../app/providers.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
 
-class AppShell extends ConsumerWidget {
+class AppShell extends ConsumerStatefulWidget {
   const AppShell({super.key, required this.child});
-
   final Widget child;
+  @override
+  ConsumerState<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends ConsumerState<AppShell> {
+  final _pageStorage = PageStorageBucket();
 
   static const _destinations = <_ShellDestination>[
     _ShellDestination(
@@ -43,7 +48,7 @@ class AppShell extends ConsumerWidget {
   ];
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final location = GoRouterState.of(context).matchedLocation;
     final colors = context.colors;
     final narrow = MediaQuery.sizeOf(context).width < 760;
@@ -66,9 +71,25 @@ class AppShell extends ConsumerWidget {
             ),
             Expanded(
               child: ClipRect(
-                child: KeyedSubtree(
-                  key: ValueKey(location),
-                  child: child,
+                child: PageStorage(
+                  bucket: _pageStorage,
+                  child: AnimatedSwitcher(
+                    duration: Duration(
+                        milliseconds:
+                            MediaQuery.disableAnimationsOf(context) ? 0 : 160),
+                    transitionBuilder: (child, animation) => FadeTransition(
+                      opacity: animation,
+                      child: AnimatedBuilder(
+                        animation: animation,
+                        builder: (context, child) => Transform.translate(
+                            offset: Offset(0, 4 * (1 - animation.value)),
+                            child: child),
+                        child: child,
+                      ),
+                    ),
+                    child: KeyedSubtree(
+                        key: ValueKey(location), child: widget.child),
+                  ),
                 ),
               ),
             ),
@@ -114,77 +135,42 @@ class _TopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     return Container(
-      height: narrow ? 58 : 68,
+      height: narrow ? 56 : AppMetrics.topbarHeight,
       decoration: BoxDecoration(
-        color: colors.background.withValues(alpha: 0.97),
+        color: colors.surface,
         border: Border(bottom: BorderSide(color: colors.border)),
       ),
-      padding: EdgeInsets.symmetric(horizontal: narrow ? 16 : 28),
-      child: Row(
-        children: [
-          AppLogo(
-            compact: narrow,
-            onTap: () => onNavigate('/home'),
-          ),
-          if (!narrow) ...[
-            const SizedBox(width: 42),
-            Expanded(
-              child: Row(
-                children: [
-                  for (var index = 0; index < destinations.length; index++)
-                    _DesktopNavItem(
-                      destination: destinations[index],
-                      selected: selectedIndex == index,
-                      onTap: () => onNavigate(destinations[index].path),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: AppMetrics.contentWidth),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+                horizontal: narrow ? 16 : AppMetrics.pagePadding),
+            child: Row(
+              children: [
+                AppLogo(compact: narrow, onTap: () => onNavigate('/home')),
+                if (!narrow) ...[
+                  const SizedBox(width: 32),
+                  Expanded(
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 520),
+                        child: SlidingSelectionBar(
+                          labels:
+                              destinations.map((item) => item.label).toList(),
+                          selectedIndex: selectedIndex,
+                          onSelected: (index) =>
+                              onNavigate(destinations[index].path),
+                        ),
+                      ),
                     ),
-                ],
-              ),
+                  ),
+                ] else
+                  const Spacer(),
+                _AvatarButton(initial: initial, onTap: onSettings),
+              ],
             ),
-          ] else
-            const Spacer(),
-          if (!narrow) ...[
-            const SizedBox(width: 12),
-            _AvatarButton(initial: initial, onTap: onSettings),
-          ] else
-            _AvatarButton(initial: initial, onTap: onSettings),
-        ],
-      ),
-    );
-  }
-}
-
-class _DesktopNavItem extends StatelessWidget {
-  const _DesktopNavItem({
-    required this.destination,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final _ShellDestination destination;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Padding(
-      padding: const EdgeInsets.only(right: 4),
-      child: TextButton(
-        onPressed: onTap,
-        style: TextButton.styleFrom(
-          foregroundColor: selected ? colors.accent : colors.textSecondary,
-          backgroundColor: selected ? colors.accentSoft : Colors.transparent,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          minimumSize: const Size(0, 44),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(colors.radius - 3),
-          ),
-        ),
-        child: Text(
-          destination.label,
-          style: TextStyle(
-            fontSize: 13.5,
-            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
           ),
         ),
       ),
@@ -239,84 +225,33 @@ class _AvatarButton extends StatelessWidget {
 }
 
 class _BottomNavigation extends StatelessWidget {
-  const _BottomNavigation({
-    required this.destinations,
-    required this.selectedIndex,
-    required this.onNavigate,
-  });
-
+  const _BottomNavigation(
+      {required this.destinations,
+      required this.selectedIndex,
+      required this.onNavigate});
   final List<_ShellDestination> destinations;
   final int selectedIndex;
   final ValueChanged<String> onNavigate;
-
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Container(
+    return DecoratedBox(
       decoration: BoxDecoration(
-        color: colors.surface,
-        border: Border(top: BorderSide(color: colors.border)),
-      ),
+          color: colors.surface,
+          border: Border(top: BorderSide(color: colors.border))),
       child: SafeArea(
         top: false,
-        child: SizedBox(
-          height: 64,
-          child: Row(
-            children: [
-              for (var index = 0; index < destinations.length; index++)
-                Expanded(
-                  child: _BottomNavItem(
-                    destination: destinations[index],
-                    selected: selectedIndex == index,
-                    onTap: () => onNavigate(destinations[index].path),
-                  ),
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _BottomNavItem extends StatelessWidget {
-  const _BottomNavItem({
-    required this.destination,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final _ShellDestination destination;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Semantics(
-      button: true,
-      selected: selected,
-      label: destination.label,
-      child: InkWell(
-        onTap: onTap,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              selected ? destination.activeIcon : destination.icon,
-              size: 22,
-              color: selected ? colors.accent : colors.textSecondary,
-            ),
-            const SizedBox(height: 3),
-            Text(
-              destination.shortLabel,
-              style: TextStyle(
-                color: selected ? colors.accent : colors.textSecondary,
-                fontSize: 11.5,
-                fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-              ),
-            ),
+        child: SlidingSelectionBar(
+          labels: destinations.map((item) => item.shortLabel).toList(),
+          icons: [
+            for (var index = 0; index < destinations.length; index++)
+              selectedIndex == index
+                  ? destinations[index].activeIcon
+                  : destinations[index].icon
           ],
+          vertical: true,
+          selectedIndex: selectedIndex,
+          onSelected: (index) => onNavigate(destinations[index].path),
         ),
       ),
     );

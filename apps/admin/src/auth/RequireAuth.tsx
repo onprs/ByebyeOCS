@@ -20,11 +20,11 @@ export function BootScreen({ error, onRetry }: { error?: unknown; onRetry?: () =
       ) : (
         <>
           <span className="loading-inline">
-            <LoaderCircle size={18} className="spinner" />
+            <LoaderCircle size={16} className="spinner" />
             正在加载管理控制台
           </span>
-          <p style={{ marginTop: 12 }}>
-            <ShieldCheck size={12} /> 正在检查会话与认证能力
+          <p className="u-margin-top-12px" >
+            <ShieldCheck size={14} /> 正在检查会话与认证能力
           </p>
         </>
       )}

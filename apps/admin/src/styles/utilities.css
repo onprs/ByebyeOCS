@@ -1,0 +1,45 @@
+/* 从原有静态内联样式提取的通用工具类。 */
+.u-margin-top-12px { margin-top: 12px; }
+.u-font-size-14px { font-size: 14px; }
+.u-display-none { display: none; }
+.u-padding-0-0-16px { padding: 0 0 16px; }
+.u-margin-top-8px { margin-top: 8px; }
+.u-margin-left-6px { margin-left: 6px; }
+.u-padding-16px { padding: 16px; }
+.u-font-size-26px { font-size: 26px; }
+.u-font-size-16px { font-size: 16px; }
+.u-margin-bottom-16px { margin-bottom: 16px; }
+.u-padding-18px { padding: 18px; }
+.u-margin-top-16px { margin-top: 16px; }
+.u-white-space-normal { white-space: normal; }
+.u-max-width-280px { max-width: 280px; }
+.u-max-width-260px { max-width: 260px; }
+.u-margin-top-6px { margin-top: 6px; }
+.u-margin-top-14px { margin-top: 14px; }
+.u-min-width-180px { min-width: 180px; }
+.u-max-width-300px { max-width: 300px; }
+.u-white-space-pre-wrap { white-space: pre-wrap; }
+.u-overflow-wrap-anywhere { overflow-wrap: anywhere; }
+.u-max-width-360px { max-width: 360px; }
+.u-width-40px { width: 40px; }
+.u-height-40px { height: 40px; }
+.u-flex-1 { flex: 1; }
+.u-min-width-0 { min-width: 0; }
+.u-margin-bottom-18px { margin-bottom: 18px; }
+.u-margin-top-10px { margin-top: 10px; }
+.u-grid-template-columns-repeat-3-minmax-0-1fr { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.u-padding-top-16px { padding-top: 16px; }
+.u-grid-template-columns-repeat-2-minmax-0-1fr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.u-margin-top-20px { margin-top: 20px; }
+.u-width-42px { width: 42px; }
+.u-min-width-130px { min-width: 130px; }
+.u-display-flex { display: flex; }
+.u-justify-content-space-between { justify-content: space-between; }
+.u-gap-8px { gap: 8px; }
+.u-margin-bottom-6px { margin-bottom: 6px; }
+.u-font-size-12px { font-size: 12px; }
+.u-gap-10px { gap: 10px; }
+.u-margin-bottom-8px { margin-bottom: 8px; }
+.u-margin-top-7px { margin-top: 7px; }
+.u-margin-top-4px { margin-top: 4px; }
+.u-margin-top-18px { margin-top: 18px; }

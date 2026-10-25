@@ -1,0 +1,15 @@
+/* 动效只改变位移、透明度和选中指示器的几何。 */
+.selection-track { isolation: isolate; }
+.nav-region { position: relative; }
+.selection-track > :not(.selection-indicator) { position: relative; z-index: 1; }
+.selection-indicator { position: absolute; top: 0; left: 0; z-index: 0; pointer-events: none; border-radius: var(--radius-sm); background: var(--accent-soft); transition: transform 220ms cubic-bezier(.2, 0, 0, 1), width 220ms cubic-bezier(.2, 0, 0, 1), height 220ms cubic-bezier(.2, 0, 0, 1), opacity 120ms ease-out; }
+.nav-region > .selection-indicator { background: var(--sidebar-active); }
+.tabs > .selection-indicator { background: transparent; border-radius: 0; }
+.tabs > .selection-indicator::after { position: absolute; content: ""; right: 10px; bottom: 0; left: 10px; height: 2px; border-radius: 2px; background: var(--accent); }
+.page-view { animation: page-enter 160ms ease-out both; }
+.skeleton::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, var(--surface-strong), transparent); transform: translateX(-100%); animation: shimmer 1.2s linear infinite; }
+@keyframes page-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes shimmer { to { transform: translateX(100%); } }
+@media (prefers-reduced-motion: reduce) {
+  .selection-indicator, .page-view, .skeleton::after { transition: none; animation: none; }
+}

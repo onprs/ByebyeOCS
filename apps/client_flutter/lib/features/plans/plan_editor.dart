@@ -18,10 +18,8 @@ Future<LearningPlan?> showPlanEditor(
   String? initialCourseId,
   bool hasActiveTasks = false,
 }) {
-  return showModalBottomSheet<LearningPlan>(
+  return showAdaptivePanel<LearningPlan>(
     context: context,
-    isScrollControlled: true,
-    useSafeArea: true,
     builder: (context) => PlanEditorSheet(
       plan: plan,
       initialCourseId: initialCourseId,
@@ -293,8 +291,8 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
     final narrow = media.size.width < 760;
     return Container(
       width: double.infinity,
-      constraints: BoxConstraints(maxWidth: narrow ? double.infinity : 780),
-      height: narrow ? height * 0.94 : height * 0.9,
+      constraints: const BoxConstraints(maxWidth: AppMetrics.drawerWidth),
+      height: narrow ? height * 0.9 : height,
       child: Padding(
         padding: EdgeInsets.only(bottom: media.viewInsets.bottom),
         child: Column(
@@ -523,13 +521,13 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                       course.title,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 13.5),
+                      style: const TextStyle(fontSize: 14),
                     ),
                     subtitle: Text(
                       '${course.teacher ?? '教师待同步'} · ${course.chapterCount} 章节',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 11.5),
+                      style: const TextStyle(fontSize: 12),
                     ),
                     onChanged: _saving
                         ? null
@@ -606,7 +604,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                 chapter.taskPoints.isEmpty
                     ? '本章暂无任务点'
                     : '${chapter.taskPoints.length} 个任务点',
-                style: const TextStyle(fontSize: 11.5),
+                style: const TextStyle(fontSize: 12),
               ),
               onChanged: _saving
                   ? null
@@ -702,7 +700,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                       '题库策略',
                       style: TextStyle(
                         color: colors.text,
-                        fontSize: 13.5,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -711,7 +709,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                       '策略随安排版本冻结；开启后自动查询并提交测验答案。',
                       style: TextStyle(
                         color: colors.textSecondary,
-                        fontSize: 11.5,
+                        fontSize: 12,
                         height: 1.5,
                       ),
                     ),
@@ -741,7 +739,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
               '关闭时不会查询或提交测验答案。',
               style: TextStyle(
                 color: colors.textSecondary,
-                fontSize: 11.5,
+                fontSize: 12,
                 height: 1.5,
               ),
             ),
@@ -837,7 +835,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
               _answerMode.description,
               style: TextStyle(
                 color: colors.textSecondary,
-                fontSize: 11.5,
+                fontSize: 12,
                 height: 1.5,
               ),
             ),
@@ -846,7 +844,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
               '提交结果以平台复核为准。',
               style: TextStyle(
                 color: colors.textSecondary,
-                fontSize: 11,
+                fontSize: 12,
                 height: 1.5,
               ),
             ),
@@ -911,7 +909,7 @@ class _FieldLabel extends StatelessWidget {
           text,
           style: TextStyle(
             color: colors.text,
-            fontSize: 13.5,
+            fontSize: 14,
             fontWeight: FontWeight.w600,
           ),
         ),
@@ -919,7 +917,7 @@ class _FieldLabel extends StatelessWidget {
           const Spacer(),
           Text(
             trailing!,
-            style: TextStyle(color: colors.muted, fontSize: 11.5),
+            style: TextStyle(color: colors.muted, fontSize: 12),
           ),
         ],
       ],

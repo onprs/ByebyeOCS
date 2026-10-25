@@ -57,9 +57,9 @@ void main() {
     expect(find.text('我的钱包'), findsOneWidget);
     expect(find.text('¥54.50'), findsOneWidget);
     expect(find.text('设计思维与创新方法'), findsWidgets);
-    expect(find.textContaining('门课程已同步'), findsOneWidget);
+    expect(find.text('已同步课程'), findsOneWidget);
     expect(find.text('你的学习安排'), findsOneWidget);
-    expect(find.text('最近进展'), findsOneWidget);
+    expect(find.text('最近确认'), findsOneWidget);
   });
 
   testWidgets('课程列表支持搜索与同步入口', (tester) async {
@@ -276,7 +276,7 @@ void main() {
   testWidgets('设置页展示身份、外观、通知与数据请求', (tester) async {
     await pumpTestPage(tester, const SettingsPage());
 
-    expect(find.text('身份、外观与隐私'), findsOneWidget);
+    expect(find.text('设置'), findsOneWidget);
     expect(find.text('学习通身份'), findsOneWidget);
     expect(find.text('沈知夏'), findsOneWidget);
     expect(find.text('石墨'), findsOneWidget);
@@ -284,7 +284,14 @@ void main() {
     expect(find.text('靛蓝'), findsOneWidget);
     expect(find.text('任务需要处理时提醒'), findsOneWidget);
     expect(find.text('题库查询'), findsOneWidget);
-    expect(find.widgetWithText(TextButton, '打开'), findsOneWidget);
+    expect(find.widgetWithText(ListTile, '题库查询'), findsOneWidget);
+    expect(find.text('为什么任务显示等待验证？'), findsNothing);
+    await tester.ensureVisible(find.text('常见问题'));
+    await tester.tap(find.text('常见问题'));
+    await settle(tester);
+    expect(find.text('为什么任务显示等待验证？'), findsOneWidget);
+    await tester.tap(find.byTooltip('关闭'));
+    await settle(tester);
     expect(find.text('服务连接'), findsOneWidget);
     expect(find.text('申请导出'), findsOneWidget);
     expect(find.text('申请删除'), findsOneWidget);

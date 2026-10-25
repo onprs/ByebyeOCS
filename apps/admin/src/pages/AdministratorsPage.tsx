@@ -75,9 +75,8 @@ export function AdministratorsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="平台管理"
         title="管理员与角色"
-        description="仅所有者可查看管理员与角色、变更角色和撤销会话。敏感操作需要再次验证管理员身份。"
+
         actions={
           <Button onClick={() => users.reload()} loading={users.loading}>
             <RefreshCw size={14} /> 刷新
@@ -87,7 +86,7 @@ export function AdministratorsPage() {
 
       <div className="system-strip">
         <span>
-          <ShieldCheck size={13} />
+          <ShieldCheck size={14} />
           <b>所有者专属入口</b>
           <span className="strip-secondary">管理员账号由平台维护；本页面不展示密码、动态验证码或会话令牌</span>
         </span>
@@ -99,7 +98,7 @@ export function AdministratorsPage() {
       {users.error && !users.data ? (
         isStepUpRequired(users.error) ? (
           <div className="error-state not-configured">
-            <span className="error-state-icon"><KeyRound size={17} /></span>
+            <span className="error-state-icon"><KeyRound size={16} /></span>
             <div className="error-state-copy">
               <h3>需要重新验证管理员身份</h3>
               <p>查看管理员需要再次验证身份，当前验证已过期。</p>
@@ -119,8 +118,8 @@ export function AdministratorsPage() {
           <Card>
             <CardHeader
               title="管理员账号"
-              subtitle="变更角色或撤销会话后立即生效。停用与删除暂不支持。"
-              actions={<Badge tone="blue"><Users size={11} /> {directory.admin_users.length} 个账号</Badge>}
+
+              actions={<Badge tone="blue"><Users size={14} /> {directory.admin_users.length} 个账号</Badge>}
             />
             {directory.admin_users.length ? (
               <div className="table-scroll">
@@ -157,10 +156,10 @@ export function AdministratorsPage() {
                         <td>
                           <div className="model-row-actions">
                             <Button size="sm" variant="ghost" onClick={() => setEditing(admin)} disabled={admin.disabled}>
-                              <UserCog size={12} /> 变更角色
+                              <UserCog size={14} /> 变更角色
                             </Button>
                             <Button size="sm" variant="ghost" onClick={() => setRevoking(admin)}>
-                              <X size={12} /> 撤销会话
+                              <X size={14} /> 撤销会话
                             </Button>
                           </div>
                         </td>
@@ -172,15 +171,13 @@ export function AdministratorsPage() {
             ) : (
               <EmptyState title="暂无管理员记录" description="尚未添加管理员账号。" />
             )}
-            <div className="card-footer-link">
-              <CircleAlert size={12} /> 停用与删除暂不支持；角色变更与撤销会话会记录操作人和理由。
-            </div>
+
           </Card>
 
           <Card className="section-gap">
             <CardHeader
               title="角色与权限"
-              subtitle="权限范围与角色对应；执行操作时会再次核对当前权限。"
+
             />
             <div className="role-permission-grid">
               {directory.roles.map(role => (
@@ -197,9 +194,7 @@ export function AdministratorsPage() {
                 </div>
               ))}
             </div>
-            <div className="card-footer-link">
-              <ShieldCheck size={12} /> 角色变更会立即影响该管理员的权限；最后一个启用中的所有者不能被移出。
-            </div>
+
           </Card>
         </>
       ) : null}
@@ -232,9 +227,9 @@ export function AdministratorsPage() {
 
 function CalloutText() {
   return (
-    <div className="settings-body" style={{ padding: '0 0 16px' }}>
+    <div className="settings-body u-padding-0-0-16px" >
       <div className="callout">
-        <KeyRound size={15} />
+        <KeyRound size={16} />
         <div>只有所有者可以查看和变更管理员；敏感操作需要再次验证。密码与动态验证码不会在列表、弹窗或审计内容中显示。</div>
       </div>
     </div>
@@ -344,15 +339,15 @@ function RoleChangeDialog({
           </Field>
           {admin.role === 'owner' ? (
             <div className="callout callout-warning">
-              <CircleAlert size={15} />
+              <CircleAlert size={16} />
               <div>移出所有者会改变全部权限；最后一个启用中的所有者不能被移出。</div>
             </div>
           ) : null}
           {error ? (
-            <div style={{ marginTop: 12 }}>
+            <div className="u-margin-top-12px" >
               <ErrorState error={error} compact />
               {isStepUpRequired(error) ? (
-                <div style={{ marginTop: 8 }}>
+                <div className="u-margin-top-8px" >
                   <Button size="sm" onClick={onStepUpNeeded}>重新验证管理员身份</Button>
                 </div>
               ) : null}
@@ -442,17 +437,17 @@ function RevokeSessionsDialog({
       ) : (
         <>
           <div className="callout callout-warning">
-            <CircleAlert size={15} />
+            <CircleAlert size={16} />
             <div>撤销后该管理员需要重新使用密码与动态验证码登录才能继续操作。</div>
           </div>
           <Field label="操作理由" required hint="至少 4 个字符，最多 500 个字符；会记录到审计。">
             <textarea rows={3} value={reason} onChange={event => setReason(event.target.value)} maxLength={500} />
           </Field>
           {error ? (
-            <div style={{ marginTop: 12 }}>
+            <div className="u-margin-top-12px" >
               <ErrorState error={error} compact />
               {isStepUpRequired(error) ? (
-                <div style={{ marginTop: 8 }}>
+                <div className="u-margin-top-8px" >
                   <Button size="sm" onClick={onStepUpNeeded}>重新验证管理员身份</Button>
                 </div>
               ) : null}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { SelectionTrack } from '../components/SelectionTrack'
 import {
   Check,
   CircleAlert,
@@ -83,22 +84,22 @@ export function SettingsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="平台设置"
         title="系统设置"
-        description="外观偏好跨设备同步；计费与运行参数变更会保留版本。"
-        actions={<Badge tone="green"><ShieldCheck size={12} /> 敏感值不在此页面回显</Badge>}
+
       />
 
       <div className="settings-layout">
-        <nav className="settings-nav" aria-label="设置分组">
+        <nav aria-label="设置分组">
+          <SelectionTrack className="settings-nav" value={effectiveSection}>
           {allowedSections.map(item => (
             <button key={item.id} className={effectiveSection === item.id ? 'active' : ''} onClick={() => select(item.id)}>
-              <item.icon size={15} />
+              <item.icon size={16} />
               {item.label}
             </button>
           ))}
+          </SelectionTrack>
         </nav>
-        <div>
+        <div key={effectiveSection} className="settings-content page-view">
           {effectiveSection === 'appearance' ? <AppearancePanel /> : null}
           {effectiveSection === 'billing' ? <BillingPanel /> : null}
           {effectiveSection === 'runtime' ? <RuntimePanel /> : null}
@@ -119,7 +120,7 @@ function AppearancePanel() {
       <Card>
         <CardHeader
           title="外观偏好"
-          subtitle="保存后会在其他管理设备使用，不影响普通用户偏好。"
+
           actions={
             <Badge tone={status === 'ready' ? 'green' : status === 'unavailable' ? 'amber' : status === 'error' ? 'red' : 'neutral'}>
               {status === 'ready' ? '已同步' : status === 'loading' ? '同步中' : status === 'unavailable' ? '同步未配置' : status === 'error' ? '同步失败' : '未同步'}
@@ -128,21 +129,20 @@ function AppearancePanel() {
         />
         <div className="settings-body">
           {unavailable ? (
-            <div style={{ marginBottom: 18 }}>
+            <div className="u-margin-bottom-18px" >
               <Callout tone="warning">
                 外观同步暂不可用，修改无法保存到其他设备。当前使用默认外观。请稍后重新读取。
               </Callout>
-              <div style={{ marginTop: 10 }}>
-                <Button size="sm" onClick={reload}><RefreshCw size={13} /> 重新读取偏好</Button>
+              <div className="u-margin-top-10px" >
+                <Button size="sm" onClick={reload}><RefreshCw size={14} /> 重新读取偏好</Button>
               </div>
             </div>
           ) : null}
-          {error && !unavailable ? <div style={{ marginBottom: 18 }}><ErrorState error={error} onRetry={reload} compact /></div> : null}
+          {error && !unavailable ? <div className="u-margin-bottom-18px" ><ErrorState error={error} onRetry={reload} compact /></div> : null}
 
           <div className="settings-block">
             <div className="settings-block-heading">
               <h3>配色方案</h3>
-              <p>默认石墨。切换配色不改变权限、路由或数据。</p>
             </div>
             <div className="palette-options" role="group" aria-label="选择配色方案">
               {colorSchemeOptions.map(option => (
@@ -157,7 +157,7 @@ function AppearancePanel() {
                   <span className="palette-sample" aria-hidden="true"><i /><span><b /><em /><em /></span></span>
                   <span className="palette-caption">
                     <b>{option.label}</b>
-                    {preferences.color_scheme === option.value ? <Check size={12} /> : option.value === 'graphite' ? <small>默认</small> : null}
+                    {preferences.color_scheme === option.value ? <Check size={14} /> : option.value === 'graphite' ? <small>默认</small> : null}
                   </span>
                   <small className="palette-description">{option.description}</small>
                 </button>
@@ -189,10 +189,9 @@ function AppearancePanel() {
 
           <div className="settings-save-row">
             <span className="form-hint">
-              当前偏好版本：{preferences.version > 0 ? `v${preferences.version}` : '未提供版本'}
               {saving ? ' · 正在保存' : ''}
             </span>
-            <Button onClick={reload} disabled={saving}><RefreshCw size={13} /> 重新读取</Button>
+            <Button onClick={reload} disabled={saving}><RefreshCw size={14} /> 重新读取</Button>
           </div>
         </div>
       </Card>
@@ -320,7 +319,7 @@ function BillingPanel() {
       <Card>
         <CardHeader
           title="计费与价格"
-          subtitle="主服务按平台已确认的有效任务点计量；价格版本保留历史版本。"
+
           actions={<Badge tone={configured ? 'green' : 'amber'}>{configured ? '服务价格已配置' : '服务价格未配置'}</Badge>}
         />
         <div className="settings-body">
@@ -331,7 +330,7 @@ function BillingPanel() {
             <>
               <div className="billing-status">
                 <div><span>服务价格</span><b>{formatPriceMicros(billing.data.service.price_micros)} / {billing.data.service.unit_label ?? '单位'}</b></div>
-                <div><span>价格版本</span><b>{billing.data.service.price_version ?? '未提供'}</b></div>
+                <div><span>价格版本</span><b>{billing.data.service.price_version ?? '—'}</b></div>
                 <div><span>实际扣费</span><b>{automatic ? '已启用' : '未启用'}</b></div>
                 <div><span>最近更新</span><b>{formatDateTime(billing.data.updated_at)}</b></div>
               </div>
@@ -386,13 +385,13 @@ function BillingPanel() {
                 <div><span>题库实际扣费</span><b>{billing.data.effective_tiku_charge_enabled ? '生效' : '不生效'}</b></div>
               </div>
               {serviceCharge && !billing.data.charging_allowed ? (
-                <Callout tone="warning" icon={<CircleAlert size={15} />}>
+                <Callout tone="warning" icon={<CircleAlert size={16} />}>
                   扣费开关已打开，但当前运行时未授权实际扣费，不会产生扣费。
                 </Callout>
               ) : null}
 
               <div className="settings-section-title">支付渠道</div>
-              <div className="billing-status" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))' }}>
+              <div className="billing-status u-grid-template-columns-repeat-3-minmax-0-1fr" >
                 <div><span>服务商</span><b>{billing.data.payment_provider ?? '未配置'}</b></div>
                 <div><span>收银台</span><b>{billing.data.checkout_ready ? '已就绪' : '未就绪'}</b></div>
                 <div><span>退款能力</span><b>{billing.data.refund_ready ? '已就绪' : '未就绪'}</b></div>
@@ -420,17 +419,17 @@ function BillingPanel() {
                 <label className="native-check"><input type="checkbox" checked={refundEnabled} onChange={event => setRefundEnabled(event.target.checked)} disabled={saving || !canManage} />启用 ZPay 退款</label>
               </div>
               {serviceCharge && !configured ? (
-                <Callout tone="warning" icon={<CircleAlert size={15} />}>
+                <Callout tone="warning" icon={<CircleAlert size={16} />}>
                   服务价格尚未配置；保存前请先补全，页面不会自动启用扣费。
                 </Callout>
               ) : null}
-              {error ? <div style={{ marginTop: 14 }}><ErrorState error={error} compact /></div> : null}
+              {error ? <div className="u-margin-top-14px" ><ErrorState error={error} compact /></div> : null}
               <div className="settings-save-row">
-                <span className="form-hint">配置版本：{(billing.data.version ?? 0) > 0 ? `v${billing.data.version}` : '未提供'}</span>
-                <Button onClick={billing.reload} disabled={saving}><RefreshCw size={13} /> 重新读取</Button>
+                <span className="form-hint">配置版本：{(billing.data.version ?? 0) > 0 ? `v${billing.data.version}` : '—'}</span>
+                <Button onClick={billing.reload} disabled={saving}><RefreshCw size={14} /> 重新读取</Button>
                 {canManage ? (
                   <Button variant="primary" onClick={() => void save()} loading={saving}>
-                    <Save size={13} /> 保存计费设置
+                    <Save size={14} /> 保存计费设置
                   </Button>
                 ) : null}
               </div>
@@ -442,15 +441,15 @@ function BillingPanel() {
       <Card>
         <CardHeader
           title="题库计价"
-          subtitle="题库按公开模型的 token 价格单独计费，不在全局设置中维护费率。"
+
           actions={<Button size="sm" onClick={openTikuPanel}>打开题库面板</Button>}
         />
-        <div className="settings-body" style={{ paddingTop: 16 }}>
-          <div className="billing-status" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+        <div className="settings-body u-padding-top-16px" >
+          <div className="billing-status u-grid-template-columns-repeat-2-minmax-0-1fr" >
             <div><span>题库扣费开关</span><b>{billing.data?.tiku_charge_enabled ? '已启用' : '未启用'}</b></div>
             <div><span>计价方式</span><b>按公开模型 token 价格</b></div>
           </div>
-          <p className="form-hint" style={{ marginTop: 10 }}>
+          <p className="form-hint u-margin-top-10px" >
             输入、输出价格与缓存策略在题库维护面板按条目发布；实际查询使用查询时冻结的已发布价格。
           </p>
         </div>
@@ -484,7 +483,7 @@ function storageStatusLabel(value: string | null | undefined): string {
 }
 
 function byteLabel(value: string | null): string {
-  if (!value || !/^\d+$/.test(value)) return '未提供'
+  if (!value || !/^\d+$/.test(value)) return '—'
   const bytes = BigInt(value)
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let index = 0
@@ -558,44 +557,44 @@ function RuntimePanel() {
       <Card>
         <CardHeader
           title="运行与并发"
-          subtitle="当前运行的只读参数；运行参数在此仅查看，修改请通过部署配置。"
-          actions={<Button size="sm" onClick={runtime.reload} loading={runtime.loading}><RefreshCw size={13} /> 刷新</Button>}
+
+          actions={<Button size="sm" onClick={runtime.reload} loading={runtime.loading}><RefreshCw size={14} /> 刷新</Button>}
         />
         <div className="settings-body">
           {runtime.loading && !runtime.data ? <LoadingBlock rows={3} /> : null}
           {runtime.error && !runtime.data ? <ErrorState error={runtime.error} onRetry={runtime.reload} /> : null}
           {runtime.data ? (
             <>
-              <div className="detail-section-title"><Server size={13} /> 运行时配置</div>
+              <div className="detail-section-title"><Server size={14} /> 运行时配置</div>
               <FactList items={friendlyFacts(runtime.data.runtime, 'runtime')} empty="暂无可展示的运行时配置。" />
-              <div className="detail-section-title" style={{ marginTop: 20 }}><HardDrive size={13} /> 存储状态</div>
+              <div className="detail-section-title u-margin-top-20px" ><HardDrive size={14} /> 存储状态</div>
               <div className="settings-facts">
                 <div><span>存储状态</span><b>{storageStatusLabel(runtime.data.storage?.status)}</b></div>
-                <div><span>使用率</span><b>{runtime.data.storage?.used_percent === null || runtime.data.storage?.used_percent === undefined ? '未提供' : `${runtime.data.storage.used_percent.toFixed(1)}%`}</b></div>
+                <div><span>使用率</span><b>{runtime.data.storage?.used_percent === null || runtime.data.storage?.used_percent === undefined ? '—' : `${runtime.data.storage.used_percent.toFixed(1)}%`}</b></div>
                 <div><span>可用空间</span><b>{byteLabel(runtime.data.storage?.available_bytes ?? null)}</b></div>
               </div>
-              <div className="detail-section-title" style={{ marginTop: 20 }}><Cloud size={13} /> 备份状态</div>
+              <div className="detail-section-title u-margin-top-20px" ><Cloud size={14} /> 备份状态</div>
               <div className="settings-facts">
                 <div><span>备份状态</span><b>{backupStatusLabel(runtime.data.backup?.status)}</b></div>
                 <div><span>最近可恢复点</span><b>{formatDateTime(runtime.data.backup?.last_recoverable_at ?? null)}</b></div>
                 <div><span>最近验证</span><b>{formatDateTime(runtime.data.backup?.verified_at ?? null)}</b></div>
-                <div><span>是否要求新备份</span><b>{runtime.data.backup?.required === null || runtime.data.backup?.required === undefined ? '未提供' : runtime.data.backup.required ? '要求' : '不要求'}</b></div>
+                <div><span>是否要求新备份</span><b>{runtime.data.backup?.required === null || runtime.data.backup?.required === undefined ? '—' : runtime.data.backup.required ? '要求' : '不要求'}</b></div>
               </div>
-              <div className="detail-section-title" style={{ marginTop: 20 }}><Cloud size={13} /> 数据保留</div>
+              <div className="detail-section-title u-margin-top-20px" ><Cloud size={14} /> 数据保留</div>
               <FactList items={friendlyFacts(runtime.data.retention, 'retention')} empty="暂无数据保留配置。" />
-              <p className="form-hint" style={{ marginTop: 14 }}>生成时间：{formatDateTime(runtime.data.generated_at)}</p>
+              <p className="form-hint u-margin-top-14px" >生成时间：{formatDateTime(runtime.data.generated_at)}</p>
             </>
           ) : null}
         </div>
       </Card>
 
       <Card>
-        <CardHeader title="安全约束" subtitle="以下安全约束始终生效。" />
+        <CardHeader title="安全约束"  />
         <div className="security-rules">
-          <div><ShieldCheck size={15} /><span><b>凭据加密与脱敏</b><small>密码、Cookie、会话令牌和支付密钥不会在页面或日志中展示。</small></span><Badge tone="green">强制</Badge></div>
-          <div><Cpu size={15} /><span><b>同任务独占</b><small>同一账号的同一任务不会重复执行，不同任务可在限额内并发。</small></span><Badge tone="green">强制</Badge></div>
-          <div><CircleAlert size={15} /><span><b>异常停止</b><small>验证码、身份失效、403 与 429 停止相关操作，不无限重试。</small></span><Badge tone="green">强制</Badge></div>
-          <div><Wallet size={15} /><span><b>敏感财务验证</b><small>人工调整、退款与对账要求管理员再次验证和独立理由。</small></span><Badge tone="green">强制</Badge></div>
+          <div><ShieldCheck size={16} /><span><b>凭据加密与脱敏</b><small>密码、Cookie、会话令牌和支付密钥不会在页面或日志中展示。</small></span><Badge tone="green">强制</Badge></div>
+          <div><Cpu size={16} /><span><b>同任务独占</b><small>同一账号的同一任务不会重复执行，不同任务可在限额内并发。</small></span><Badge tone="green">强制</Badge></div>
+          <div><CircleAlert size={16} /><span><b>异常停止</b><small>验证码、身份失效、403 与 429 停止相关操作，不无限重试。</small></span><Badge tone="green">强制</Badge></div>
+          <div><Wallet size={16} /><span><b>敏感财务验证</b><small>人工调整、退款与对账要求管理员再次验证和独立理由。</small></span><Badge tone="green">强制</Badge></div>
         </div>
       </Card>
     </div>
@@ -643,8 +642,8 @@ function MaintenancePanel() {
       <Card>
         <CardHeader
           title="服务健康"
-          subtitle="检查服务就绪状态，不代表外部平台或支付渠道可用。"
-          actions={<Button size="sm" onClick={() => { live.reload(); ready.reload(); maintenance.reload() }}><RefreshCw size={13} /> 检查</Button>}
+
+          actions={<Button size="sm" onClick={() => { live.reload(); ready.reload(); maintenance.reload() }}><RefreshCw size={14} /> 检查</Button>}
         />
         <div className="settings-body">
           <div className="health-grid">
@@ -663,13 +662,13 @@ function MaintenancePanel() {
               </div>
             </div>
           </div>
-          {live.error ? <div style={{ marginTop: 14 }}><ErrorState error={live.error} onRetry={live.reload} compact /></div> : null}
-          {ready.error ? <div style={{ marginTop: 10 }}><ErrorState error={ready.error} onRetry={ready.reload} compact /></div> : null}
+          {live.error ? <div className="u-margin-top-14px" ><ErrorState error={live.error} onRetry={live.reload} compact /></div> : null}
+          {ready.error ? <div className="u-margin-top-10px" ><ErrorState error={ready.error} onRetry={ready.reload} compact /></div> : null}
         </div>
       </Card>
 
       <Card>
-        <CardHeader title="维护与保留" subtitle="查看维护状态与数据保留；此面板不执行命令。" />
+        <CardHeader title="维护与保留"  />
         <div className="settings-body">
           {maintenance.loading && !data ? <LoadingBlock rows={3} /> : null}
           {maintenance.error && !data ? <ErrorState error={maintenance.error} onRetry={maintenance.reload} /> : null}
@@ -677,37 +676,37 @@ function MaintenancePanel() {
             <>
               <div className="settings-facts">
                 <div><span>存储状态</span><b>{storageStatusLabel(data.storage?.status)}</b></div>
-                <div><span>存储使用率</span><b>{data.storage?.used_percent === null || data.storage?.used_percent === undefined ? '未提供' : `${data.storage.used_percent.toFixed(1)}%`}</b></div>
+                <div><span>存储使用率</span><b>{data.storage?.used_percent === null || data.storage?.used_percent === undefined ? '—' : `${data.storage.used_percent.toFixed(1)}%`}</b></div>
                 <div><span>可用空间</span><b>{byteLabel(data.storage?.available_bytes ?? null)}</b></div>
                 <div><span>备份状态</span><b>{backupStatusLabel(data.backup?.status)}</b></div>
                 <div><span>最近可恢复点</span><b>{formatDateTime(data.backup?.last_recoverable_at ?? null)}</b></div>
                 <div><span>最近验证</span><b>{formatDateTime(data.backup?.verified_at ?? null)}</b></div>
               </div>
               <FactList items={friendlyFacts(data.retention, 'retention')} empty="暂无数据保留配置。" />
-              <p className="form-hint" style={{ marginTop: 14 }}>生成时间：{formatDateTime(data.generated_at)}</p>
+              <p className="form-hint u-margin-top-14px" >生成时间：{formatDateTime(data.generated_at)}</p>
             </>
           ) : null}
         </div>
       </Card>
 
       <Card>
-        <CardHeader title="功能与可用性" subtitle="当前可用的功能与登录方式；关闭的功能不能在本页启用。" />
+        <CardHeader title="功能与可用性"  />
         <div className="settings-body">
           <div className="settings-facts">
-            <div><span>服务版本</span><b>{capabilities?.api_version ?? '未提供'}</b></div>
+            <div><span>服务版本</span><b>{capabilities?.api_version ?? '—'}</b></div>
             <div><span>最小客户端版本</span><b>{capabilities?.minimum_client_version ?? '未要求'}</b></div>
             <div><span>登录验证</span><b>{capabilities?.authentication.enabled ? '已启用' : '未启用'}</b></div>
             <div><span>自动扣费</span><b>{capabilities?.pricing.automatic_charging ? '已启用' : '未启用'}</b></div>
             <div><span>状态生成时间</span><b>{formatDateTime(capabilities?.generated_at ?? null)}</b></div>
           </div>
           <div className="capability-list">
-            <div className="detail-section-title"><Cpu size={13} /> 可用功能</div>
+            <div className="detail-section-title"><Cpu size={14} /> 可用功能</div>
             {features.length ? features.map(([key, enabled]) => (
               <div key={key}><span>{featureLabels[key] ?? key}</span><Badge tone={enabled ? 'green' : 'neutral'}>{enabled ? '已启用' : '关闭'}</Badge></div>
             )) : <p className="form-hint">暂无可确认的功能状态。</p>}
           </div>
           <div className="capability-list">
-            <div className="detail-section-title"><Globe2 size={13} /> 登录方式</div>
+            <div className="detail-section-title"><Globe2 size={14} /> 登录方式</div>
             {capabilities?.authentication.login_methods.length ? (
               capabilities.authentication.login_methods.map(method => <div key={method}><span>{authMethodLabel(method)}</span><Badge tone="neutral">可用</Badge></div>)
             ) : <p className="form-hint">暂无可用登录方式。</p>}

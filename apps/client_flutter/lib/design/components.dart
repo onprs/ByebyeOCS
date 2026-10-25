@@ -1,11 +1,39 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 
-import 'palette.dart';
 import 'theme.dart';
 
 enum StatusTone { neutral, accent, success, warning, danger, info }
+
+/// 桌面使用侧栏，手机使用底部弹层，表单内容共用同一份状态。
+Future<T?> showAdaptivePanel<T>({
+  required BuildContext context,
+  required WidgetBuilder builder,
+}) {
+  if (context.isNarrow) {
+    return showModalBottomSheet<T>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: false,
+      builder: builder,
+    );
+  }
+  return showDialog<T>(
+    context: context,
+    builder: (context) => Align(
+      alignment: Alignment.centerRight,
+      child: SizedBox(
+        width: AppMetrics.drawerWidth,
+        height: double.infinity,
+        child: Material(
+          color: context.colors.surface,
+          shape: Border(left: BorderSide(color: context.colors.border)),
+          child: builder(context),
+        ),
+      ),
+    ),
+  );
+}
 
 class StatusPill extends StatelessWidget {
   const StatusPill({
@@ -53,7 +81,7 @@ class StatusPill extends StatelessWidget {
             label,
             style: TextStyle(
               color: foreground,
-              fontSize: compact ? 11.5 : 12,
+              fontSize: AppTypography.fontCaption,
               fontWeight: FontWeight.w600,
               height: 1.2,
             ),
@@ -91,7 +119,7 @@ class AppLogo extends StatelessWidget {
             'ByebyeOCS',
             style: TextStyle(
               color: colors.text,
-              fontSize: 16.5,
+              fontSize: 16,
               fontWeight: FontWeight.w700,
               letterSpacing: -0.3,
             ),
@@ -146,102 +174,70 @@ class _LogoMarkPainter extends CustomPainter {
 }
 
 class PageHeader extends StatelessWidget {
-  const PageHeader({
-    super.key,
-    required this.title,
-    this.description,
-    this.eyebrow,
-    this.actions,
-    this.padding = const EdgeInsets.only(bottom: 22, top: 6),
-  });
-
+  const PageHeader(
+      {super.key,
+      required this.title,
+      this.actions,
+      this.padding = const EdgeInsets.only(bottom: 24)});
   final String title;
-  final String? description;
-  final String? eyebrow;
   final List<Widget>? actions;
   final EdgeInsets padding;
-
   @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final narrow = context.isNarrow;
-    return Padding(
-      padding: padding,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (eyebrow != null) ...[
-            Text(
-              eyebrow!,
-              style: TextStyle(
-                color: colors.muted,
-                fontSize: 11,
-                letterSpacing: 1.4,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 8),
-          ],
-          Wrap(
+  Widget build(BuildContext context) => Padding(
+        padding: padding,
+        child: Wrap(
             alignment: WrapAlignment.spaceBetween,
             crossAxisAlignment: WrapCrossAlignment.center,
             spacing: 16,
-            runSpacing: 14,
+            runSpacing: 16,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Semantics(
-                    header: true,
-                    child: Text(
-                      title,
+              Semantics(
+                  header: true,
+                  child: Text(title,
                       style: TextStyle(
-                        color: colors.text,
-                        fontSize: narrow ? 24 : 29,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: -0.7,
-                        height: 1.2,
-                      ),
-                    ),
-                  ),
-                  if (description != null) ...[
-                    const SizedBox(height: 7),
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 620),
-                      child: Text(
-                        description!,
-                        style: TextStyle(
-                          color: colors.textSecondary,
-                          fontSize: 14,
-                          height: 1.6,
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+                          color: context.colors.text,
+                          fontSize: AppTypography.fontTitle,
+                          fontWeight: FontWeight.w600,
+                          height: 1.2))),
               if (actions != null && actions!.isNotEmpty)
-                Wrap(spacing: 10, runSpacing: 10, children: actions!),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
+                Wrap(spacing: 8, runSpacing: 8, children: actions!),
+            ]),
+      );
+}
+
+class _SectionFraming extends InheritedWidget {
+  const _SectionFraming({required super.child});
+  @override
+  bool updateShouldNotify(_SectionFraming oldWidget) => false;
+}
+
+/// 一个内容表面中的分区共享边界，内部分组使用分隔线。
+class SectionGroup extends StatelessWidget {
+  const SectionGroup({super.key, required this.child});
+  final Widget child;
+  @override
+  Widget build(BuildContext context) => _SectionFraming(
+        child: Material(
+          color: context.colors.surface,
+          shape: RoundedRectangleBorder(
+              borderRadius: context.colors.cardRadius,
+              side: BorderSide(color: context.colors.border)),
+          child: child,
+        ),
+      );
 }
 
 class SectionCard extends StatelessWidget {
-  const SectionCard({
-    super.key,
-    this.title,
-    this.subtitle,
-    this.action,
-    required this.child,
-    this.padding = const EdgeInsets.all(20),
-    this.headerPadding,
-    this.color,
-  });
-
+  const SectionCard(
+      {super.key,
+      this.title,
+      this.subtitle,
+      this.action,
+      required this.child,
+      this.padding = const EdgeInsets.all(20),
+      this.headerPadding,
+      this.color,
+      this.framed = true});
   final String? title;
   final String? subtitle;
   final Widget? action;
@@ -249,41 +245,36 @@ class SectionCard extends StatelessWidget {
   final EdgeInsets padding;
   final EdgeInsets? headerPadding;
   final Color? color;
-
+  final bool framed;
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Container(
-      decoration: BoxDecoration(
-        color: color ?? colors.surface,
-        borderRadius: colors.cardRadius,
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          if (title != null)
-            SectionCardHeader(
+    final hasFrame = framed &&
+        context.dependOnInheritedWidgetOfExactType<_SectionFraming>() == null;
+    return _SectionFraming(
+        child: Container(
+      decoration: hasFrame
+          ? BoxDecoration(
+              color: color ?? colors.surface,
+              borderRadius: colors.cardRadius,
+              border: Border.all(color: colors.border))
+          : null,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        if (title != null)
+          SectionCardHeader(
               title: title!,
               subtitle: subtitle,
               action: action,
               padding:
-                  headerPadding ?? const EdgeInsets.fromLTRB(20, 18, 18, 0),
-            ),
-          Padding(
+                  headerPadding ?? const EdgeInsets.fromLTRB(20, 18, 20, 0)),
+        Padding(
             padding: title == null
                 ? padding
                 : EdgeInsets.fromLTRB(
-                    padding.left,
-                    16,
-                    padding.right,
-                    padding.bottom,
-                  ),
-            child: child,
-          ),
-        ],
-      ),
-    );
+                    padding.left, 16, padding.right, padding.bottom),
+            child: child),
+      ]),
+    ));
   }
 }
 
@@ -331,7 +322,7 @@ class SectionCardHeader extends StatelessWidget {
                     subtitle!,
                     style: TextStyle(
                       color: colors.textSecondary,
-                      fontSize: 12.5,
+                      fontSize: 13,
                       height: 1.5,
                     ),
                   ),
@@ -395,7 +386,7 @@ class EmptyState extends StatelessWidget {
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: colors.text,
-                  fontSize: 15,
+                  fontSize: 14,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -466,7 +457,7 @@ class ErrorPanel extends StatelessWidget {
                   message,
                   style: TextStyle(
                     color: colors.text,
-                    fontSize: 13.5,
+                    fontSize: 14,
                     height: 1.55,
                   ),
                 ),
@@ -479,7 +470,7 @@ class ErrorPanel extends StatelessWidget {
               '问题编号 $requestId',
               style: TextStyle(
                 color: colors.textSecondary,
-                fontSize: 11.5,
+                fontSize: 12,
                 fontFamily: 'monospace',
               ),
             ),
@@ -573,93 +564,233 @@ class LoadingList extends StatelessWidget {
   }
 }
 
-class SkeletonBlock extends StatelessWidget {
-  const SkeletonBlock({
+/// 顶栏、底栏和页签共用等宽选项与连续移动的选中背景。
+class SlidingSelectionBar extends StatefulWidget {
+  const SlidingSelectionBar({
     super.key,
-    this.height = 18,
-    this.width,
-    this.radius = 7,
+    required this.labels,
+    required this.selectedIndex,
+    required this.onSelected,
+    this.icons,
+    this.vertical = false,
   });
+  final List<String> labels;
+  final List<IconData>? icons;
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+  final bool vertical;
 
-  final double height;
-  final double? width;
-  final double radius;
+  @override
+  State<SlidingSelectionBar> createState() => _SlidingSelectionBarState();
+}
+
+class _SlidingSelectionBarState extends State<SlidingSelectionBar> {
+  bool _animate = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) setState(() => _animate = true);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Container(
-      height: height,
-      width: width,
-      decoration: BoxDecoration(
-        color: colors.surfaceSubtle,
-        borderRadius: BorderRadius.circular(radius),
-        border: Border.all(color: colors.border.withValues(alpha: 0.55)),
+    final labels = widget.labels;
+    final icons = widget.icons;
+    final selectedIndex = widget.selectedIndex;
+    final vertical = widget.vertical;
+    final duration = Duration(
+        milliseconds:
+            !_animate || MediaQuery.disableAnimationsOf(context) ? 0 : 220);
+    return LayoutBuilder(builder: (context, constraints) {
+      final itemWidth = constraints.maxWidth / labels.length;
+      return SizedBox(
+        height: vertical ? 64 : AppMetrics.touchHeight,
+        child: Stack(children: [
+          AnimatedPositioned(
+            duration: duration,
+            curve: Curves.easeOutCubic,
+            left: itemWidth * selectedIndex.clamp(0, labels.length - 1) + 4,
+            width: itemWidth - 8,
+            top: 4,
+            bottom: 4,
+            child: AnimatedOpacity(
+              opacity: selectedIndex >= 0 ? 1 : 0,
+              duration: duration,
+              child: DecoratedBox(
+                  decoration: BoxDecoration(
+                      color: colors.accentSoft,
+                      borderRadius: colors.buttonRadius)),
+            ),
+          ),
+          Row(children: [
+            for (var index = 0; index < labels.length; index++)
+              Expanded(
+                  child: Semantics(
+                selected: index == selectedIndex,
+                child: TextButton(
+                  onPressed: () => widget.onSelected(index),
+                  style: TextButton.styleFrom(
+                    minimumSize: Size.zero,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    foregroundColor: index == selectedIndex
+                        ? colors.accent
+                        : colors.textSecondary,
+                  ),
+                  child: SizedBox(
+                    height: vertical ? 64 : AppMetrics.touchHeight,
+                    child: vertical
+                        ? Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                                if (icons != null) Icon(icons[index], size: 20),
+                                const SizedBox(height: 4),
+                                Text(labels[index],
+                                    style: const TextStyle(fontSize: 12)),
+                              ])
+                        : Center(
+                            child: Text(labels[index],
+                                style: const TextStyle(fontSize: 14))),
+                  ),
+                ),
+              )),
+          ]),
+        ]),
+      );
+    });
+  }
+}
+
+class SkeletonBlock extends StatefulWidget {
+  const SkeletonBlock(
+      {super.key, this.width, this.height = 14, this.radius = 4});
+  final double? width;
+  final double height;
+  final double radius;
+  @override
+  State<SkeletonBlock> createState() => _SkeletonBlockState();
+}
+
+class _SkeletonBlockState extends State<SkeletonBlock>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+      vsync: this, duration: const Duration(milliseconds: 1200));
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (MediaQuery.disableAnimationsOf(context)) {
+      _controller.stop();
+    } else {
+      _controller.repeat();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return AnimatedBuilder(
+      animation: _controller,
+      child: Container(
+        width: widget.width,
+        height: widget.height,
+        decoration: BoxDecoration(
+            color: colors.surfaceSubtle,
+            borderRadius: BorderRadius.circular(widget.radius)),
+      ),
+      builder: (context, child) => ShaderMask(
+        blendMode: BlendMode.srcATop,
+        shaderCallback: (bounds) => LinearGradient(
+          begin: Alignment(-3 + _controller.value * 6, 0),
+          end: Alignment(-1 + _controller.value * 6, 0),
+          colors: [
+            colors.surfaceSubtle,
+            colors.border.withValues(alpha: .5),
+            colors.surfaceSubtle
+          ],
+          stops: const [0, .5, 1],
+        ).createShader(bounds),
+        child: child,
       ),
     );
   }
 }
 
-class AsyncButton extends StatelessWidget {
-  const AsyncButton({
-    super.key,
-    required this.label,
-    required this.onPressed,
-    this.busy = false,
-    this.icon,
-    this.variant = AsyncButtonVariant.primary,
-    this.expand = false,
-  });
-
+class AsyncButton extends StatefulWidget {
+  const AsyncButton(
+      {super.key,
+      required this.label,
+      required this.onPressed,
+      this.busy = false,
+      this.icon,
+      this.variant = AsyncButtonVariant.primary,
+      this.expand = false});
   final String label;
   final VoidCallback? onPressed;
   final bool busy;
   final IconData? icon;
   final AsyncButtonVariant variant;
   final bool expand;
+  @override
+  State<AsyncButton> createState() => _AsyncButtonState();
+}
+
+class _AsyncButtonState extends State<AsyncButton> {
+  late String _idleLabel = widget.label;
+  @override
+  void didUpdateWidget(AsyncButton oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!widget.busy) _idleLabel = widget.label;
+  }
 
   @override
   Widget build(BuildContext context) {
-    final child = Row(
-      mainAxisSize: MainAxisSize.min,
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        if (busy)
-          const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          )
-        else if (icon != null)
-          Icon(icon, size: 17),
-        if (busy || icon != null) const SizedBox(width: 8),
-        Text(label),
-      ],
-    );
-    final effective = busy ? null : onPressed;
-    final button = switch (variant) {
-      AsyncButtonVariant.primary => FilledButton(
-          onPressed: effective,
-          child: child,
-        ),
-      AsyncButtonVariant.outline => OutlinedButton(
-          onPressed: effective,
-          child: child,
-        ),
-      AsyncButtonVariant.text => TextButton(
-          onPressed: effective,
-          child: child,
-        ),
+    final spinner = SizedBox(
+        width: 16,
+        height: 16,
+        child: CircularProgressIndicator(
+            strokeWidth: 2, color: context.colors.accent));
+    final text = Row(
+        mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (widget.icon != null) ...[
+            widget.busy ? spinner : Icon(widget.icon, size: 16),
+            const SizedBox(width: 8)
+          ],
+          Text(widget.busy ? _idleLabel : widget.label),
+        ]);
+    final child = widget.icon == null
+        ? Stack(alignment: Alignment.center, children: [
+            Opacity(opacity: widget.busy ? 0 : 1, child: text),
+            if (widget.busy) spinner
+          ])
+        : text;
+    final effective = widget.busy ? null : widget.onPressed;
+    final button = switch (widget.variant) {
+      AsyncButtonVariant.primary =>
+        FilledButton(onPressed: effective, child: child),
+      AsyncButtonVariant.outline =>
+        OutlinedButton(onPressed: effective, child: child),
+      AsyncButtonVariant.text => TextButton(onPressed: effective, child: child),
       AsyncButtonVariant.danger => FilledButton(
           onPressed: effective,
           style: FilledButton.styleFrom(
-            backgroundColor: context.colors.danger,
-            foregroundColor: context.colors.surface,
-          ),
-          child: child,
-        ),
+              backgroundColor: context.colors.danger,
+              foregroundColor: context.colors.surface),
+          child: child),
     };
-    return expand ? SizedBox(width: double.infinity, child: button) : button;
+    return widget.expand
+        ? SizedBox(width: double.infinity, child: button)
+        : button;
   }
 }
 
@@ -700,7 +831,7 @@ class MetricTile extends StatelessWidget {
               ),
               child: Icon(
                 icon,
-                size: 17,
+                size: 16,
                 color: tone == StatusTone.accent
                     ? colors.accent
                     : colors.textSecondary,
@@ -716,7 +847,7 @@ class MetricTile extends StatelessWidget {
                   value,
                   style: TextStyle(
                     color: colors.text,
-                    fontSize: 20,
+                    fontSize: 16,
                     fontWeight: FontWeight.w600,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -726,14 +857,14 @@ class MetricTile extends StatelessWidget {
                   label,
                   style: TextStyle(
                     color: colors.textSecondary,
-                    fontSize: 12.5,
+                    fontSize: 13,
                   ),
                 ),
               ],
             ),
           ),
           if (onTap != null)
-            Icon(Icons.chevron_right, size: 18, color: colors.muted),
+            Icon(Icons.chevron_right, size: 16, color: colors.muted),
         ],
       ),
     );
@@ -786,90 +917,19 @@ class ProgressBar extends StatelessWidget {
 }
 
 class CourseArt extends StatelessWidget {
-  const CourseArt({
-    super.key,
-    required this.seed,
-    this.height = 112,
-  });
-
+  const CourseArt({super.key, required this.seed, this.height = 64});
   final String seed;
   final double height;
-
   @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return ClipRRect(
-      borderRadius: BorderRadius.vertical(top: colors.cardRadius.topLeft),
-      child: SizedBox(
+  Widget build(BuildContext context) => Container(
         height: height,
         width: double.infinity,
-        child: CustomPaint(
-          painter: _CourseArtPainter(
-            seed: seed.hashCode,
-            palette: colors,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _CourseArtPainter extends CustomPainter {
-  _CourseArtPainter({required this.seed, required this.palette});
-
-  final int seed;
-  final AppColors palette;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final random = math.Random(seed);
-    final background = Paint()..color = palette.heroBg;
-    canvas.drawRect(Offset.zero & size, background);
-    final ink = Paint()
-      ..color = palette.heroText.withValues(alpha: 0.32)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.2;
-    final accent = Paint()
-      ..color = palette.accent.withValues(alpha: 0.45)
-      ..style = PaintingStyle.fill;
-    for (var index = 0; index < 3; index++) {
-      final radius = size.shortestSide * (0.22 + random.nextDouble() * 0.25);
-      final center = Offset(
-        size.width * (0.15 + random.nextDouble() * 0.7),
-        size.height * (0.2 + random.nextDouble() * 0.6),
+        color: context.colors.surfaceSubtle,
+        alignment: Alignment.centerLeft,
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        child: Icon(Icons.menu_book_outlined,
+            size: 20, color: context.colors.textSecondary),
       );
-      canvas.drawCircle(center, radius, ink);
-    }
-    final path = Path()
-      ..moveTo(0, size.height * (0.68 + random.nextDouble() * 0.15))
-      ..quadraticBezierTo(
-        size.width * 0.35,
-        size.height * (0.35 + random.nextDouble() * 0.2),
-        size.width,
-        size.height * (0.55 + random.nextDouble() * 0.2),
-      );
-    canvas.drawPath(
-      path,
-      Paint()
-        ..color = palette.heroText.withValues(alpha: 0.22)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.4,
-    );
-    for (var index = 0; index < 4; index++) {
-      canvas.drawCircle(
-        Offset(
-          size.width * (0.08 + index * 0.26),
-          size.height * (0.18 + random.nextDouble() * 0.16),
-        ),
-        2.4,
-        accent,
-      );
-    }
-  }
-
-  @override
-  bool shouldRepaint(_CourseArtPainter oldDelegate) =>
-      oldDelegate.seed != seed || oldDelegate.palette != palette;
 }
 
 Future<bool> showConfirmDialog(
@@ -940,7 +1000,7 @@ class SheetHeader extends StatelessWidget {
                 title,
                 style: TextStyle(
                   color: colors.text,
-                  fontSize: 20,
+                  fontSize: AppTypography.fontSection,
                   fontWeight: FontWeight.w600,
                   letterSpacing: -0.3,
                 ),
@@ -969,7 +1029,7 @@ class ResponsiveContent extends StatelessWidget {
   const ResponsiveContent({
     super.key,
     required this.child,
-    this.maxWidth = 1180,
+    this.maxWidth = AppMetrics.contentWidth,
     this.padding,
   });
 
@@ -986,8 +1046,8 @@ class ResponsiveContent extends StatelessWidget {
         child: Padding(
           padding: padding ??
               EdgeInsets.symmetric(
-                horizontal: context.isNarrow ? 18 : 28,
-                vertical: context.isNarrow ? 16 : 22,
+                horizontal: context.isNarrow ? 16 : AppMetrics.pagePadding,
+                vertical: context.isNarrow ? 16 : 24,
               ),
           child: child,
         ),

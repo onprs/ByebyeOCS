@@ -104,7 +104,7 @@ describe('管理员登录', () => {
     expect(await screen.findByText('运行总览页面')).toBeInTheDocument()
   })
 
-  it('服务端登录失败时显示真实错误与请求编号', async () => {
+  it('服务端登录失败时只显示一条真实错误', async () => {
     const user = userEvent.setup()
     ;(authState.value.login as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError(401, {
@@ -121,6 +121,7 @@ describe('管理员登录', () => {
     await user.type(screen.getByLabelText(/动态验证码/), '123456')
     await user.click(screen.getByRole('button', { name: /登录管理控制台/ }))
     expect(await screen.findByText('用户名、密码或动态验证码不正确。')).toBeInTheDocument()
-    expect(screen.getByText('请求编号 req_login_failed')).toBeInTheDocument()
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.queryByText('请求编号 req_login_failed')).not.toBeInTheDocument()
   })
 })

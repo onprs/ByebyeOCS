@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { Navigate, useLocation, useNavigate } from 'react-router-dom'
-import { AlertCircle, KeyRound, LockKeyhole, ShieldCheck, UserRound } from 'lucide-react'
+import { AlertCircle, ShieldCheck, UserRound } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { BootScreen } from '../auth/RequireAuth'
 import { Button, Field, Logo } from '../components'
-import { ErrorState, describeError } from '../components/ui'
+import { describeError } from '../components/ui'
 
 export function LoginPage() {
   const {
@@ -69,32 +69,8 @@ export function LoginPage() {
       <aside className="auth-aside" aria-label="管理控制台说明">
         <div className="auth-aside-content">
           <Logo />
-          <div className="auth-aside-copy">
-            <div className="auth-aside-kicker">运营控制台</div>
-            <h1>
-              可信的运营判断，
-              <span>从真实状态开始。</span>
-            </h1>
-            <p>
-              管理用户与账号、跟踪任务执行、复核资金与题库用量。每项操作都由独立管理员身份和权限约束。
-            </p>
-            <ul className="auth-points">
-              <li>
-                <ShieldCheck size={13} />
-                管理员账号认证，密码与动态验证码双重校验
-              </li>
-              <li>
-                <LockKeyhole size={13} />
-                登录状态仅保存在当前浏览器的安全会话中
-              </li>
-              <li>
-                <KeyRound size={13} />
-                敏感操作提交前再次确认并记录审计
-              </li>
-            </ul>
-          </div>
+          <p className="auth-aside-summary">用户、任务与财务管理。</p>
         </div>
-        <div className="auth-aside-footer">BYEBYEOCS ADMIN · 管理控制台</div>
       </aside>
 
       <main className="auth-main">
@@ -103,19 +79,18 @@ export function LoginPage() {
             <Logo />
           </div>
           <div className="auth-panel-heading">
-            <div className="eyebrow">管理员登录</div>
             <h2>{disabled ? '管理员认证尚未配置' : '登录管理控制台'}</h2>
             <p>
               {disabled
                 ? '管理员认证尚未启用。请由部署维护人员完成管理员账号与验证配置后再登录。'
-                : '使用管理员账号登录，需要密码和第二因素动态验证码。'}
+                : ''}
             </p>
           </div>
 
           {sessionExpired ? (
             <div className="auth-status">
               <div className="callout callout-warning" role="status">
-                <AlertCircle size={15} />
+                <AlertCircle size={16} />
                 <div>会话已失效，请重新登录。未保存的操作需要在登录后重新提交。</div>
                 <button
                   aria-label="关闭会话提示"
@@ -131,12 +106,12 @@ export function LoginPage() {
           {disabled ? (
             <div className="auth-status">
               <div className="callout">
-                <ShieldCheck size={15} />
+                <ShieldCheck size={16} />
                 <div>
                   管理员登录暂未启用。请由平台维护人员完成账号与验证配置后再使用。
                 </div>
               </div>
-              <div className="error-actions" style={{ marginTop: 14 }}>
+              <div className="error-actions u-margin-top-14px" >
                 <Button onClick={retryBootstrap}>重新检查服务配置</Button>
               </div>
             </div>
@@ -169,7 +144,6 @@ export function LoginPage() {
               <Field
                 label="动态验证码"
                 htmlFor="admin-totp"
-                hint="输入认证器当前的 6 位验证码。验证码只在本次登录中使用。"
               >
                 <input
                   id="admin-totp"
@@ -190,14 +164,7 @@ export function LoginPage() {
                 </p>
               ) : null}
               {errorDetails ? (
-                <div className="auth-error">
-                  <ErrorState error={error} />
-                  {errorDetails.retryAfter ? (
-                    <p className="form-hint" style={{ marginTop: 8 }}>
-                      {errorDetails.retryAfter}
-                    </p>
-                  ) : null}
-                </div>
+                <p className="form-error" role="alert">{errorDetails.message}{errorDetails.retryAfter ? ` · ${errorDetails.retryAfter}` : ''}</p>
               ) : null}
               <Button
                 type="submit"
@@ -206,20 +173,14 @@ export function LoginPage() {
                 loading={submitting}
                 disabled={disabled}
               >
-                <UserRound size={15} />
+                <UserRound size={16} />
                 {submitting ? '正在验证' : '登录管理控制台'}
               </Button>
               <div className="auth-footnote">
-                <LockKeyhole size={12} />
-                <span>
-                  密码与动态验证码不会写入浏览器存储，登录状态由安全会话维护。
-                </span>
+                密码与动态码仅用于本次登录。
               </div>
             </form>
           )}
-        </div>
-        <div className="auth-main-footer">
-          ByebyeOCS 管理控制台
         </div>
       </main>
     </div>

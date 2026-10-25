@@ -152,7 +152,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 '使用学习通身份进入',
                 style: TextStyle(
                   color: colors.text,
-                  fontSize: 28,
+                  fontSize: 26,
                   height: 1.25,
                   fontWeight: FontWeight.w600,
                   letterSpacing: -0.7,
@@ -160,16 +160,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               ),
             ),
             const SizedBox(height: 9),
-            Text(
-              '无需注册新账号。验证通过后，课程、任务安排与钱包会关联到同一个学习通身份。',
-              style: TextStyle(
-                color: colors.textSecondary,
-                fontSize: 14,
-                height: 1.7,
-              ),
-            ),
             const SizedBox(height: 24),
-            if (auth.notice != null) ...[
+            if (auth.notice != null && login.message == null) ...[
               InlineNotice(
                 tone: StatusTone.warning,
                 icon: Icons.shield_outlined,
@@ -292,11 +284,13 @@ class _LoginPageState extends ConsumerState<LoginPage> {
               controlAffinity: ListTileControlAffinity.leading,
               contentPadding: EdgeInsets.zero,
               visualDensity: VisualDensity.compact,
+              secondary: TextButton(
+                  onPressed: _showPrivacy, child: const Text('隐私说明')),
               title: Text(
-                '我确认这是本人学习通账号，并授权平台在验证后读取课程、章节与任务点信息，用于课程同步和任务安排。',
+                '同意身份验证与课程读取',
                 style: TextStyle(
                   color: colors.textSecondary,
-                  fontSize: 12.5,
+                  fontSize: 13,
                   height: 1.6,
                 ),
               ),
@@ -370,26 +364,23 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                 ),
               ],
             ),
-            Text(
-              '平台不提供注册入口，也不会重置学习通密码。',
-              style: TextStyle(
-                color: colors.muted,
-                fontSize: 11.5,
-              ),
-            ),
-            if (login.error?.requestId != null) ...[
-              const SizedBox(height: 10),
-              Text(
-                '问题编号 ${login.error!.requestId}',
-                style: TextStyle(
-                  color: colors.muted,
-                  fontSize: 10.5,
-                  fontFamily: 'monospace',
-                ),
-              ),
-            ],
           ],
         ),
+      ),
+    );
+  }
+
+  void _showPrivacy() {
+    showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('身份验证与隐私'),
+        content: const Text(
+            '请使用本人学习通账号。验证通过后，平台读取课程、章节与任务点信息，用于课程同步和任务安排。学习通密码仅用于本次验证，平台不保存。验证码与身份核验由学习通完成。'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context), child: const Text('知道了'))
+        ],
       ),
     );
   }
@@ -448,7 +439,7 @@ class _AuthUnavailable extends StatelessWidget {
             title,
             style: TextStyle(
               color: colors.text,
-              fontSize: 21,
+              fontSize: 16,
               fontWeight: FontWeight.w600,
             ),
           ),
@@ -457,7 +448,7 @@ class _AuthUnavailable extends StatelessWidget {
             message,
             style: TextStyle(
               color: colors.textSecondary,
-              fontSize: 13.5,
+              fontSize: 14,
               height: 1.65,
             ),
           ),
@@ -467,7 +458,7 @@ class _AuthUnavailable extends StatelessWidget {
               '问题编号 $requestId',
               style: TextStyle(
                 color: colors.muted,
-                fontSize: 11,
+                fontSize: 12,
                 fontFamily: 'monospace',
               ),
             ),
@@ -496,7 +487,6 @@ class _AuthUnavailable extends StatelessWidget {
 
 class _StoryPanel extends StatelessWidget {
   const _StoryPanel({required this.colors});
-
   final AppColors colors;
 
   @override
@@ -506,86 +496,15 @@ class _StoryPanel extends StatelessWidget {
         color: colors.heroBg,
         border: Border(right: BorderSide(color: colors.border)),
       ),
-      padding: const EdgeInsets.fromLTRB(52, 46, 52, 46),
+      padding: const EdgeInsets.all(48),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const AppLogo(),
           const Spacer(),
-          Text(
-            '让计划向前，\n让时间留给你。',
-            style: TextStyle(
-              color: colors.heroText,
-              fontSize: 40,
-              height: 1.28,
-              fontWeight: FontWeight.w600,
-              letterSpacing: -1.2,
-            ),
-          ),
-          const SizedBox(height: 18),
-          Text(
-            '课程同步、任务安排与平台确认结果，都在一个清晰的学习空间里。',
-            style: TextStyle(
-              color: colors.heroText.withValues(alpha: 0.8),
-              fontSize: 15,
-              height: 1.8,
-            ),
-          ),
-          const SizedBox(height: 32),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: const [
-              _StoryChip(icon: Icons.verified_outlined, label: '平台确认再计完成'),
-              _StoryChip(icon: Icons.sync_outlined, label: '课程状态可同步'),
-              _StoryChip(
-                  icon: Icons.account_balance_wallet_outlined,
-                  label: '支付与到账分开记录'),
-            ],
-          ),
+          Text('同步课程，管理学习安排。',
+              style: TextStyle(color: colors.text, fontSize: 16, height: 1.6)),
           const Spacer(),
-          Text(
-            '把时间留给更重要的事。',
-            style: TextStyle(
-              color: colors.heroText.withValues(alpha: 0.62),
-              fontSize: 12.5,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _StoryChip extends StatelessWidget {
-  const _StoryChip({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-      decoration: BoxDecoration(
-        color: colors.surface.withValues(alpha: 0.55),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: colors.heroText.withValues(alpha: 0.12)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 15, color: colors.heroText),
-          const SizedBox(width: 6),
-          Text(
-            label,
-            style: TextStyle(
-              color: colors.heroText,
-              fontSize: 12.5,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
         ],
       ),
     );

@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { newIdempotencyKey } from '../api/client'
 import { invalidateQuestionCache } from '../api/endpoints'
@@ -24,15 +24,15 @@ export function QuestionReportsPanel({ canManage }: { canManage: boolean }) {
       <Card className="section-gap">
         <CardHeader
           title="用户答案报告"
-          subtitle="查看用户反馈，记录核对结果或使相关缓存失效。"
-          actions={<Button size="sm" onClick={reports.reload} loading={reports.loading}><RefreshCw size={13} /> 刷新报告</Button>}
+
+          actions={<Button size="sm" onClick={reports.reload} loading={reports.loading}><RefreshCw size={14} /> 刷新报告</Button>}
         />
         <div className="table-toolbar">
           <Select label="报告状态" value={status} onChange={value => setStatus(value as CacheReportStatus)} options={Object.entries(statusLabels).map(([value, label]) => ({ value, label }))} />
         </div>
         {reports.error && reports.data ? <RefreshError error={reports.error} onRetry={reports.reload} /> : null}
         {reports.loading && !reports.data ? <LoadingBlock rows={3} /> : reports.error && !reports.data ? (
-          <div style={{ padding: 18 }}><ErrorState error={reports.error} onRetry={reports.reload} /></div>
+          <div className="u-padding-18px" ><ErrorState error={reports.error} onRetry={reports.reload} /></div>
         ) : reports.data?.items.length ? (
           <>
             <div className="table-scroll">
@@ -42,7 +42,7 @@ export function QuestionReportsPanel({ canManage }: { canManage: boolean }) {
                   {reports.data.items.map(report => (
                     <tr key={report.id}>
                       <td><b>{report.query.model.display_name}</b><small className="cell-sub mono">{report.query.id}</small></td>
-                      <td style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: 360 }}>{report.reason}</td>
+                      <td className="u-white-space-pre-wrap u-overflow-wrap-anywhere u-max-width-360px" >{report.reason}</td>
                       <td>{formatDateTime(report.created_at)}</td>
                       <td><Badge tone={report.status === 'pending' ? 'amber' : 'neutral'}>{statusLabels[report.status]}</Badge></td>
                       <td>
@@ -62,12 +62,19 @@ export function QuestionReportsPanel({ canManage }: { canManage: boolean }) {
           </>
         ) : <EmptyState title="暂无此状态的报告" description="用户提交的答案问题会在这里显示。" />}
       </Card>
-      {selected ? <ReportReviewDialog key={`${selected.report.id}/${selected.invalidate}`} {...selected} onClose={() => setSelected(null)} onSaved={() => { setSelected(null); reports.reload() }} /> : null}
+      {selected ? <ReportReviewForm key={`${selected.report.id}/${selected.invalidate}`} {...selected} onClose={() => setSelected(null)} onSaved={() => { setSelected(null); reports.reload() }} /> : null}
     </>
   )
 }
 
-function ReportReviewDialog({ report, invalidate, onClose, onSaved }: { report: CacheReport; invalidate: boolean; onClose: () => void; onSaved: () => void }) {
+function ReportReviewForm({ report, invalidate, onClose, onSaved }: { report: CacheReport; invalidate: boolean; onClose: () => void; onSaved: () => void }) {
+  const review = useRef<HTMLElement>(null)
+  useEffect(() => {
+    if (!invalidate) {
+      review.current?.scrollIntoView({ block: 'nearest' })
+      review.current?.querySelector('textarea')?.focus({ preventScroll: true })
+    }
+  }, [invalidate])
   const [status, setStatus] = useState<'resolved' | 'rejected'>('resolved')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
@@ -104,9 +111,9 @@ function ReportReviewDialog({ report, invalidate, onClose, onSaved }: { report: 
     }
   }
 
-  return (
-    <Modal open onClose={() => { if (!saving) onClose() }} title={invalidate ? '使报告缓存失效' : '处理答案报告'} actions={<><Button onClick={onClose} disabled={saving}>取消</Button><Button variant="primary" onClick={() => void save()} loading={saving}>保存处理结果</Button></>}>
-      <div className="form-stack">
+  const actions = <><Button onClick={onClose} disabled={saving}>取消</Button><Button variant="primary" onClick={() => void save()} loading={saving}>保存处理结果</Button></>
+  const content = <>
+<div className="form-stack">
         <p>{report.reason}</p>
         {invalidate ? <p>后续新查询将重新获取答案，待处理的关联报告会标记为已处理。</p> : (
           <Select label="处理结果" value={status} onChange={value => setStatus(value as 'resolved' | 'rejected')} disabled={saving} options={[{ value: 'resolved', label: '已处理' }, { value: 'rejected', label: '驳回报告' }]} />
@@ -117,6 +124,11 @@ function ReportReviewDialog({ report, invalidate, onClose, onSaved }: { report: 
         {validation ? <p role="alert" className="field-error">{validation}</p> : null}
         {error ? <ErrorState error={error} compact /> : null}
       </div>
-    </Modal>
-  )
+      </>
+  if (invalidate) return <Modal open onClose={() => { if (!saving) onClose() }} title="使报告缓存失效" actions={actions}>{content}</Modal>
+  return <section ref={review} className="report-review" aria-label="处理答案报告">
+    <h3>处理答案报告</h3>
+    {content}
+    <div className="report-actions">{actions}</div>
+  </section>
 }

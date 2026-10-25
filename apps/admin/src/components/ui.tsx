@@ -11,8 +11,9 @@ import {
   Search,
   X,
 } from 'lucide-react'
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { ApiError } from '../api/client'
+import { SelectionTrack } from './SelectionTrack'
 import type { TaskState } from '../api/types'
 import { formatMoneyMinor, formatRetryAfter } from '../lib/format'
 
@@ -28,14 +29,27 @@ export function Button({
   size?: 'sm'
   loading?: boolean
 }) {
+  const ref = useRef<HTMLButtonElement>(null)
+  const idleChildren = useRef(children)
+  const [width, setWidth] = useState<number>()
+  useLayoutEffect(() => {
+    if (!loading) {
+      idleChildren.current = children
+      const measured = ref.current?.getBoundingClientRect().width
+      if (measured) setWidth(measured)
+    }
+  }, [children, loading])
   return (
     <button
-      className={`btn btn-${variant} ${size === 'sm' ? 'btn-sm' : ''} ${className}`}
+      ref={ref}
+      className={`btn btn-${variant} ${size === 'sm' ? 'btn-sm' : ''} ${loading ? 'is-loading' : ''} ${className}`}
       {...props}
+      style={{ ...props.style, ...(loading && width ? { width } : {}) }}
+      aria-busy={loading || undefined}
       disabled={props.disabled || loading}
     >
-      {loading ? <LoaderCircle size={14} className="spinner" aria-hidden="true" /> : null}
-      {children}
+      {loading ? <LoaderCircle size={14} className="spinner button-spinner" aria-hidden="true" /> : null}
+      <span className="button-content">{loading ? idleChildren.current : children}</span>
     </button>
   )
 }
@@ -104,18 +118,15 @@ export function Card({ children, className = '' }: { children: ReactNode; classN
 
 export function CardHeader({
   title,
-  subtitle,
   actions,
 }: {
   title: string
-  subtitle?: string
   actions?: ReactNode
 }) {
   return (
     <div className="card-header">
       <div>
         <h2>{title}</h2>
-        {subtitle ? <p>{subtitle}</p> : null}
       </div>
       {actions ? <div className="card-header-actions">{actions}</div> : null}
     </div>
@@ -123,22 +134,16 @@ export function CardHeader({
 }
 
 export function PageHeader({
-  eyebrow,
   title,
-  description,
   actions,
 }: {
-  eyebrow?: string
   title: string
-  description?: string
   actions?: ReactNode
 }) {
   return (
     <header className="page-header">
       <div className="page-header-copy">
-        {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
         <h1>{title}</h1>
-        {description ? <p>{description}</p> : null}
       </div>
       {actions ? <div className="page-actions">{actions}</div> : null}
     </header>
@@ -168,7 +173,7 @@ export function SearchInput({
       />
       {value ? (
         <button type="button" aria-label="清除搜索" onClick={() => onChange('')}>
-          <X size={12} />
+          <X size={14} />
         </button>
       ) : null}
     </label>
@@ -210,7 +215,7 @@ export function Select({
           )
         })}
       </select>
-      <ChevronDown size={13} aria-hidden="true" />
+      <ChevronDown size={14} aria-hidden="true" />
     </span>
   )
 }
@@ -276,13 +281,21 @@ export function Tabs({
   items: Array<{ value: string; label: string; count?: number | null }>
 }) {
   return (
-    <div className="tabs" role="tablist">
+    <SelectionTrack value={value} className="tabs" role="tablist" onKeyDown={event => {
+      const index = items.findIndex(item => item.value === value)
+      const next = event.key === 'ArrowRight' ? (index + 1) % items.length : event.key === 'ArrowLeft' ? (index - 1 + items.length) % items.length : event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : -1
+      if (next < 0) return
+      event.preventDefault()
+      onChange(items[next].value)
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('[role=tab]')[next]?.focus()
+    }}>
       {items.map(item => (
         <button
           type="button"
           role="tab"
           key={item.value}
           aria-selected={item.value === value}
+          tabIndex={item.value === value ? 0 : -1}
           className={item.value === value ? 'active' : ''}
           onClick={() => onChange(item.value)}
         >
@@ -290,7 +303,7 @@ export function Tabs({
           {item.count !== undefined && item.count !== null ? <span>{item.count}</span> : null}
         </button>
       ))}
-    </div>
+    </SelectionTrack>
   )
 }
 
@@ -315,11 +328,23 @@ export function Modal({
   drawer?: boolean
   closeLabel?: string
 }) {
+  const returnFocus = useRef<HTMLElement | null>(null)
   return (
     <Dialog.Root open={open} onOpenChange={value => (!value ? onClose() : undefined)}>
       <Dialog.Portal>
         <Dialog.Overlay className="modal-overlay" />
-        <Dialog.Content className={`modal-content ${wide ? 'wide' : ''} ${drawer ? 'drawer' : ''}`}>
+        <Dialog.Content
+          className={`modal-content ${wide ? 'wide' : ''} ${drawer ? 'drawer' : ''}`}
+          onOpenAutoFocus={() => {
+            returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+          }}
+          onCloseAutoFocus={event => {
+            if (returnFocus.current?.isConnected) {
+              event.preventDefault()
+              returnFocus.current.focus({ preventScroll: true })
+            }
+          }}
+        >
           <div className="modal-heading">
             <div>
               <Dialog.Title>{title}</Dialog.Title>
@@ -331,7 +356,7 @@ export function Modal({
             </div>
             <Dialog.Close asChild>
               <IconButton label={closeLabel}>
-                <X size={18} />
+                <X size={16} />
               </IconButton>
             </Dialog.Close>
           </div>
@@ -364,12 +389,11 @@ export function EmptyState({
   )
 }
 
-export function LoadingBlock({ rows = 3 }: { rows?: number }) {
+export function LoadingBlock({ rows = 5 }: { rows?: number }) {
   return (
-    <div className="loading-block" role="status" aria-label="正在加载">
-      {Array.from({ length: rows }, (_, index) => (
-        <div className="skeleton" key={index} />
-      ))}
+    <div className="loading-block" role="status" aria-busy="true" aria-label="正在加载">
+      <div className="skeleton-table-header">{Array.from({ length: 4 }, (_, index) => <span key={index} className="skeleton" />)}</div>
+      {Array.from({ length: rows }, (_, index) => <div key={index} className="skeleton-table-row">{Array.from({ length: 4 }, (_, column) => <span key={column} className="skeleton" />)}</div>)}
       <span className="sr-only">正在加载</span>
     </div>
   )
@@ -413,7 +437,7 @@ export function describeError(error: unknown): {
       title,
       message: error.message,
       code: error.code,
-      requestId: error.requestId === '未提供' ? null : error.requestId,
+      requestId: error.requestId === '—' ? null : error.requestId,
       retryable: error.retryable,
       retryAfter: formatRetryAfter(error.retryAfterSeconds),
       status: error.status,
@@ -455,7 +479,7 @@ export function ErrorState({
   return (
     <div className={`error-state ${notConfigured ? 'not-configured' : ''} ${compact ? 'is-compact' : ''}`} role="alert">
       <span className="error-state-icon">
-        {details.status === 403 ? <CircleAlert size={17} /> : <AlertCircle size={17} />}
+        {details.status === 403 ? <CircleAlert size={16} /> : <AlertCircle size={16} />}
       </span>
       <div className="error-state-copy">
         <h3>{details.title}</h3>
@@ -504,7 +528,7 @@ export function Callout({
 }) {
   return (
     <div className={`callout ${tone !== 'neutral' ? `callout-${tone}` : ''}`}>
-      {icon ?? <CircleAlert size={15} />}
+      {icon ?? <CircleAlert size={16} />}
       <div>{children}</div>
     </div>
   )
@@ -525,10 +549,10 @@ export function Metric({
     <div className="metric">
       <div className="metric-label">{label}</div>
       <div className="metric-value">
-        {value === null || value === '' ? <span className="muted" style={{ fontSize: 15 }}>未提供</span> : value}
+        {value === null || value === '' ? <span className="muted u-font-size-14px" >—</span> : value}
         {unit ? <small>{unit}</small> : null}
       </div>
-      <div className="metric-foot">{children}</div>
+      {children ? <div className="metric-foot">{children}</div> : null}
     </div>
   )
 }
@@ -570,10 +594,10 @@ export function Pagination({
       <div className="pagination-actions">
         <span className="page-number">第 {page} 页</span>
         <IconButton label="上一页" disabled={!hasPrevious || disabled} onClick={onPrevious}>
-          <ChevronLeft size={15} />
+          <ChevronLeft size={16} />
         </IconButton>
         <IconButton label="下一页" disabled={!hasNext || disabled} onClick={onNext}>
-          <ChevronRight size={15} />
+          <ChevronRight size={16} />
         </IconButton>
       </div>
     </div>
@@ -596,7 +620,7 @@ export function CheckBox({
   return (
     <label className="check-label" title={label}>
       <input type="checkbox" checked={checked} onChange={onChange} aria-label={label} />
-      {checked ? <Check size={10} aria-hidden="true" style={{ display: 'none' }} /> : null}
+      {checked ? <Check size={14} aria-hidden="true" className="u-display-none"  /> : null}
     </label>
   )
 }

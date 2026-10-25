@@ -108,7 +108,7 @@ function toApiError(response: Response, payload: unknown, headerRequestId: strin
       request_id:
         typeof rawError?.request_id === 'string'
           ? rawError.request_id
-          : (headerRequestId ?? '未提供'),
+          : (headerRequestId ?? '—'),
       retryable: typeof rawError?.retryable === 'boolean' ? rawError.retryable : response.status === 429 || response.status >= 500,
       scope: typeof rawError?.scope === 'string' ? rawError.scope : 'request',
     },
@@ -166,7 +166,7 @@ export async function apiRequest<T>(path: string, options: RequestOptions = {}):
     throw new ApiError(0, {
       code: 'network_unavailable',
       message: '无法连接管理服务，请检查网络或服务状态。',
-      request_id: '未提供',
+      request_id: '—',
       retryable: true,
       scope: 'network',
     })
@@ -224,7 +224,7 @@ export async function healthCheck(path: 'live' | 'ready'): Promise<ApiResponse<{
     throw new ApiError(0, {
       code: 'network_unavailable',
       message: '无法连接健康检查接口。',
-      request_id: '未提供',
+      request_id: '—',
       retryable: true,
       scope: 'network',
     })

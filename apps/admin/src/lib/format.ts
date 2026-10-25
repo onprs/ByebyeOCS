@@ -3,7 +3,7 @@ const yuanFormatter = new Intl.NumberFormat('zh-CN', {
 })
 
 export function formatMoneyMinor(value: string | null | undefined, options: { sign?: boolean } = {}): string {
-  if (value === null || value === undefined || value === '') return '未提供'
+  if (value === null || value === undefined || value === '') return '—'
   let minor: bigint
   try {
     if (!/^-?\d+$/.test(value)) return '格式异常'
@@ -44,7 +44,7 @@ export function formatPriceMicros(value: string | null | undefined): string {
 }
 
 export function formatNumber(value: number | null | undefined): string {
-  if (value === null || value === undefined || !Number.isFinite(value)) return '未提供'
+  if (value === null || value === undefined || !Number.isFinite(value)) return '—'
   return new Intl.NumberFormat('zh-CN').format(value)
 }
 
@@ -70,7 +70,7 @@ export function parseYuanToMicros(input: string): string | null {
 }
 
 export function formatDateTime(value: string | null | undefined): string {
-  if (!value) return '未提供'
+  if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '时间格式异常'
   return new Intl.DateTimeFormat('zh-CN', {
@@ -85,7 +85,7 @@ export function formatDateTime(value: string | null | undefined): string {
 }
 
 export function formatDate(value: string | null | undefined): string {
-  if (!value) return '未提供'
+  if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '时间格式异常'
   return new Intl.DateTimeFormat('zh-CN', {
@@ -96,13 +96,13 @@ export function formatDate(value: string | null | undefined): string {
 }
 
 export function formatPercent(fraction: number | null | undefined): string {
-  if (fraction === null || fraction === undefined || !Number.isFinite(fraction)) return '未提供'
+  if (fraction === null || fraction === undefined || !Number.isFinite(fraction)) return '—'
   const percent = Math.min(1, Math.max(0, fraction)) * 100
   return `${new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 1 }).format(percent)}%`
 }
 
 export function formatDuration(seconds: number | null | undefined): string {
-  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '未提供'
+  if (seconds === null || seconds === undefined || !Number.isFinite(seconds)) return '—'
   if (seconds < 60) return `${Math.round(seconds)} 秒`
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes} 分钟`

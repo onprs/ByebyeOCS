@@ -11,9 +11,9 @@ export function PermissionGate({ permission, children }: { permission: string; c
   if (me && me.permissions.length > 0 && !hasPermission(me, permission)) {
     return (
       <>
-        <PageHeader eyebrow="访客权限" title="没有访问权限" description="当前管理员角色不包含此页面所需的读取权限。" />
+        <PageHeader title="没有访问权限"  />
         <div className="error-state">
-          <span className="error-state-icon"><ShieldOff size={18} /></span>
+          <span className="error-state-icon"><ShieldOff size={16} /></span>
           <div className="error-state-copy">
             <h3>当前角色无权查看此页面</h3>
             <p>请联系平台所有者确认访问权限。</p>

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { useScrollMemory } from '../lib/useScrollMemory'
+import { useTableOverflowAffordance } from '../lib/useTableOverflowAffordance'
 import {
   ChevronDown,
   ChevronRight,
@@ -20,6 +22,7 @@ import {
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { Logo } from '../components/Logo'
+import { SelectionTrack } from '../components/SelectionTrack'
 import { Avatar, IconButton } from '../components/ui'
 import { useToast } from '../components/toast'
 import { useClickOutside } from '../lib/hooks'
@@ -59,11 +62,12 @@ export function AdminLayout() {
   const [loggingOut, setLoggingOut] = useState(false)
   const profileRef = useRef<HTMLDivElement | null>(null)
   useClickOutside(profileRef, () => setProfileOpen(false), profileOpen)
+  useScrollMemory(location.pathname)
+  useTableOverflowAffordance()
 
   useEffect(() => {
     setNavOpen(false)
     setProfileOpen(false)
-    window.scrollTo(0, 0)
   }, [location.pathname])
 
   const visibleNavigation = navigation.filter(item => hasPermission(me, item.permission))
@@ -112,8 +116,9 @@ export function AdminLayout() {
             <b>运营工作空间</b>
             <span>管理员控制台</span>
           </div>
-          <ChevronDown size={12} aria-hidden="true" />
+          <ChevronDown size={14} aria-hidden="true" />
         </div>
+        <SelectionTrack value={location.pathname} className="nav-region">
         <div className="nav-heading">工作空间</div>
         <nav className="admin-nav">
           {visibleNavigation.map(item => (
@@ -168,6 +173,7 @@ export function AdminLayout() {
             <span>系统设置</span>
           </NavLink>
         </nav>
+        </SelectionTrack>
         <div className="admin-sidebar-bottom">
           <button className="sidebar-admin" onClick={() => navigate('/settings')} aria-label="打开账户与设置">
             <Avatar name={me?.display_name ?? '管'} small />
@@ -175,7 +181,7 @@ export function AdminLayout() {
               <b>{me?.display_name ?? '管理员'}</b>
               <span>{roleLabel(me?.role ?? 'admin')}</span>
             </span>
-            <ChevronRight size={13} aria-hidden="true" />
+            <ChevronRight size={14} aria-hidden="true" />
           </button>
         </div>
       </aside>
@@ -188,11 +194,11 @@ export function AdminLayout() {
               className="menu-button"
               onClick={() => setNavOpen(value => !value)}
             >
-              {navOpen ? <X size={18} /> : <Menu size={18} />}
+              {navOpen ? <X size={16} /> : <Menu size={16} />}
             </IconButton>
             <div className="breadcrumbs" aria-label="当前位置">
               <span>工作空间</span>
-              <ChevronRight size={12} aria-hidden="true" />
+              <ChevronRight size={14} aria-hidden="true" />
               <strong>{active.label}</strong>
             </div>
           </div>
@@ -218,14 +224,14 @@ export function AdminLayout() {
                   <b>{me?.display_name ?? '管理员'}</b>
                   <span>{roleLabel(me?.role ?? 'admin')}</span>
                 </span>
-                <ChevronDown size={12} aria-hidden="true" />
+                <ChevronDown size={14} aria-hidden="true" />
               </button>
               {profileOpen ? (
                 <div className="menu" role="menu">
                   <div className="menu-section">
                     <strong>{me?.display_name ?? '管理员'}</strong>
                     <span>
-                      {me?.username ?? '未提供登录名'} · {roleLabel(me?.role ?? 'admin')}
+                      {me?.username ?? '—'} · {roleLabel(me?.role ?? 'admin')}
                     </span>
                   </div>
                   <button
@@ -248,14 +254,9 @@ export function AdminLayout() {
             </div>
           </div>
         </header>
-        <main className="admin-content">
-          <Outlet />
+        <main className={`admin-content ${['/tasks', '/finance'].includes(location.pathname) ? 'table-workspace' : ''}`}>
+          <div key={location.pathname} className="page-view"><Outlet /></div>
         </main>
-        <footer className="admin-footer">
-          <span>
-            <ShieldCheck size={12} /> 敏感操作需要再次确认并记录审计
-          </span>
-        </footer>
       </div>
     </div>
   )

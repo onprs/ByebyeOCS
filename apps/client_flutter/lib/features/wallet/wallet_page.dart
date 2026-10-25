@@ -119,12 +119,7 @@ class _WalletPageState extends ConsumerState<WalletPage> {
                 padding: EdgeInsets.symmetric(horizontal: inset),
                 sliver: _buildLedgerSection(context, data),
               ),
-              SliverPadding(
-                padding: EdgeInsets.fromLTRB(inset, 16, inset, bottom),
-                sliver: SliverToBoxAdapter(
-                  child: _buildPricingNotice(data),
-                ),
-              ),
+              SliverPadding(padding: EdgeInsets.only(bottom: bottom)),
             ],
           ),
         );
@@ -137,9 +132,7 @@ class _WalletPageState extends ConsumerState<WalletPage> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         PageHeader(
-          eyebrow: '我的钱包',
           title: '余额与订单',
-          description: '付款成功与余额到账分开记录，余额以账户流水为准。',
           actions: [
             AsyncButton(
               label: '刷新',
@@ -240,11 +233,6 @@ class _WalletPageState extends ConsumerState<WalletPage> {
                 _WalletTab.orders => '充值订单',
                 _WalletTab.entries => '资金流水',
                 _WalletTab.usage => '用量记录',
-              },
-              subtitle: switch (_tab) {
-                _WalletTab.orders => '支付成功与到账状态分别展示。',
-                _WalletTab.entries => '充值、预占、结算与释放都会记入账户流水。',
-                _WalletTab.usage => '题库按 token 记录；未定价时不显示虚假金额。',
               },
               action: _ledgerAction(data),
             ),
@@ -395,9 +383,8 @@ class _WalletPageState extends ConsumerState<WalletPage> {
               const Spacer(),
               if (data.queriesCursor != null)
                 TextButton(
-                  onPressed: () => ref
-                      .read(walletControllerProvider.notifier)
-                      .loadQueries(),
+                  onPressed: () =>
+                      ref.read(walletControllerProvider.notifier).loadQueries(),
                   child: const Text('更多'),
                 ),
             ],
@@ -421,7 +408,7 @@ class _WalletPageState extends ConsumerState<WalletPage> {
         SliverToBoxAdapter(
           child: Text(
             '还没有题库查询记录。',
-            style: TextStyle(color: colors.textSecondary, fontSize: 12.5),
+            style: TextStyle(color: colors.textSecondary, fontSize: 13),
           ),
         ),
       );
@@ -478,17 +465,6 @@ class _WalletPageState extends ConsumerState<WalletPage> {
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
       sliver: SliverMainAxisGroup(slivers: slivers),
-    );
-  }
-
-  Widget _buildPricingNotice(WalletState data) {
-    return InlineNotice(
-      icon: Icons.lock_outline,
-      message: data.pricing == null
-          ? '计费信息暂不可用。余额和订单仍以实际记录为准。'
-          : data.pricing!.automaticCharging
-              ? '服务按平台确认的有效任务点计量，题库按 token 单独记录。'
-              : '单价尚未全部公布，当前未启用自动扣费。',
     );
   }
 
@@ -639,7 +615,7 @@ class _BalanceCard extends StatelessWidget {
                 '可用余额',
                 style: TextStyle(
                   color: colors.heroText.withValues(alpha: 0.8),
-                  fontSize: 12.5,
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -657,7 +633,7 @@ class _BalanceCard extends StatelessWidget {
             wallet.available.text,
             style: TextStyle(
               color: colors.heroText,
-              fontSize: 38,
+              fontSize: 34,
               height: 1.1,
               fontWeight: FontWeight.w600,
               letterSpacing: -1,
@@ -678,7 +654,7 @@ class _BalanceCard extends StatelessWidget {
               wallet.frozenReason!,
               style: TextStyle(
                 color: colors.heroText,
-                fontSize: 11.5,
+                fontSize: 12,
                 height: 1.5,
               ),
             ),
@@ -690,7 +666,7 @@ class _BalanceCard extends StatelessWidget {
             '余额以账户流水为准。支付返回不会直接增加余额。',
             style: TextStyle(
               color: colors.heroText.withValues(alpha: 0.7),
-              fontSize: 11.5,
+              fontSize: 12,
               height: 1.5,
             ),
           ),
@@ -700,7 +676,7 @@ class _BalanceCard extends StatelessWidget {
               '更新于 ${formatDateTime(wallet.updatedAt)}',
               style: TextStyle(
                 color: colors.heroText.withValues(alpha: 0.5),
-                fontSize: 10.5,
+                fontSize: 12,
               ),
             ),
           ],
@@ -750,7 +726,6 @@ class _RechargeCard extends ConsumerWidget {
                 : null;
     return SectionCard(
       title: '充值',
-      subtitle: '选择金额与支付方式；支付成功后还需要等待到账。',
       action: pricing == null
           ? null
           : StatusPill(
@@ -854,7 +829,7 @@ class _RechargeCard extends ConsumerWidget {
               '充值到账余额原则上不退回；异常支付与必要更正单独处理。',
               style: TextStyle(
                 color: colors.muted,
-                fontSize: 10.5,
+                fontSize: 12,
                 height: 1.5,
               ),
             ),
@@ -918,7 +893,7 @@ class _ActiveOrderCard extends StatelessWidget {
                   '订单 ${order.amount.text}',
                   style: TextStyle(
                     color: colors.text,
-                    fontSize: 13.5,
+                    fontSize: 14,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
@@ -959,7 +934,7 @@ class _ActiveOrderCard extends StatelessWidget {
                 order.checkoutState == 'not_configured'
                     ? '支付入口尚未配置，请联系服务提供方。'
                     : '当前订单没有可用的支付入口。',
-                style: TextStyle(color: colors.warning, fontSize: 11),
+                style: TextStyle(color: colors.warning, fontSize: 12),
               ),
             ),
         ],
@@ -981,65 +956,18 @@ class _WalletTabs extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: [
-        _TabButton(
-          label: '订单 ${data.orders.length}',
-          selected: selected == _WalletTab.orders,
-          onTap: () => onChanged(_WalletTab.orders),
-        ),
-        _TabButton(
-          label: '流水 ${data.entries.length}',
-          selected: selected == _WalletTab.entries,
-          onTap: () => onChanged(_WalletTab.entries),
-        ),
-        _TabButton(
-          label: '题库用量 ${data.queries.length}',
-          selected: selected == _WalletTab.usage,
-          onTap: () => onChanged(_WalletTab.usage),
-        ),
-      ],
-    );
-  }
-}
-
-class _TabButton extends StatelessWidget {
-  const _TabButton({
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(999),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-        decoration: BoxDecoration(
-          color: selected ? colors.accentSoft : colors.surface,
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: selected
-                ? colors.accent.withValues(alpha: 0.25)
-                : colors.border,
-          ),
-        ),
-        child: Text(
-          label,
-          style: TextStyle(
-            color: selected ? colors.accent : colors.textSecondary,
-            fontSize: 12,
-            fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-          ),
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 560),
+        child: SlidingSelectionBar(
+          labels: [
+            '订单 ${data.orders.length}',
+            '流水 ${data.entries.length}',
+            '题库用量 ${data.queries.length}',
+          ],
+          selectedIndex: _WalletTab.values.indexOf(selected),
+          onSelected: (index) => onChanged(_WalletTab.values[index]),
         ),
       ),
     );
@@ -1091,7 +1019,7 @@ class _OrderTile extends StatelessWidget {
                       order.amount.text,
                       style: TextStyle(
                         color: colors.text,
-                        fontSize: 15,
+                        fontSize: 14,
                         fontWeight: FontWeight.w600,
                         fontFeatures: const [FontFeature.tabularFigures()],
                       ),
@@ -1107,7 +1035,7 @@ class _OrderTile extends StatelessWidget {
               const SizedBox(height: 4),
               Text(
                 '${order.channelLabel} · 创建于 ${formatDateTime(order.createdAt)}',
-                style: TextStyle(color: colors.textSecondary, fontSize: 11.5),
+                style: TextStyle(color: colors.textSecondary, fontSize: 12),
               ),
               const SizedBox(height: 8),
               Wrap(
@@ -1194,7 +1122,7 @@ class _EntryTile extends StatelessWidget {
                     entry.label,
                     style: TextStyle(
                       color: colors.text,
-                      fontSize: 12.5,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1206,7 +1134,7 @@ class _EntryTile extends StatelessWidget {
                             : '账本记录'),
                     style: TextStyle(
                       color: colors.textSecondary,
-                      fontSize: 11,
+                      fontSize: 12,
                     ),
                   ),
                 ],
@@ -1223,7 +1151,7 @@ class _EntryTile extends StatelessWidget {
                         : negative
                             ? colors.text
                             : colors.textSecondary,
-                    fontSize: 12.5,
+                    fontSize: 13,
                     fontWeight: FontWeight.w600,
                     fontFeatures: const [FontFeature.tabularFigures()],
                   ),
@@ -1231,7 +1159,7 @@ class _EntryTile extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   formatShortDateTime(entry.createdAt),
-                  style: TextStyle(color: colors.muted, fontSize: 10),
+                  style: TextStyle(color: colors.muted, fontSize: 12),
                 ),
               ],
             ),
@@ -1269,7 +1197,7 @@ class _QueryUsageTile extends StatelessWidget {
                     query.modelName ?? '题库查询',
                     style: TextStyle(
                       color: colors.text,
-                      fontSize: 12.5,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1286,14 +1214,14 @@ class _QueryUsageTile extends StatelessWidget {
               '${query.mode.label} · 输入 ${formatCount(query.usage.inputTokens)} · 输出 ${formatCount(query.usage.outputTokens)} · 合计 ${formatCount(query.usage.totalTokens)} token',
               style: TextStyle(
                 color: colors.textSecondary,
-                fontSize: 11,
+                fontSize: 12,
                 height: 1.5,
               ),
             ),
             const SizedBox(height: 2),
             Text(
               '${query.pricing.label}${query.createdAt == null ? '' : ' · ${formatShortDateTime(query.createdAt)}'}',
-              style: TextStyle(color: colors.muted, fontSize: 10.5),
+              style: TextStyle(color: colors.muted, fontSize: 12),
             ),
           ],
         ),
@@ -1329,7 +1257,7 @@ class _LedgerUsageTile extends StatelessWidget {
                     usage.scopeLabel,
                     style: TextStyle(
                       color: colors.text,
-                      fontSize: 12.5,
+                      fontSize: 13,
                       fontWeight: FontWeight.w600,
                     ),
                   ),
@@ -1340,13 +1268,13 @@ class _LedgerUsageTile extends StatelessWidget {
                         : '平台确认计量 · ${usage.usageComplete ? '用量完整' : '用量待核对'}',
                     style: TextStyle(
                       color: colors.textSecondary,
-                      fontSize: 11,
+                      fontSize: 12,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
                     formatShortDateTime(usage.createdAt),
-                    style: TextStyle(color: colors.muted, fontSize: 10),
+                    style: TextStyle(color: colors.muted, fontSize: 12),
                   ),
                 ],
               ),
@@ -1360,14 +1288,14 @@ class _LedgerUsageTile extends StatelessWidget {
                     color: usage.chargedMinor > 0
                         ? colors.text
                         : colors.textSecondary,
-                    fontSize: 12.5,
+                    fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
                 const SizedBox(height: 2),
                 Text(
                   usage.statusLabel,
-                  style: TextStyle(color: colors.muted, fontSize: 10),
+                  style: TextStyle(color: colors.muted, fontSize: 12),
                 ),
               ],
             ),
@@ -1402,7 +1330,7 @@ class _UsageMetric extends StatelessWidget {
             value,
             style: TextStyle(
               color: colors.text,
-              fontSize: 17,
+              fontSize: 16,
               fontWeight: FontWeight.w600,
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
@@ -1410,7 +1338,7 @@ class _UsageMetric extends StatelessWidget {
           const SizedBox(height: 2),
           Text(
             label,
-            style: TextStyle(color: colors.textSecondary, fontSize: 10.5),
+            style: TextStyle(color: colors.textSecondary, fontSize: 12),
           ),
         ],
       ),
@@ -1504,7 +1432,7 @@ class _StagePipeline extends StatelessWidget {
                         : index <= activeIndex
                             ? colors.textSecondary
                             : colors.muted,
-                    fontSize: 9.5,
+                    fontSize: 12,
                     height: 1.4,
                   ),
                 ),
@@ -1618,7 +1546,6 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
                 ],
                 SheetHeader(
                   title: '充值订单',
-                  subtitle: '支付状态与到账状态分别记录。',
                   trailing: IconButton(
                     tooltip: '关闭',
                     onPressed: () => Navigator.pop(context),
@@ -1632,7 +1559,7 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
                       order.amount.text,
                       style: TextStyle(
                         color: colors.text,
-                        fontSize: 28,
+                        fontSize: 26,
                         fontWeight: FontWeight.w600,
                         fontFeatures: const [FontFeature.tabularFigures()],
                       ),
@@ -1739,7 +1666,7 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
               label,
               style: TextStyle(
                 color: context.colors.textSecondary,
-                fontSize: 11.5,
+                fontSize: 12,
               ),
             ),
           ),
@@ -1748,7 +1675,7 @@ class _OrderDetailSheetState extends ConsumerState<_OrderDetailSheet> {
               value,
               style: TextStyle(
                 color: context.colors.text,
-                fontSize: 11.5,
+                fontSize: 12,
                 height: 1.5,
               ),
             ),
@@ -1811,7 +1738,7 @@ class _PricingSummary extends StatelessWidget {
                 '计费说明',
                 style: TextStyle(
                   color: colors.text,
-                  fontSize: 12.5,
+                  fontSize: 13,
                   fontWeight: FontWeight.w600,
                 ),
               ),
@@ -1829,7 +1756,7 @@ class _PricingSummary extends StatelessWidget {
           Text(
             serviceText.startsWith('主服务') ? serviceText : '主服务：$serviceText',
             style: TextStyle(
-                color: colors.textSecondary, fontSize: 11.5, height: 1.5),
+                color: colors.textSecondary, fontSize: 12, height: 1.5),
           ),
           const SizedBox(height: 2),
           Text(
@@ -1837,7 +1764,7 @@ class _PricingSummary extends StatelessWidget {
                 ? '题库：按所选公开模型的 token 价格单独计费。'
                 : '题库：按所选公开模型的 token 价格记录用量，自动扣费未开启。',
             style: TextStyle(
-                color: colors.textSecondary, fontSize: 11.5, height: 1.5),
+                color: colors.textSecondary, fontSize: 12, height: 1.5),
           ),
         ],
       ),

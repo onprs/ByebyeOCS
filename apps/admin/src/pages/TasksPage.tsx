@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
-  ArrowRight,
   CheckCheck,
   ChevronRight,
   CircleAlert,
@@ -16,7 +15,7 @@ import {
   ShieldCheck,
   X,
 } from 'lucide-react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { hasPermission } from '../auth/permissions'
 import { getTask, listTasks, runTaskOperation } from '../api/endpoints'
@@ -207,14 +206,13 @@ export function TasksPage() {
   return (
     <>
       <PageHeader
-        eyebrow="任务运行"
         title="任务监控"
-        description="执行观察、平台确认与媒体记录分别展示。观察进度不会自动变成平台完成。"
+
         actions={
           <>
             {owner ? (
               <Button size="sm" onClick={() => setOwner('')}>
-                用户 {owner} <X size={12} />
+                用户 {owner} <X size={14} />
               </Button>
             ) : null}
             <Button onClick={() => tasks.reload()} loading={tasks.loading}>
@@ -233,33 +231,34 @@ export function TasksPage() {
         <Tabs value={group} onChange={value => setGroup(value)} items={stateGroups.map(item => ({ value: item.value, label: item.label }))} />
         <div className="table-toolbar">
           <div className="table-toolbar-group">
-            <span className="form-hint">按任务状态筛选，按最近创建时间排序。</span>
           </div>
           <div className="table-toolbar-group">
             {owner ? <span className="tag">用户 {owner}</span> : null}
-            <Button size="sm" variant="ghost" onClick={clearFilters}>
-              <Filter size={13} /> 重置筛选
-            </Button>
+            {group !== 'all' || owner ? (
+              <Button size="sm" variant="ghost" onClick={clearFilters}>
+                <Filter size={14} /> 重置筛选
+              </Button>
+            ) : null}
           </div>
         </div>
 
         {canOperate && selected.length ? (
           <div className="bulk-bar">
             <span>
-              <ListTodo size={13} /> 已选 <b>{selected.length}</b> 项任务
+              <ListTodo size={14} /> 已选 <b>{selected.length}</b> 项任务
             </span>
             <div className="bulk-bar-actions">
               <Button size="sm" variant="ghost" onClick={() => openOperation('pause')}>
-                <Pause size={12} /> 暂停
+                <Pause size={14} /> 暂停
               </Button>
               <Button size="sm" variant="ghost" onClick={() => openOperation('resume')}>
-                <Play size={12} /> 继续
+                <Play size={14} /> 继续
               </Button>
               <Button size="sm" variant="ghost" onClick={() => openOperation('reschedule')}>
-                <RotateCcw size={12} /> 重新调度
+                <RotateCcw size={14} /> 重新调度
               </Button>
               <Button size="sm" variant="ghost" onClick={() => openOperation('cancel')}>
-                <X size={12} /> 取消任务
+                <X size={14} /> 取消任务
               </Button>
               <IconButton label="清除选择" onClick={() => setSelected([])}>
                 <X size={14} />
@@ -272,17 +271,17 @@ export function TasksPage() {
         {tasks.loading && !tasks.data ? (
           <LoadingBlock rows={5} />
         ) : tasks.error && !tasks.data ? (
-          <div style={{ padding: 18 }}>
+          <div className="u-padding-18px" >
             <ErrorState error={tasks.error} onRetry={tasks.reload} />
           </div>
         ) : visible.length ? (
           <>
             <div className="table-scroll">
-              <table className="data-table">
+              <table className="data-table tasks-table">
                 <thead>
                   <tr>
                     {canOperate ? (
-                      <th style={{ width: 42 }}>
+                      <th className="u-width-42px" >
                         <CheckBox checked={allVisibleSelected} onChange={toggleAllVisible} label="选择当前页全部任务" />
                       </th>
                     ) : null}
@@ -304,7 +303,7 @@ export function TasksPage() {
                         className={`${selectedSet.has(task.id) ? 'is-selected' : ''} ${task.state === 'needs_attention' || task.state === 'failed' ? 'is-alert' : ''}`}
                       >
                         {canOperate ? (
-                          <td>
+                          <td className="cell-select">
                             <CheckBox
                               checked={selectedSet.has(task.id)}
                               onChange={() => toggle(task.id)}
@@ -312,30 +311,29 @@ export function TasksPage() {
                             />
                           </td>
                         ) : null}
-                        <td>
-                          <button className="cell-button" onClick={() => setDetailId(task.id)} aria-label={`查看任务 ${task.title}`}>
+                        <td className="cell-title">
+                          <button className="cell-button" title={task.title} onClick={() => setDetailId(task.id)} aria-label={`查看任务 ${task.title}`}>
                             <span className="cell-stack">
-                              <span className="cell-sub mono">{task.id}</span>
                               <span className="cell-primary">{task.title}</span>
-                              <span className="cell-sub">{task.course_title ?? '未提供课程'}</span>
+                              <span className="cell-sub">{task.course_title ?? '—'}</span>
                             </span>
                           </button>
                         </td>
-                        <td>
+                        <td data-label="用户">
                           <button
                             className="cell-button"
                             onClick={() => navigate(`/users?search=${encodeURIComponent(task.user_id ?? '')}`)}
                           >
                             <Avatar name={task.user_display_name ?? '?'} index={index} small />
-                            <span>{task.user_display_name ?? task.user_id ?? '未提供'}</span>
+                            <span>{task.user_display_name ?? task.user_id ?? '—'}</span>
                           </button>
                         </td>
-                        <td>
+                        <td data-label="状态">
                           <TaskStateBadge state={task.state} label={task.state_label ?? undefined} />
                           {task.last_error_code ? <small className="cell-sub">{task.last_error_code}</small> : null}
                         </td>
-                        <td style={{ minWidth: 130 }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, marginBottom: 6 }}>
+                        <td className="u-min-width-130px" data-label="进度">
+                          <div className="u-display-flex u-justify-content-space-between u-gap-8px u-margin-bottom-6px" >
                             <span>{formatPercent(task.progress_fraction)}</span>
                           </div>
                           <Progress
@@ -343,14 +341,14 @@ export function TasksPage() {
                             tone={task.state === 'confirmed' ? 'green' : task.state === 'needs_attention' ? 'amber' : undefined}
                           />
                         </td>
-                        <td>
+                        <td data-label="平台确认">
                           <Badge tone={platform.tone} dot={platform.tone === 'green'}>
-                            {platform.tone === 'green' ? <CheckCheck size={11} /> : null}
+                            {platform.tone === 'green' ? <CheckCheck size={14} /> : null}
                             {platform.text}
                           </Badge>
                         </td>
-                        <td className="muted">{formatDateTime(task.updated_at)}</td>
-                        <td>
+                        <td className="muted" data-label="更新时间">{formatDateTime(task.updated_at)}</td>
+                        <td className="cell-actions" data-label="操作">
                           <IconButton label={`查看任务 ${task.id}`} onClick={() => setDetailId(task.id)}>
                             <ChevronRight size={16} />
                           </IconButton>
@@ -361,7 +359,6 @@ export function TasksPage() {
                 </tbody>
               </table>
             </div>
-            <p className="mobile-scroll-hint">左右滑动查看完整表格</p>
             <Pagination
               hasPrevious={cursor.hasPrevious}
               hasNext={Boolean(tasks.data?.next_cursor)}
@@ -385,10 +382,7 @@ export function TasksPage() {
         )}
       </Card>
 
-      <div className="card-footer-link" style={{ border: 0, paddingLeft: 2 }}>
-        <CircleAlert size={12} /> 验证码、账号失效、403 或 429 会停止相关操作并等待人工处理，不会无限重试。
-        <Link to="/users?state=expired">查看身份未绑定账号 <ArrowRight size={12} /></Link>
-      </div>
+
 
       <TaskDetailDrawer
         id={detailId}
@@ -449,9 +443,9 @@ function mediaRecords(media: TaskMediaEvidence | null): TaskMediaEvidence['recor
 }
 
 function estimateText(estimate: TaskEstimate | null): string {
-  if (!estimate || !estimate.estimated) return '未提供剩余时间估算'
+  if (!estimate || !estimate.estimated) return '—'
   if (estimate.remaining_seconds_min === null && estimate.remaining_seconds_max === null) {
-    return '未提供剩余时间估算'
+    return '—'
   }
   if (estimate.remaining_seconds_min !== null && estimate.remaining_seconds_max !== null) {
     return `约 ${formatDuration(estimate.remaining_seconds_min)} – ${formatDuration(estimate.remaining_seconds_max)} · 估算`
@@ -475,12 +469,12 @@ function TaskDetailContent({
   return (
     <>
       <div className="account-detail-header">
-        <span className="workspace-icon" style={{ width: 40, height: 40 }}>
-          <ListTodo size={18} />
+        <span className="workspace-icon u-width-40px u-height-40px" >
+          <ListTodo size={16} />
         </span>
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="u-flex-1 u-min-width-0" >
           <h2>{task.title}</h2>
-          <p>{task.id} · {task.course_title ?? '未提供课程'}</p>
+          <p>{task.id} · {task.course_title ?? '—'}</p>
         </div>
         <TaskStateBadge state={task.state} label={task.state_label ?? undefined} />
       </div>
@@ -488,19 +482,19 @@ function TaskDetailContent({
       <div className="info-grid">
         <div className="info-tile">
           <span>所属用户</span>
-          <b>{task.user_display_name ?? task.user_id ?? '未提供'}</b>
+          <b>{task.user_display_name ?? task.user_id ?? '—'}</b>
         </div>
         <div className="info-tile">
           <span>任务版本</span>
-          <b>{task.version === null ? '未提供' : `v${task.version}`}</b>
+          <b>{task.version === null ? '—' : `v${task.version}`}</b>
         </div>
         <div className="info-tile">
           <span>期望状态</span>
-          <b>{task.desired_state ? desiredStateLabels[task.desired_state] ?? task.desired_state : '未提供'}</b>
+          <b>{task.desired_state ? desiredStateLabels[task.desired_state] ?? task.desired_state : '—'}</b>
         </div>
         <div className="info-tile">
           <span>剩余时间</span>
-          <b style={{ fontSize: 11 }}>{estimateText(task.estimate)}</b>
+          <b className="u-font-size-12px" >{estimateText(task.estimate)}</b>
         </div>
         <div className="info-tile">
           <span>尝试次数</span>
@@ -508,25 +502,25 @@ function TaskDetailContent({
         </div>
         <div className="info-tile">
           <span>计费状态</span>
-          <b>{task.billing?.state ? billingStateLabels[task.billing.state] ?? task.billing.state : task.billing?.configured === false ? '未连接账本' : '未提供'}</b>
+          <b>{task.billing?.state ? billingStateLabels[task.billing.state] ?? task.billing.state : task.billing?.configured === false ? '未连接账本' : '—'}</b>
         </div>
         <div className="info-tile">
           <span>计费金额</span>
-          <b>{task.billing?.quoted_amount_minor ? formatMoneyMinor(task.billing.quoted_amount_minor) : '未提供'}</b>
+          <b>{task.billing?.quoted_amount_minor ? formatMoneyMinor(task.billing.quoted_amount_minor) : '—'}</b>
         </div>
       </div>
 
       <div className="detail-section">
-        <div className="detail-section-title"><Activity size={13} /> 执行观察</div>
+        <div className="detail-section-title"><Activity size={14} /> 执行观察</div>
         <div className="callout">
-          <Activity size={15} />
-          <div style={{ flex: 1 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+          <Activity size={16} />
+          <div className="u-flex-1" >
+            <div className="u-display-flex u-justify-content-space-between u-gap-10px u-margin-bottom-8px" >
               <b>{formatPercent(task.observation?.fraction ?? task.progress_fraction)}</b>
-              <span>{task.observation?.source ?? '来源未提供'}</span>
+              <span>{task.observation?.source ?? '—'}</span>
             </div>
             <Progress value={task.observation?.fraction ?? task.progress_fraction} />
-            <div className="form-hint" style={{ marginTop: 7 }}>
+            <div className="form-hint u-margin-top-7px" >
               观察时间：{formatDateTime(task.observation?.observed_at ?? null)}
               {task.observation?.detail ? ` · ${task.observation.detail}` : ''}
             </div>
@@ -535,26 +529,26 @@ function TaskDetailContent({
       </div>
 
       <div className="detail-section">
-        <div className="detail-section-title"><CheckCheck size={13} /> 平台确认依据</div>
+        <div className="detail-section-title"><CheckCheck size={14} /> 平台确认依据</div>
         <div className="callout">
-          <CheckCheck size={15} />
+          <CheckCheck size={16} />
           <div>
             <Badge tone={platform.tone} dot={platform.tone === 'green'}>{platform.text}</Badge>
-            <div className="form-hint" style={{ marginTop: 7 }}>
+            <div className="form-hint u-margin-top-7px" >
               核验时间：{formatDateTime(task.platform?.checked_at ?? null)}
               {task.platform?.basis ? ` · 依据：${task.platform.basis}` : ' · 暂无确认依据'}
             </div>
           </div>
         </div>
         {platform.tone !== 'green' ? (
-          <p className="form-hint" style={{ marginTop: 8 }}>
+          <p className="form-hint u-margin-top-8px" >
             执行观察结束或进度达到 100% 不等于平台已确认，需等待平台核验结果。
           </p>
         ) : null}
       </div>
 
       <div className="detail-section">
-        <div className="detail-section-title"><Film size={13} /> 媒体记录</div>
+        <div className="detail-section-title"><Film size={14} /> 媒体记录</div>
         {media.length ? (
           <dl className="detail-list">
             {media.map((record, index) => (
@@ -570,10 +564,10 @@ function TaskDetailContent({
           </dl>
         ) : (
           <div className="callout">
-            <Film size={15} />
+            <Film size={16} />
             <div>
               <b>无播放记录</b>
-              <div className="form-hint" style={{ marginTop: 4 }}>
+              <div className="form-hint u-margin-top-4px" >
                 {task.media_evidence?.note ?? '暂无可用媒体证据。'}
                 {task.media_evidence?.source ? ` 来源：${task.media_evidence.source}` : ''}
               </div>
@@ -584,7 +578,7 @@ function TaskDetailContent({
 
       {task.timeline.length ? (
         <div className="detail-section">
-          <div className="detail-section-title"><Clock3 size={13} /> 任务时间线</div>
+          <div className="detail-section-title"><Clock3 size={14} /> 任务时间线</div>
           <dl className="detail-list">
             {task.timeline.map((item, index) => (
               <div key={`${item.at ?? 'unknown'}-${index}`}>
@@ -604,7 +598,7 @@ function TaskDetailContent({
           disabled={!operationAllowed(task, 'pause')}
           onClick={() => onOperation('pause')}
         >
-          <Pause size={13} /> 暂停
+          <Pause size={14} /> 暂停
         </Button> : null}
         {canOperate ? (
           <>
@@ -612,26 +606,26 @@ function TaskDetailContent({
               disabled={!operationAllowed(task, 'resume')}
               onClick={() => onOperation('resume')}
             >
-              <Play size={13} /> 继续
+              <Play size={14} /> 继续
             </Button>
             <Button
               disabled={!operationAllowed(task, 'reschedule')}
               onClick={() => onOperation('reschedule')}
             >
-              <RotateCcw size={13} /> 重新调度
+              <RotateCcw size={14} /> 重新调度
             </Button>
             <Button
               variant="danger"
               disabled={!operationAllowed(task, 'cancel')}
               onClick={() => onOperation('cancel')}
             >
-              <X size={13} /> 取消任务
+              <X size={14} /> 取消任务
             </Button>
           </>
         ) : null}
-        <Button variant="ghost" onClick={onReload}><RefreshCw size={13} /> 刷新证据</Button>
+        <Button variant="ghost" onClick={onReload}><RefreshCw size={14} /> 刷新证据</Button>
       </div>
-      <p className="form-hint" style={{ marginTop: 10 }}>
+      <p className="form-hint u-margin-top-10px" >
         {canOperate
           ? '控制操作必须填写原因，操作前会重新核对任务状态；平台已确认任务不会回退重试。'
           : '当前角色只有任务读取权限，控制操作需要任务操作权限。'}
@@ -736,7 +730,7 @@ function TaskOperationDialog({
               <dl className="detail-list">
                 {result.items.map(item => (
                   <div key={`${item.id}-${item.status}`}>
-                    <dt className="mono">{item.id || '未提供编号'}</dt>
+                    <dt className="mono">{item.id || '—'}</dt>
                     <dd>
                       {item.status}
                       {item.stopRequested ? ' · 停止请求已接受' : ''}
@@ -755,7 +749,7 @@ function TaskOperationDialog({
             <CircleAlert size={16} />
             <div>{copy.description}</div>
           </div>
-          <div style={{ marginTop: 18 }}>
+          <div className="u-margin-top-18px" >
             <Field
               label="操作原因"
               required
@@ -774,7 +768,7 @@ function TaskOperationDialog({
             </Field>
           </div>
           {details ? <ErrorState error={error} compact /> : null}
-          <p className="form-hint" style={{ marginTop: 12 }}>
+          <p className="form-hint u-margin-top-12px" >
             状态不适用的任务会被跳过；平台已确认任务不会回退重试。
           </p>
         </>

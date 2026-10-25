@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  ArrowRight,
   ChevronRight,
   CircleAlert,
   Filter,
@@ -14,7 +13,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { hasPermission } from '../auth/permissions'
 import { getAdminUserWallet, getUser, listUsers, runAccountOperation } from '../api/endpoints'
@@ -155,9 +154,8 @@ export function UsersPage() {
   return (
     <>
       <PageHeader
-        eyebrow="用户管理"
         title="用户与账号"
-        description="查看脱敏账号状态、会话与账务归属，批量操作必须填写原因并保留审计。"
+
         actions={
           <Button onClick={() => users.reload()} loading={users.loading}>
             <Search size={14} /> 重新查询
@@ -181,33 +179,34 @@ export function UsersPage() {
             />
           </div>
           <div className="table-toolbar-group">
-            {status !== 'all' ? <span className="form-hint">状态筛选作用于当前页</span> : null}
-            <Button size="sm" variant="ghost" onClick={clearFilters}>
-              <Filter size={13} /> 重置筛选
-            </Button>
+            {status !== 'all' || debouncedQuery ? (
+              <Button size="sm" variant="ghost" onClick={clearFilters}>
+                <Filter size={14} /> 重置筛选
+              </Button>
+            ) : null}
           </div>
         </div>
 
         {canOperate && selected.length ? (
           <div className="bulk-bar">
             <span>
-              <Users size={13} /> 已选 <b>{selected.length}</b> 个账号
+              <Users size={14} /> 已选 <b>{selected.length}</b> 个账号
               {selected.some(id => !visible.some(user => user.id === id)) ? (
                 <span className="tag">含跨页选择</span>
               ) : null}
             </span>
             <div className="bulk-bar-actions">
               <Button size="sm" variant="ghost" onClick={() => openOperation('pause')}>
-                <Pause size={12} /> 暂停安排
+                <Pause size={14} /> 暂停安排
               </Button>
               <Button size="sm" variant="ghost" onClick={() => openOperation('resume')}>
-                <Play size={12} /> 恢复安排
+                <Play size={14} /> 恢复安排
               </Button>
               <Button size="sm" variant="ghost" onClick={() => openOperation('limit')}>
-                <ShieldCheck size={12} /> 限制账号
+                <ShieldCheck size={14} /> 限制账号
               </Button>
               <Button size="sm" variant="ghost" onClick={() => openOperation('release')}>
-                <UnlockKeyhole size={12} /> 解除限制
+                <UnlockKeyhole size={14} /> 解除限制
               </Button>
               <IconButton label="清除选择" onClick={() => setSelected([])}>
                 <X size={14} />
@@ -220,17 +219,17 @@ export function UsersPage() {
         {users.loading && !users.data ? (
           <LoadingBlock rows={4} />
         ) : users.error && !users.data ? (
-          <div style={{ padding: 18 }}>
+          <div className="u-padding-18px" >
             <ErrorState error={users.error} onRetry={users.reload} />
           </div>
         ) : visible.length ? (
           <>
             <div className="table-scroll">
-              <table className="data-table">
+              <table className="data-table users-table">
                 <thead>
                   <tr>
                     {canOperate ? (
-                      <th style={{ width: 42 }}>
+                      <th className="u-width-42px" >
                         <CheckBox
                           checked={allVisibleSelected}
                           onChange={toggleAllVisible}
@@ -251,7 +250,7 @@ export function UsersPage() {
                   {visible.map((user, index) => (
                     <tr key={user.id} className={selectedSet.has(user.id) ? 'is-selected' : ''}>
                       {canOperate ? (
-                        <td>
+                        <td className="cell-select">
                           <CheckBox
                             checked={selectedSet.has(user.id)}
                             onChange={() => toggle(user.id)}
@@ -259,8 +258,8 @@ export function UsersPage() {
                           />
                         </td>
                       ) : null}
-                      <td>
-                        <button className="cell-button" onClick={() => setDetailId(user.id)}>
+                      <td className="cell-title">
+                        <button className="cell-button" title={user.display_name} onClick={() => setDetailId(user.id)}>
                           <Avatar name={user.display_name} index={index} small />
                           <span className="cell-stack">
                             <span className="cell-primary">{user.display_name}</span>
@@ -268,19 +267,18 @@ export function UsersPage() {
                               {user.id}
                               {user.school ? ` · ${user.school}` : ''}
                             </span>
-                            {user.identity_namespace ? <span className="cell-sub">身份命名空间 {user.identity_namespace}</span> : null}
                           </span>
                         </button>
                       </td>
-                      <td>
+                      <td data-label="账号状态">
                         {accountStatusBadge(user)}
                         {user.status_detail ? <small className="cell-sub">{user.status_detail}</small> : null}
                       </td>
-                      <td>{formatNumber(user.course_count)}</td>
-                      <td>{formatNumber(user.plan_count)}</td>
-                      <td>{formatNumber(user.incomplete_task_count)}</td>
-                      <td className="muted">{formatDateTime(user.last_synced_at)}</td>
-                      <td>
+                      <td data-label="课程">{formatNumber(user.course_count)}</td>
+                      <td data-label="安排">{formatNumber(user.plan_count)}</td>
+                      <td data-label="未完成任务">{formatNumber(user.incomplete_task_count)}</td>
+                      <td className="muted" data-label="最近同步">{formatDateTime(user.last_synced_at)}</td>
+                      <td className="cell-actions" data-label="操作">
                         <IconButton label={`查看 ${user.display_name} 详情`} onClick={() => setDetailId(user.id)}>
                           <ChevronRight size={16} />
                         </IconButton>
@@ -290,7 +288,6 @@ export function UsersPage() {
                 </tbody>
               </table>
             </div>
-            <p className="mobile-scroll-hint">左右滑动查看完整表格</p>
             <Pagination
               hasPrevious={cursor.hasPrevious}
               hasNext={Boolean(users.data?.next_cursor)}
@@ -314,10 +311,7 @@ export function UsersPage() {
         )}
       </Card>
 
-      <div className="card-footer-link" style={{ border: 0, paddingLeft: 2 }}>
-        <ShieldCheck size={12} /> 账号凭据不会在管理界面显示。批量操作默认只作用于当前显式选择，不会随分页自动扩大范围。
-        <Link to="/settings?section=security">查看权限策略 <ArrowRight size={12} /></Link>
-      </div>
+
 
       <UserDetailDrawer
         id={detailId}
@@ -421,7 +415,7 @@ function UserDetailContent({
     <>
       <div className="account-detail-header">
         <Avatar name={user.display_name} />
-        <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="u-flex-1 u-min-width-0" >
           <h2>{user.display_name}</h2>
           <p>
             {user.id}
@@ -451,12 +445,12 @@ function UserDetailContent({
       </div>
 
       <div className="detail-section">
-        <div className="detail-section-title"><ShieldCheck size={13} /> 身份与会话</div>
+        <div className="detail-section-title"><ShieldCheck size={14} /> 身份与会话</div>
         <dl className="detail-list">
-          <div><dt>学校</dt><dd>{user.school ?? '未提供'}</dd></div>
-          <div><dt>身份命名空间</dt><dd className="mono">{user.identity_namespace ?? '未提供'}</dd></div>
-          <div><dt>身份绑定</dt><dd>{user.identity_bound === null ? '未提供' : user.identity_bound ? '已绑定' : '未绑定'}</dd></div>
-          <div><dt>账号状态</dt><dd>{user.status_label ?? '未提供'}</dd></div>
+          <div><dt>学校</dt><dd>{user.school ?? '—'}</dd></div>
+          <div><dt>身份命名空间</dt><dd className="mono">{user.identity_namespace ?? '—'}</dd></div>
+          <div><dt>身份绑定</dt><dd>{user.identity_bound === null ? '—' : user.identity_bound ? '已绑定' : '未绑定'}</dd></div>
+          <div><dt>账号状态</dt><dd>{user.status_label ?? '—'}</dd></div>
           <div><dt>受限原因</dt><dd>{user.status_detail ?? '无'}</dd></div>
           <div><dt>受限截止</dt><dd>{formatDateTime(user.blocked_until)}</dd></div>
           <div><dt>最近同步</dt><dd>{formatDateTime(user.last_synced_at)}</dd></div>
@@ -465,10 +459,10 @@ function UserDetailContent({
       </div>
 
       <div className="detail-section">
-        <div className="detail-section-title"><CircleAlert size={13} /> 钱包与余额</div>
+        <div className="detail-section-title"><CircleAlert size={14} /> 钱包与余额</div>
         {!canReadBilling ? (
           <div className="callout">
-            <ShieldCheck size={15} />
+            <ShieldCheck size={16} />
             <div>当前角色没有财务读取权限，无法读取钱包与流水。</div>
           </div>
         ) : wallet.loading && !wallet.data ? (
@@ -483,31 +477,31 @@ function UserDetailContent({
               <div><dt>预占金额</dt><dd>{formatMoneyMinor(walletSnapshot.reserved_minor)}</dd></div>
               <div><dt>题库计费尾差</dt><dd>{formatPriceMicros(walletSnapshot.tiku_accrued_micros)}</dd></div>
               <div><dt>钱包状态</dt><dd>{walletSnapshot.frozen ? `已冻结${walletSnapshot.frozen_reason ? ` · ${walletSnapshot.frozen_reason}` : ''}` : '正常'}</dd></div>
-              <div><dt>钱包版本</dt><dd>{walletSnapshot.version === null ? '未提供' : `v${walletSnapshot.version}`}</dd></div>
-              <div><dt>备注</dt><dd>{user.notes ?? '未提供'}</dd></div>
+              <div><dt>钱包版本</dt><dd>{walletSnapshot.version === null ? '—' : `v${walletSnapshot.version}`}</dd></div>
+              <div><dt>备注</dt><dd>{user.notes ?? '—'}</dd></div>
             </dl>
             {wallet.data?.wallet_created ? (
-              <p className="form-hint" style={{ marginTop: 8 }}>该用户此前没有钱包，本次读取时已创建空钱包。</p>
+              <p className="form-hint u-margin-top-8px" >该用户此前没有钱包，本次读取时已创建空钱包。</p>
             ) : null}
             <div className="detail-actions">
               <Button onClick={() => onOpenWallet(user.id, walletSnapshot.wallet_id, false)}>
-                <Wallet size={13} /> 查看钱包流水
+                <Wallet size={14} /> 查看钱包流水
               </Button>
               {canAdjustWallet ? (
                 <Button onClick={() => onOpenWallet(user.id, walletSnapshot.wallet_id, true)}>
-                  <SlidersHorizontal size={13} /> 调整余额
+                  <SlidersHorizontal size={14} /> 调整余额
                 </Button>
               ) : null}
             </div>
           </>
         ) : null}
-        <div className="callout" style={{ marginTop: 12 }}>
+        <div className="callout u-margin-top-12px" >
           用户是账务归属主体。余额与流水可在钱包页查看；账号详情不显示凭据或会话令牌。
         </div>
       </div>
 
       <div className="detail-section">
-        <div className="detail-section-title"><Users size={13} /> 最近任务</div>
+        <div className="detail-section-title"><Users size={14} /> 最近任务</div>
         {user.recent_tasks.length ? (
           <dl className="detail-list">
             {user.recent_tasks.slice(0, 5).map(task => (
@@ -515,7 +509,7 @@ function UserDetailContent({
                 <dt>{task.state_label ?? task.state}</dt>
                 <dd>
                   <b>{task.title}</b>
-                  <small className="cell-sub">{task.id} · {task.course_title ?? '未提供课程'}</small>
+                  <small className="cell-sub">{task.id} · {task.course_title ?? '—'}</small>
                 </dd>
               </div>
             ))}
@@ -526,21 +520,21 @@ function UserDetailContent({
       </div>
 
       <div className="detail-actions">
-        <Button onClick={() => onOpenTasks(user.id)}><Search size={13} /> 查看关联任务</Button>
+        <Button onClick={() => onOpenTasks(user.id)}><Search size={14} /> 查看关联任务</Button>
         {canOperate ? (
           <>
-            <Button onClick={() => onOperation('pause')}><Pause size={13} /> 暂停安排</Button>
-            <Button onClick={() => onOperation('resume')}><Play size={13} /> 恢复安排</Button>
+            <Button onClick={() => onOperation('pause')}><Pause size={14} /> 暂停安排</Button>
+            <Button onClick={() => onOperation('resume')}><Play size={14} /> 恢复安排</Button>
             <Button
               variant={user.status === 'limited' ? 'secondary' : 'danger'}
               onClick={() => onOperation(user.status === 'limited' ? 'release' : 'limit')}
             >
-              <UnlockKeyhole size={13} /> {user.status === 'limited' ? '解除限制' : '限制账号'}
+              <UnlockKeyhole size={14} /> {user.status === 'limited' ? '解除限制' : '限制账号'}
             </Button>
           </>
         ) : null}
       </div>
-      <p className="form-hint" style={{ marginTop: 10 }}>
+      <p className="form-hint u-margin-top-10px" >
         详情不会显示密码、Cookie 或会话令牌。账号操作会记录原因并保留审计。
       </p>
     </>
@@ -644,7 +638,7 @@ function AccountOperationDialog({
               <dl className="detail-list">
                 {result.items.map(item => (
                   <div key={`${item.id}-${item.status}`}>
-                    <dt className="mono">{item.id || '未提供编号'}</dt>
+                    <dt className="mono">{item.id || '—'}</dt>
                     <dd>{item.status}{item.message ? ` · ${item.message}` : ''}</dd>
                   </div>
                 ))}
@@ -658,7 +652,7 @@ function AccountOperationDialog({
             <CircleAlert size={16} />
             <div>{copy.description}</div>
           </div>
-          <div style={{ marginTop: 18 }}>
+          <div className="u-margin-top-18px" >
             <Field
               label="操作原因"
               required
@@ -677,7 +671,7 @@ function AccountOperationDialog({
             </Field>
           </div>
           {details ? <ErrorState error={error} compact /> : null}
-          <p className="form-hint" style={{ marginTop: 12 }}>
+          <p className="form-hint u-margin-top-12px" >
             选择范围不会随分页改变。每个账号会按当前状态、权限与并发限制逐项处理。
           </p>
         </>

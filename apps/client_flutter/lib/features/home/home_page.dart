@@ -44,10 +44,8 @@ class HomePage extends ConsumerWidget {
             task.state == LearningTaskState.failed)
         .toList(growable: false);
     final recent = tasks
-        .where((task) =>
-            task.state == LearningTaskState.confirmed ||
-            task.state == LearningTaskState.waitingVerification)
-        .take(4)
+        .where((task) => task.state == LearningTaskState.confirmed)
+        .take(3)
         .toList(growable: false);
     final now = DateTime.now();
     final greeting = now.hour < 6
@@ -62,185 +60,107 @@ class HomePage extends ConsumerWidget {
     return RefreshIndicator(
       onRefresh: () => _refresh(ref),
       child: SingleChildScrollView(
+        key: const PageStorageKey('home-scroll'),
         physics: const AlwaysScrollableScrollPhysics(),
-        padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
         child: ResponsiveContent(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _Greeting(
-                greeting: greeting,
-                name: user?.displayLabel ?? '学习通用户',
-                school: user?.schoolLabel ?? '学校信息待同步',
-                dateText: dateText,
-                connected: user?.platformActive ?? false,
-              ),
-              const SizedBox(height: 18),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final wide = constraints.maxWidth >= 900;
-                  final hero = _HeroCard(
-                    enabledPlans: plansAsync.hasValue ? enabledPlans : null,
-                    pendingPoints: coursesAsync.hasValue ? pendingPoints : null,
-                    onPlans: () => context.go('/plans'),
-                    onCourses: () => context.go('/courses'),
-                  );
-                  final walletCard = _HomeWalletCard(
-                    loading: walletAsync.isLoading,
-                    error: walletAsync.hasError,
-                    wallet: wallet,
-                    pricing: walletAsync.valueOrNull?.pricing,
-                    onRetry: () => ref.invalidate(walletControllerProvider),
-                    onOpen: () => context.go('/wallet'),
-                  );
-                  if (!wide) {
-                    return Column(
+            child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            LayoutBuilder(builder: (context, constraints) {
+              final greetingWidget = _Greeting(
+                  greeting: greeting,
+                  name: user?.displayLabel ?? '学习通用户',
+                  school: user?.schoolLabel ?? '—',
+                  dateText: dateText,
+                  connected: user?.platformActive ?? false);
+              final balance = _HomeBalance(
+                  loading: walletAsync.isLoading,
+                  error: walletAsync.hasError,
+                  wallet: wallet,
+                  onRetry: () => ref.invalidate(walletControllerProvider),
+                  onOpen: () => context.go('/wallet'));
+              return constraints.maxWidth >= 900
+                  ? Row(children: [
+                      Expanded(child: greetingWidget),
+                      const SizedBox(width: 24),
+                      Flexible(child: balance)
+                    ])
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        hero,
-                        const SizedBox(height: 12),
-                        walletCard,
-                      ],
-                    );
-                  }
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(flex: 7, child: hero),
-                      const SizedBox(width: 14),
-                      Expanded(flex: 4, child: walletCard),
-                    ],
-                  );
-                },
-              ),
-              const SizedBox(height: 14),
-              _StatsStrip(
+                          greetingWidget,
+                          const SizedBox(height: 12),
+                          balance
+                        ]);
+            }),
+            const SizedBox(height: 20),
+            _StatsStrip(
                 courseCount: coursesAsync.hasValue ? courses.length : null,
                 pendingPoints: coursesAsync.hasValue ? pendingPoints : null,
                 enabledPlans: plansAsync.hasValue ? enabledPlans : null,
                 confirmedTasks: tasksAsync.hasValue ? confirmedTasks : null,
                 onCourses: () => context.go('/courses'),
-                onPlans: () => context.go('/plans'),
-              ),
-              if (attention.isNotEmpty) ...[
-                const SizedBox(height: 14),
-                _AttentionBanner(
+                onPlans: () => context.go('/plans')),
+            if (attention.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              _AttentionBanner(
                   task: attention.first,
                   count: attention.length,
-                  onOpen: () => context.go('/plans'),
-                ),
-              ],
-              if (coursesAsync.hasError ||
-                  plansAsync.hasError ||
-                  tasksAsync.hasError) ...[
-                const SizedBox(height: 14),
-                InlineNotice(
+                  onOpen: () => context.go('/plans')),
+            ],
+            if (coursesAsync.hasError ||
+                plansAsync.hasError ||
+                tasksAsync.hasError) ...[
+              const SizedBox(height: 16),
+              InlineNotice(
                   tone: StatusTone.warning,
-                  icon: Icons.cloud_off_outlined,
                   message: _errorSummary(coursesAsync, plansAsync, tasksAsync),
                   action: TextButton(
-                    onPressed: () => _refresh(ref),
-                    child: const Text('重试'),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 24),
-              _SectionHeading(
-                title: '继续你的学习',
-                subtitle: '课程完成数来自学习通平台返回。',
+                      onPressed: () => _refresh(ref), child: const Text('重试'))),
+            ],
+            const SizedBox(height: 24),
+            _SectionHeading(
+                title: '我的课程',
                 action: TextButton(
-                  onPressed: () => context.go('/courses'),
-                  child: const Text('全部课程'),
-                ),
-              ),
-              const SizedBox(height: 12),
-              if (coursesAsync.isLoading)
-                const LoadingList(rows: 1, height: 150)
-              else if (coursesAsync.hasError)
-                ErrorPanel(
+                    onPressed: () => context.go('/courses'),
+                    child: const Text('全部课程'))),
+            const SizedBox(height: 8),
+            if (coursesAsync.isLoading)
+              const LoadingList(rows: 3, height: 64)
+            else if (coursesAsync.hasError)
+              ErrorPanel(
                   message: coursesAsync.error is ApiException
                       ? (coursesAsync.error! as ApiException).userMessage
                       : '课程暂时无法加载',
                   compact: true,
-                  onRetry: () => ref.invalidate(coursesControllerProvider),
-                )
-              else if (courses.isEmpty)
-                SectionCard(
-                  child: EmptyState(
-                    icon: Icons.menu_book_outlined,
-                    title: '还没有同步课程',
-                    message: '同步学习通课程后，任务点与进度会显示在这里。',
-                    compact: true,
-                    action: OutlinedButton(
+                  onRetry: () => ref.invalidate(coursesControllerProvider))
+            else if (courses.isEmpty)
+              EmptyState(
+                  title: '还没有同步课程',
+                  compact: true,
+                  action: OutlinedButton(
                       onPressed: () => context.go('/courses'),
-                      child: const Text('去同步课程'),
-                    ),
-                  ),
-                )
-              else
-                LayoutBuilder(
-                  builder: (context, constraints) {
-                    final columns = constraints.maxWidth >= 980
-                        ? 3
-                        : constraints.maxWidth >= 640
-                            ? 2
-                            : 1;
-                    final spacing = 12.0;
-                    final width =
-                        (constraints.maxWidth - spacing * (columns - 1)) /
-                            columns;
-                    return Wrap(
-                      spacing: spacing,
-                      runSpacing: spacing,
-                      children: [
-                        for (final course in courses.take(3))
-                          SizedBox(
-                            width: width,
-                            child: _MiniCourseCard(
-                              course: course,
-                              onTap: () => context.go('/courses/${course.id}'),
-                            ),
-                          ),
-                      ],
-                    );
-                  },
-                ),
-              const SizedBox(height: 24),
-              LayoutBuilder(
-                builder: (context, constraints) {
-                  final wide = constraints.maxWidth >= 900;
-                  final plansSection = _PlansSection(
-                    async: plansAsync,
-                    onOpen: () => context.go('/plans'),
-                    onRetry: () => ref.invalidate(plansControllerProvider),
-                  );
-                  final recentSection = _RecentSection(
-                    async: tasksAsync,
-                    tasks: recent,
-                    onOpen: () => context.go('/plans'),
-                    onRetry: () => ref.invalidate(homeTasksProvider),
-                  );
-                  if (!wide) {
-                    return Column(
-                      children: [
-                        plansSection,
-                        const SizedBox(height: 14),
-                        recentSection,
-                      ],
-                    );
-                  }
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: plansSection),
-                      const SizedBox(width: 14),
-                      Expanded(child: recentSection),
-                    ],
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
+                      child: const Text('同步课程')))
+            else
+              Column(children: [
+                for (final course in courses.take(3))
+                  _HomeCourseRow(
+                      course: course,
+                      onTap: () => context.go('/courses/${course.id}'))
+              ]),
+            const SizedBox(height: 24),
+            _PlansSection(
+              async: plansAsync,
+              onOpen: () => context.go('/plans'),
+              onRetry: () => ref.invalidate(plansControllerProvider),
+              recent: _RecentSection(
+                  async: tasksAsync,
+                  tasks: recent,
+                  onOpen: () => context.go('/plans'),
+                  onRetry: () => ref.invalidate(homeTasksProvider)),
+            ),
+          ],
+        )),
       ),
     );
   }
@@ -338,7 +258,7 @@ class _Greeting extends StatelessWidget {
             ),
             Text(
               dateText,
-              style: TextStyle(color: colors.muted, fontSize: 11.5),
+              style: TextStyle(color: colors.muted, fontSize: 12),
             ),
           ],
         ),
@@ -347,349 +267,109 @@ class _Greeting extends StatelessWidget {
           '$greeting，$name。',
           style: TextStyle(
             color: colors.text,
-            fontSize: 27,
+            fontSize: 26,
             fontWeight: FontWeight.w600,
             letterSpacing: -0.8,
             height: 1.25,
           ),
         ),
-        const SizedBox(height: 5),
-        Text(
-          '学习的每一步，都值得被看见。',
-          style: TextStyle(
-            color: colors.textSecondary,
-            fontSize: 13.5,
-          ),
-        ),
       ],
-    );
-  }
-}
-
-class _HeroCard extends StatelessWidget {
-  const _HeroCard({
-    required this.enabledPlans,
-    required this.pendingPoints,
-    required this.onPlans,
-    required this.onCourses,
-  });
-
-  final int? enabledPlans;
-  final int? pendingPoints;
-  final VoidCallback onPlans;
-  final VoidCallback onCourses;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final narrow = context.isNarrow;
-    return Container(
-      padding: EdgeInsets.all(narrow ? 20 : 26),
-      decoration: BoxDecoration(
-        color: colors.heroBg,
-        borderRadius: colors.cardRadius,
-        border: Border.all(color: colors.border),
-      ),
-      child: Stack(
-        children: [
-          Positioned(
-            right: -24,
-            top: -30,
-            child: Container(
-              width: 150,
-              height: 150,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: colors.heroText.withValues(alpha: 0.12),
-                ),
-              ),
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                '你的学习空间',
-                style: TextStyle(
-                  color: colors.heroText.withValues(alpha: 0.7),
-                  fontSize: 11,
-                  letterSpacing: 1.1,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                '让计划向前，\n让时间留给你。',
-                style: TextStyle(
-                  color: colors.heroText,
-                  fontSize: narrow ? 25 : 32,
-                  height: 1.3,
-                  fontWeight: FontWeight.w600,
-                  letterSpacing: -0.7,
-                ),
-              ),
-              const SizedBox(height: 10),
-              Text(
-                enabledPlans == null || pendingPoints == null
-                    ? '正在读取你的课程与安排摘要。'
-                    : pendingPoints == 0
-                        ? '当前 $enabledPlans 条安排已开启，没有待确认的任务点。'
-                        : '当前 $enabledPlans 条安排已开启，$pendingPoints 个任务点仍待平台确认。',
-                style: TextStyle(
-                  color: colors.heroText.withValues(alpha: 0.8),
-                  fontSize: 13,
-                  height: 1.65,
-                ),
-              ),
-              const SizedBox(height: 18),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: [
-                  FilledButton.icon(
-                    onPressed: onPlans,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: colors.surface,
-                      foregroundColor: colors.heroText,
-                    ),
-                    icon: const Icon(Icons.calendar_month_outlined, size: 16),
-                    label: const Text('查看我的安排'),
-                  ),
-                  OutlinedButton.icon(
-                    onPressed: onCourses,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: colors.heroText,
-                      side: BorderSide(
-                        color: colors.heroText.withValues(alpha: 0.25),
-                      ),
-                    ),
-                    icon: const Icon(Icons.sync_outlined, size: 16),
-                    label: const Text('课程与同步'),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 14,
-                runSpacing: 6,
-                children: [
-                  _HeroFact(
-                    icon: Icons.verified_outlined,
-                    label: '平台确认再计完成',
-                  ),
-                  _HeroFact(
-                    icon: Icons.timer_outlined,
-                    label: '预计时间标注为估算',
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _HeroFact extends StatelessWidget {
-  const _HeroFact({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, size: 13, color: colors.heroText.withValues(alpha: 0.6)),
-        const SizedBox(width: 5),
-        Text(
-          label,
-          style: TextStyle(
-            color: colors.heroText.withValues(alpha: 0.65),
-            fontSize: 10.5,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _HomeWalletCard extends StatelessWidget {
-  const _HomeWalletCard({
-    required this.loading,
-    required this.error,
-    required this.wallet,
-    required this.pricing,
-    required this.onRetry,
-    required this.onOpen,
-  });
-
-  final bool loading;
-  final bool error;
-  final WalletSnapshot? wallet;
-  final PricingInfo? pricing;
-  final VoidCallback onRetry;
-  final VoidCallback onOpen;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return SectionCard(
-      title: '我的钱包',
-      action: IconButton(
-        tooltip: '查看钱包',
-        onPressed: onOpen,
-        icon: const Icon(Icons.arrow_outward, size: 17),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (loading)
-            const SkeletonBlock(height: 42, width: 150)
-          else if (error)
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '余额暂不可用',
-                  style: TextStyle(color: colors.text, fontSize: 14),
-                ),
-                const SizedBox(height: 6),
-                TextButton(
-                  onPressed: onRetry,
-                  child: const Text('重新加载'),
-                ),
-              ],
-            )
-          else ...[
-            Text(
-              '可用余额',
-              style: TextStyle(color: colors.textSecondary, fontSize: 11.5),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              wallet?.available.text ?? '—',
-              style: TextStyle(
-                color: colors.text,
-                fontSize: 28,
-                fontWeight: FontWeight.w600,
-                letterSpacing: -0.7,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '预占 ${wallet?.reserved.text ?? '—'}',
-              style: TextStyle(color: colors.muted, fontSize: 11),
-            ),
-          ],
-          const SizedBox(height: 12),
-          Text(
-            pricing == null
-                ? '计费信息暂不可用'
-                : pricing!.automaticCharging
-                    ? '按平台确认的任务点计量'
-                    : '单价待公布，暂未自动扣费',
-            style: TextStyle(
-              color: colors.textSecondary,
-              fontSize: 11,
-              height: 1.5,
-            ),
-          ),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: onOpen,
-              icon: const Icon(Icons.add_card_outlined, size: 16),
-              label: const Text('充值或查看明细'),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }
 
 class _StatsStrip extends StatelessWidget {
-  const _StatsStrip({
-    required this.courseCount,
-    required this.pendingPoints,
-    required this.enabledPlans,
-    required this.confirmedTasks,
-    required this.onCourses,
-    required this.onPlans,
-  });
-
-  final int? courseCount;
-  final int? pendingPoints;
-  final int? enabledPlans;
-  final int? confirmedTasks;
-  final VoidCallback onCourses;
-  final VoidCallback onPlans;
-
+  const _StatsStrip(
+      {required this.courseCount,
+      required this.pendingPoints,
+      required this.enabledPlans,
+      required this.confirmedTasks,
+      required this.onCourses,
+      required this.onPlans});
+  final int? courseCount, pendingPoints, enabledPlans, confirmedTasks;
+  final VoidCallback onCourses, onPlans;
   @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final columns = constraints.maxWidth >= 860
-            ? 4
-            : constraints.maxWidth >= 520
-                ? 2
-                : 2;
-        final spacing = 10.0;
-        final width =
-            (constraints.maxWidth - spacing * (columns - 1)) / columns;
-        return Wrap(
-          spacing: spacing,
-          runSpacing: spacing,
-          children: [
-            SizedBox(
-              width: width,
-              child: MetricTile(
-                label: '门课程已同步',
-                value: courseCount?.toString() ?? '—',
-                icon: Icons.menu_book_outlined,
-                onTap: onCourses,
-              ),
-            ),
-            SizedBox(
-              width: width,
-              child: MetricTile(
-                label: '个任务点待确认',
-                value: pendingPoints?.toString() ?? '—',
-                icon: Icons.pending_actions_outlined,
-                onTap: onCourses,
-              ),
-            ),
-            SizedBox(
-              width: width,
-              child: MetricTile(
-                label: '条安排已开启',
-                value: enabledPlans?.toString() ?? '—',
-                icon: Icons.calendar_month_outlined,
-                onTap: onPlans,
-              ),
-            ),
-            SizedBox(
-              width: width,
-              child: MetricTile(
-                label: '项近期平台确认',
-                value: confirmedTasks?.toString() ?? '—',
-                icon: Icons.verified_outlined,
-                onTap: onPlans,
-              ),
-            ),
-          ],
-        );
-      },
+    final colors = context.colors;
+    final values = [courseCount, pendingPoints, enabledPlans, confirmedTasks];
+    const labels = ['已同步课程', '待确认', '开启安排', '近期确认'];
+    return Container(
+      decoration: BoxDecoration(
+          border: Border(
+              top: BorderSide(color: colors.border),
+              bottom: BorderSide(color: colors.border))),
+      child: IntrinsicHeight(
+          child: Row(children: [
+        for (var index = 0; index < labels.length; index++) ...[
+          if (index > 0)
+            VerticalDivider(
+                width: 1, color: colors.border, indent: 16, endIndent: 16),
+          Expanded(
+              child: InkWell(
+            onTap: index == 0 ? onCourses : onPlans,
+            child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(values[index]?.toString() ?? '—',
+                        style: TextStyle(
+                            color: colors.text,
+                            fontSize: 26,
+                            fontWeight: FontWeight.w600,
+                            fontFeatures: const [
+                              FontFeature.tabularFigures()
+                            ])),
+                    const SizedBox(height: 4),
+                    Text(labels[index],
+                        style: TextStyle(
+                            color: colors.textSecondary, fontSize: 12)),
+                  ],
+                )),
+          )),
+        ],
+      ])),
     );
   }
+}
+
+class _HomeBalance extends StatelessWidget {
+  const _HomeBalance(
+      {required this.loading,
+      required this.error,
+      required this.wallet,
+      required this.onRetry,
+      required this.onOpen});
+  final bool loading, error;
+  final WalletSnapshot? wallet;
+  final VoidCallback onRetry, onOpen;
+  @override
+  Widget build(BuildContext context) => Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 12,
+        runSpacing: 8,
+        children: [
+          Text('我的钱包',
+              style:
+                  TextStyle(color: context.colors.textSecondary, fontSize: 13)),
+          if (loading)
+            const SkeletonBlock(width: 100, height: 26)
+          else if (error)
+            TextButton(onPressed: onRetry, child: const Text('余额读取失败，重试'))
+          else
+            Text(wallet?.available.text ?? '—',
+                style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w600,
+                    fontFeatures: [FontFeature.tabularFigures()])),
+          if (!loading && !error)
+            Text('预占 ${wallet?.reserved.text ?? '—'}',
+                style: TextStyle(
+                    color: context.colors.textSecondary, fontSize: 12)),
+          OutlinedButton(onPressed: onOpen, child: const Text('充值')),
+        ],
+      );
 }
 
 class _AttentionBanner extends StatelessWidget {
@@ -735,7 +415,7 @@ class _AttentionBanner extends StatelessWidget {
                   '${task.title} · ${taskFailureLabel(task)}',
                   style: TextStyle(
                     color: colors.textSecondary,
-                    fontSize: 11.5,
+                    fontSize: 12,
                     height: 1.5,
                   ),
                 ),
@@ -753,161 +433,110 @@ class _AttentionBanner extends StatelessWidget {
   }
 }
 
-class _SectionHeading extends StatelessWidget {
-  const _SectionHeading({
-    required this.title,
-    this.subtitle,
-    this.action,
-  });
-
-  final String title;
-  final String? subtitle;
+class _InlineEmpty extends StatelessWidget {
+  const _InlineEmpty({required this.message, this.action});
+  final String message;
   final Widget? action;
-
   @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  color: colors.text,
-                  fontSize: 17,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              if (subtitle != null) ...[
-                const SizedBox(height: 3),
-                Text(
-                  subtitle!,
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20),
+        child: Row(children: [
+          Expanded(
+              child: Text(message,
                   style: TextStyle(
-                    color: colors.textSecondary,
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ],
-          ),
-        ),
-        if (action != null) action!,
-      ],
-    );
-  }
+                      color: context.colors.textSecondary, fontSize: 14))),
+          if (action != null) action!,
+        ]),
+      );
 }
 
-class _MiniCourseCard extends StatelessWidget {
-  const _MiniCourseCard({required this.course, required this.onTap});
+class _SectionHeading extends StatelessWidget {
+  const _SectionHeading({required this.title, required this.action});
+  final String title;
+  final Widget action;
+  @override
+  Widget build(BuildContext context) => Row(children: [
+        Expanded(
+            child: Text(title,
+                style: const TextStyle(
+                    fontSize: 16, fontWeight: FontWeight.w600))),
+        action
+      ]);
+}
 
+class _HomeCourseRow extends StatelessWidget {
+  const _HomeCourseRow({required this.course, required this.onTap});
   final CourseSummary course;
   final VoidCallback onTap;
-
   @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    final progress = course.taskPointCount == 0
-        ? 0.0
-        : course.confirmedTaskPoints / course.taskPointCount;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: colors.cardRadius,
-      child: Container(
-        decoration: BoxDecoration(
-          color: colors.surface,
-          borderRadius: colors.cardRadius,
-          border: Border.all(color: colors.border),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            CourseArt(seed: course.id, height: 74),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(13, 11, 13, 13),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    course.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: colors.text,
-                      fontSize: 13.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+  Widget build(BuildContext context) => InkWell(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: context.colors.border))),
+          child: Row(children: [
+            Expanded(
+                child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                  Text(course.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          fontSize: 14, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 4),
                   Text(
-                    '平台已确认 ${course.confirmedTaskPoints} / ${course.taskPointCount}',
-                    style: TextStyle(
-                      color: colors.textSecondary,
-                      fontSize: 11,
-                    ),
-                  ),
-                  const SizedBox(height: 7),
-                  ProgressBar(value: progress, height: 4),
-                ],
-              ),
-            ),
-          ],
+                      '平台已确认 ${course.confirmedTaskPoints} / ${course.taskPointCount}',
+                      style: TextStyle(
+                          color: context.colors.textSecondary, fontSize: 13)),
+                ])),
+            const SizedBox(width: 16),
+            const Icon(Icons.chevron_right, size: 16),
+          ]),
         ),
-      ),
-    );
-  }
+      );
 }
 
 class _PlansSection extends StatelessWidget {
-  const _PlansSection({
-    required this.async,
-    required this.onOpen,
-    required this.onRetry,
-  });
-
+  const _PlansSection(
+      {required this.async,
+      required this.onOpen,
+      required this.onRetry,
+      required this.recent});
   final AsyncValue<PlansState> async;
-  final VoidCallback onOpen;
-  final VoidCallback onRetry;
-
+  final VoidCallback onOpen, onRetry;
+  final Widget recent;
   @override
-  Widget build(BuildContext context) {
-    return SectionCard(
-      title: '你的学习安排',
-      action: TextButton(onPressed: onOpen, child: const Text('管理安排')),
-      child: async.when(
-        loading: () => const LoadingList(rows: 2, height: 58),
-        error: (error, _) => ErrorPanel(
-          message: error is ApiException ? error.userMessage : '安排暂时无法加载',
-          compact: true,
-          onRetry: onRetry,
-        ),
-        data: (data) {
-          if (data.plans.isEmpty) {
-            return EmptyState(
-              icon: Icons.calendar_month_outlined,
-              title: '还没有任务安排',
-              message: '选择课程和章节，建立第一条学习安排。',
-              compact: true,
-              action: OutlinedButton(
-                onPressed: onOpen,
-                child: const Text('新建安排'),
-              ),
-            );
-          }
-          return Column(
-            children: [
-              for (final plan in data.plans.take(2))
-                _HomePlanRow(plan: plan, onTap: onOpen),
-            ],
-          );
-        },
-      ),
-    );
-  }
+  Widget build(BuildContext context) => SectionCard(
+        title: '你的学习安排',
+        framed: false,
+        padding: EdgeInsets.zero,
+        headerPadding: EdgeInsets.zero,
+        action: TextButton(onPressed: onOpen, child: const Text('管理安排')),
+        child:
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          async.when(
+            loading: () => const LoadingList(rows: 2, height: 64),
+            error: (error, _) => ErrorPanel(
+                message: error is ApiException ? error.userMessage : '安排暂时无法加载',
+                compact: true,
+                onRetry: onRetry),
+            data: (data) => data.plans.isEmpty
+                ? _InlineEmpty(
+                    message: '还没有任务安排',
+                    action: TextButton(
+                        onPressed: onOpen, child: const Text('新建安排')))
+                : Column(children: [
+                    for (final plan in data.plans.take(3))
+                      _HomePlanRow(plan: plan, onTap: onOpen)
+                  ]),
+          ),
+          const SizedBox(height: 16),
+          Divider(color: context.colors.border),
+          recent,
+        ]),
+      );
 }
 
 class _HomePlanRow extends StatelessWidget {
@@ -960,7 +589,7 @@ class _HomePlanRow extends StatelessWidget {
                     '${plan.courseIds.length} 门课程 · ${plan.taskTypes.length} 种任务',
                     style: TextStyle(
                       color: colors.textSecondary,
-                      fontSize: 11,
+                      fontSize: 12,
                     ),
                   ),
                 ],
@@ -995,8 +624,10 @@ class _RecentSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SectionCard(
-      title: '最近进展',
-      action: const StatusPill(label: '平台返回', tone: StatusTone.neutral),
+      title: '最近确认',
+      framed: false,
+      padding: EdgeInsets.zero,
+      headerPadding: EdgeInsets.zero,
       child: async.when(
         loading: () => const LoadingList(rows: 2, height: 52),
         error: (error, _) => ErrorPanel(
@@ -1006,12 +637,7 @@ class _RecentSection extends StatelessWidget {
         ),
         data: (_) {
           if (tasks.isEmpty) {
-            return const EmptyState(
-              icon: Icons.fact_check_outlined,
-              title: '还没有平台返回的进展',
-              message: '任务执行结束后会再次查询平台，确认结果会显示在这里。',
-              compact: true,
-            );
+            return const _InlineEmpty(message: '暂无平台确认记录');
           }
           return Column(
             children: [
@@ -1044,7 +670,7 @@ class _RecentSection extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(
                                   color: context.colors.text,
-                                  fontSize: 12.5,
+                                  fontSize: 13,
                                   fontWeight: FontWeight.w500,
                                 ),
                               ),
@@ -1053,7 +679,7 @@ class _RecentSection extends StatelessWidget {
                                 task.courseTitle ?? '课程',
                                 style: TextStyle(
                                   color: context.colors.textSecondary,
-                                  fontSize: 10.5,
+                                  fontSize: 12,
                                 ),
                               ),
                             ],

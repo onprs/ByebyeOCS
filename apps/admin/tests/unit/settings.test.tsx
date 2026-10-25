@@ -174,7 +174,7 @@ describe('计费设置价格契约', () => {
     })
     renderSettings()
 
-    await screen.findByText('题库按公开模型的 token 价格单独计费，不在全局设置中维护费率。')
+    await screen.findByRole('heading', { name: '题库计价' })
     expect(screen.getByText('按公开模型 token 价格')).toBeInTheDocument()
     expect(screen.queryByText('输入价格')).not.toBeInTheDocument()
     expect(screen.queryByText('输出价格')).not.toBeInTheDocument()
@@ -192,7 +192,7 @@ describe('计费设置价格契约', () => {
     const open = vi.spyOn(window, 'open').mockImplementation(() => null)
     renderSettings()
 
-    await screen.findByText('题库按公开模型的 token 价格单独计费，不在全局设置中维护费率。')
+    await screen.findByRole('heading', { name: '题库计价' })
     await user.click(screen.getByRole('button', { name: '打开题库面板' }))
     expect(open).toHaveBeenCalledWith('/panel/', '_blank', 'noopener,noreferrer')
   })
