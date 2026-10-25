@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
 import '../../core/api/api_error.dart';
 import '../../core/api/json.dart';
 import '../../core/models/plan.dart';
 import '../../core/models/question.dart';
+import '../../app/tab_navigation.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
 import 'question_providers.dart';
@@ -224,7 +224,7 @@ class _QuestionQueryPageState extends ConsumerState<QuestionQueryPage> {
             Align(
               alignment: Alignment.centerLeft,
               child: TextButton.icon(
-                onPressed: () => context.go('/settings'),
+                onPressed: () => openTab(context, 4, '/settings'),
                 icon: const Icon(Icons.arrow_back, size: 16),
                 label: const Text('返回设置'),
               ),

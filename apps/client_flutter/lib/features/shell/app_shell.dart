@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
+import '../../app/tab_navigation.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
 
@@ -109,7 +110,10 @@ class _AppShellState extends ConsumerState<AppShell>
                   bucket: _pageStorage,
                   child: FadeTransition(
                     opacity: _fade,
-                    child: widget.navigationShell,
+                    child: TabNavigation(
+                      go: _navigate,
+                      child: widget.navigationShell,
+                    ),
                   ),
                 ),
               ),

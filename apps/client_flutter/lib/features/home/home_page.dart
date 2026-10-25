@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
 import '../../app/scroll_controllers.dart';
+import '../../app/tab_navigation.dart';
 import '../../core/api/api_error.dart';
 import '../../core/models/course.dart';
 import '../../core/models/plan.dart';
@@ -88,7 +89,7 @@ class HomePage extends ConsumerWidget {
                   onOpenCourse: courses.isEmpty
                       ? null
                       : () => context.go('/courses/${courses.first.id}'),
-                  onOpenCourses: () => context.go('/courses'),
+                  onOpenCourses: () => openTab(context, 1, '/courses'),
                   onRetry: () => ref.invalidate(coursesControllerProvider),
                 );
                 final walletCard = _WalletCard(
@@ -96,8 +97,8 @@ class HomePage extends ConsumerWidget {
                   error: walletAsync.hasError,
                   wallet: wallet,
                   onRetry: () => ref.invalidate(walletControllerProvider),
-                  onRecharge: () => context.go('/wallet'),
-                  onDetails: () => context.go('/wallet'),
+                  onRecharge: () => openTab(context, 3, '/wallet'),
+                  onDetails: () => openTab(context, 3, '/wallet'),
                 );
                 if (constraints.maxWidth < 900) {
                   return Column(
@@ -124,15 +125,15 @@ class HomePage extends ConsumerWidget {
                 pendingPoints: coursesAsync.hasValue ? pendingPoints : null,
                 enabledPlans: plansAsync.hasValue ? enabledPlans : null,
                 confirmedTasks: tasksAsync.hasValue ? confirmedTasks : null,
-                onCourses: () => context.go('/courses'),
-                onPlans: () => context.go('/plans'),
+                onCourses: () => openTab(context, 1, '/courses'),
+                onPlans: () => openTab(context, 2, '/plans'),
               ),
               if (attention.isNotEmpty) ...[
                 const SizedBox(height: 16),
                 _AttentionBanner(
                   task: attention.first,
                   count: attention.length,
-                  onOpen: () => context.go('/plans'),
+                  onOpen: () => openTab(context, 2, '/plans'),
                 ),
               ],
               if (coursesAsync.hasError ||
@@ -153,7 +154,7 @@ class HomePage extends ConsumerWidget {
                 title: '继续你的学习',
                 subtitle: '平台确认的任务点会累计到课程进度。',
                 action: TextButton(
-                  onPressed: () => context.go('/courses'),
+                  onPressed: () => openTab(context, 1, '/courses'),
                   child: const Text('全部课程'),
                 ),
               ),
@@ -174,7 +175,7 @@ class HomePage extends ConsumerWidget {
                   message: '同步学习通课程后，章节和任务点会显示在这里。',
                   compact: true,
                   action: OutlinedButton(
-                    onPressed: () => context.go('/courses'),
+                    onPressed: () => openTab(context, 1, '/courses'),
                     child: const Text('同步课程'),
                   ),
                 )
@@ -187,13 +188,13 @@ class HomePage extends ConsumerWidget {
               LayoutBuilder(builder: (context, constraints) {
                 final plansCard = _PlansCard(
                   async: plansAsync,
-                  onOpen: () => context.go('/plans'),
+                  onOpen: () => openTab(context, 2, '/plans'),
                   onRetry: () => ref.invalidate(plansControllerProvider),
                 );
                 final recentCard = _RecentCard(
                   async: tasksAsync,
                   tasks: recent,
-                  onOpen: () => context.go('/plans'),
+                  onOpen: () => openTab(context, 2, '/plans'),
                   onRetry: () => ref.invalidate(homeTasksProvider),
                 );
                 if (constraints.maxWidth < 900) {

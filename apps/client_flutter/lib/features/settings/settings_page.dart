@@ -11,6 +11,7 @@ import '../../core/models/auth.dart';
 import '../../core/models/data_request.dart';
 import '../../core/models/preferences.dart';
 import '../../app/scroll_controllers.dart';
+import '../../app/tab_navigation.dart';
 import '../../design/components.dart';
 import '../../design/palette.dart';
 import '../../design/theme.dart';
@@ -232,7 +233,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                             contentPadding: EdgeInsets.zero,
                             title: const Text('题库查询'),
                             trailing: const Icon(Icons.chevron_right, size: 16),
-                            onTap: () => context.go('/questions')),
+                            onTap: () => openTab(context, 5, '/questions')),
                       ListTile(
                           contentPadding: EdgeInsets.zero,
                           title: const Text('常见问题'),
