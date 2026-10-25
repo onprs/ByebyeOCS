@@ -1355,3 +1355,10 @@
   flex: 1;
   min-width: 160px;
 }
+
+.empty-line {
+  padding: 36px 20px;
+  color: var(--muted);
+  font-size: var(--font-secondary);
+  text-align: center;
+}

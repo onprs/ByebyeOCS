@@ -17,12 +17,9 @@ import {
   normalizeEvent,
   normalizeList,
   normalizeMe,
-  normalizeModel,
   normalizeOrder,
   normalizePrivacyReview,
   normalizePreferences,
-  normalizeQuestionQuery,
-  normalizeQuestionUsage,
   normalizeReconciliation,
   normalizeRefund,
   normalizeRuntimeSettings,
@@ -63,9 +60,6 @@ import type {
   HealthStatus,
   Order,
   Paginated,
-  QuestionModel,
-  QuestionQuery,
-  QuestionUsageSummary,
   Reconciliation,
   Refund,
   RuntimeSettings,
@@ -556,35 +550,7 @@ export async function getFinanceSummary(
   return { data: normalizeFinanceSummary(response.data), etag: response.etag }
 }
 
-// —— 题库目录与查询 ——
-
-export async function listQuestionModels(
-  params: { cursor?: string | null; limit?: number } = {},
-): Promise<ApiResponse<Paginated<QuestionModel>>> {
-  const response = await apiGet<unknown>(`/question-models${queryString({ ...params, limit: params.limit ?? 100 })}`)
-  return { data: normalizeList(response.data, normalizeModel), etag: response.etag }
-}
-
-export async function getQuestionUsage(
-  params: { offering_id?: string } = {},
-): Promise<ApiResponse<QuestionUsageSummary>> {
-  const response = await apiGet<unknown>(`/question-usage${queryString(params)}`)
-  return { data: normalizeQuestionUsage(response.data), etag: response.etag }
-}
-
-export async function listQuestionQueries(
-  params: QueryListParams = {},
-): Promise<ApiResponse<Paginated<QuestionQuery>>> {
-  const response = await apiGet<unknown>(
-    `/question-queries${queryString({
-      status: params.status,
-      offering_id: params.offeringId,
-      cursor: params.cursor,
-      limit: params.limit ?? 25,
-    })}`,
-  )
-  return { data: normalizeList(response.data, normalizeQuestionQuery), etag: response.etag }
-}
+// —— 题库缓存报告 ——
 
 export async function invalidateQuestionCache(input: {
   queryId: string

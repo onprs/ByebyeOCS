@@ -123,7 +123,6 @@ function renderSettings() {
         <AppearanceProvider>
           <Routes>
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/questions" element={<div>题库查询页面</div>} />
           </Routes>
         </AppearanceProvider>
       </ToastProvider>
@@ -167,33 +166,16 @@ describe('计费设置价格契约', () => {
     expect(api.updateBillingSettings.mock.calls[0][0].service_price.rounding).toBe('half_up')
   })
 
-  it('题库费率只指向公开模型价格，不回显全局旧费率', async () => {
+  it('计费页不再展示题库计价卡，题库价格只在维护面板维护', async () => {
     api.getBillingSettings.mockResolvedValue({
       data: billingSettings('ceil'),
       etag: '"v4"',
     })
     renderSettings()
 
-    await screen.findByRole('heading', { name: '题库计价' })
-    expect(screen.getByText('按公开模型 token 价格')).toBeInTheDocument()
-    expect(screen.queryByText('输入价格')).not.toBeInTheDocument()
-    expect(screen.queryByText('输出价格')).not.toBeInTheDocument()
-    expect(screen.queryByText('结算门槛')).not.toBeInTheDocument()
-    expect(screen.queryByText('¥7.654321')).not.toBeInTheDocument()
-    expect(screen.queryByText('¥1.234567')).not.toBeInTheDocument()
-  })
-
-  it('从题库计价打开独立的题库维护面板', async () => {
-    api.getBillingSettings.mockResolvedValue({
-      data: billingSettings('ceil'),
-      etag: '"v4"',
-    })
-    const user = userEvent.setup()
-    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
-    renderSettings()
-
-    await screen.findByRole('heading', { name: '题库计价' })
-    await user.click(screen.getByRole('button', { name: '打开题库面板' }))
-    expect(open).toHaveBeenCalledWith('/panel/', '_blank', 'noopener,noreferrer')
+    await screen.findByRole('heading', { name: /计费/ })
+    expect(screen.queryByRole('heading', { name: '题库计价' })).not.toBeInTheDocument()
+    expect(screen.queryByText('按公开模型 token 价格')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '打开题库面板' })).not.toBeInTheDocument()
   })
 })

@@ -10,7 +10,6 @@ import { DashboardPage } from './pages/DashboardPage'
 import { FinancePage } from './pages/FinancePage'
 import { LoginPage } from './pages/LoginPage'
 import { PrivacyRequestsPage } from './pages/PrivacyRequestsPage'
-import { QuestionsPage } from './pages/QuestionsPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TasksPage } from './pages/TasksPage'
 import { UsersPage } from './pages/UsersPage'
@@ -52,7 +51,6 @@ export function App() {
                 <Route path="/users" element={<PermissionGate permission="learning.read"><UsersPage /></PermissionGate>} />
                 <Route path="/tasks" element={<PermissionGate permission="learning.read"><TasksPage /></PermissionGate>} />
                 <Route path="/finance" element={<PermissionGate permission="billing.read"><FinancePage /></PermissionGate>} />
-                <Route path="/questions" element={<PermissionGate permission="question:read"><QuestionsPage /></PermissionGate>} />
                 <Route path="/administrators" element={<PermissionGate permission="admin.users.manage"><AdministratorsPage /></PermissionGate>} />
                 <Route path="/privacy-requests" element={<PermissionGate permission="privacy.review"><PrivacyRequestsPage /></PermissionGate>} />
                 <Route path="/settings" element={<SettingsPage />} />

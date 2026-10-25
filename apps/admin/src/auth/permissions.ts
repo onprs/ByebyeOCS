@@ -14,6 +14,5 @@ export function landingPath(me: AdminMe | null): string {
   if (!me) return '/login'
   if (hasPermission(me, 'learning.read')) return '/dashboard'
   if (hasPermission(me, 'billing.read')) return '/finance'
-  if (hasPermission(me, 'question:read')) return '/questions'
   return '/settings'
 }

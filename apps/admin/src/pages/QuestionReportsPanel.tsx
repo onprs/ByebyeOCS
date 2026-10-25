@@ -19,6 +19,8 @@ export function QuestionReportsPanel({ canManage }: { canManage: boolean }) {
   const reports = useAsync(() => listCacheReports(status, pagination.cursor), [status, pagination.cursor], { resetOnDepsChange: true })
   const [selected, setSelected] = useState<{ report: CacheReport; invalidate: boolean } | null>(null)
 
+  if (reports.data && reports.data.items.length === 0 && !reports.error) return null
+
   return (
     <>
       <Card className="section-gap">

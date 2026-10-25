@@ -391,10 +391,6 @@ a.admin-nav-item:hover {
   max-width: var(--table-width);
 }
 
-.table-workspace .page-view > .page-header {
-  max-width: calc(var(--content-width) - 64px);
-}
-
 .sidebar-scrim {
   display: none;
 }
@@ -644,6 +640,7 @@ a.admin-nav-item:hover {
 
 .dashboard-grid-bottom {
   display: grid;
+  align-items: start;
   grid-template-columns: minmax(0, 1.45fr) minmax(280px, 1fr);
   gap: 18px;
 }
@@ -738,15 +735,10 @@ a.admin-nav-item:hover {
 }
 
 .chart-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 172px;
-  margin: 0 20px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
+  padding: 40px 20px;
   color: var(--muted);
-  font-size: var(--font-caption);
+  font-size: var(--font-secondary);
+  text-align: center;
 }
 
 .resource-list {

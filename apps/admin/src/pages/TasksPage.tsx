@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { QuestionReportsPanel } from './QuestionReportsPanel'
 import { useAuth } from '../auth/AuthProvider'
 import { hasPermission } from '../auth/permissions'
 import { getTask, listTasks, runTaskOperation } from '../api/endpoints'
@@ -390,6 +391,10 @@ export function TasksPage() {
         onOperation={(kind, taskId) => openOperation(kind, [taskId])}
         canOperate={canOperate}
       />
+
+      {hasPermission(me, 'question:read') ? (
+        <QuestionReportsPanel canManage={hasPermission(me, 'question:manage')} />
+      ) : null}
 
       <TaskOperationDialog
         operation={operation}

@@ -44,7 +44,6 @@ import {
   parseYuanToMinor,
 } from '../lib/format'
 import { useAsync } from '../lib/hooks'
-import { openTikuPanel } from '../lib/tikuPanel'
 import { colorSchemeOptions, themeModeOptions, useAppearance } from '../theme/AppearanceProvider'
 
 type SettingsSection = 'appearance' | 'billing' | 'runtime' | 'maintenance'
@@ -438,22 +437,6 @@ function BillingPanel() {
         </div>
       </Card>
 
-      <Card>
-        <CardHeader
-          title="题库计价"
-
-          actions={<Button size="sm" onClick={openTikuPanel}>打开题库面板</Button>}
-        />
-        <div className="settings-body u-padding-top-16px" >
-          <div className="billing-status u-grid-template-columns-repeat-2-minmax-0-1fr" >
-            <div><span>题库扣费开关</span><b>{billing.data?.tiku_charge_enabled ? '已启用' : '未启用'}</b></div>
-            <div><span>计价方式</span><b>按公开模型 token 价格</b></div>
-          </div>
-          <p className="form-hint u-margin-top-10px" >
-            输入、输出价格与缓存策略在题库维护面板按条目发布；实际查询使用查询时冻结的已发布价格。
-          </p>
-        </div>
-      </Card>
     </div>
   )
 }

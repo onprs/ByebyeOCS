@@ -55,7 +55,6 @@ test.describe('管理员控制台', () => {
       ['用户与账号', '用户与账号'],
       ['任务监控', '任务监控'],
       ['财务与订单', '财务与订单'],
-      ['题库查询', '题库查询与用量'],
       ['系统设置', '系统设置'],
     ] as const) {
       await page.getByRole('link', { name: label, exact: true }).click()
@@ -277,22 +276,17 @@ test('财务人工调整与对账表单提交', async ({ page }) => {
   await expect(page.locator('tbody tr', { hasText: '异常订单更正' }).getByText('已退款')).toBeVisible()
 })
 
-test('题库目录为只读并提供独立维护面板入口', async ({ page }) => {
+test('管理端不再提供题库查询页，维护入口只指向独立面板', async ({ page }) => {
   const state = await installFakeApi(page)
-  await page.addInitScript(() => {
-    window.open = ((url: string | URL | undefined) => {
-      ;(window as unknown as { __tikuPanel: string }).__tikuPanel = String(url)
-      return null
-    }) as typeof window.open
-  })
   await login(page, state)
-  await page.getByRole('link', { name: '题库查询', exact: true }).click()
-  await expect(page.getByRole('heading', { name: '题库查询与用量', level: 1 })).toBeVisible()
-  await expect(page.getByRole('button', { name: '进入题库面板' })).toBeVisible()
+  await expect(page.getByRole('link', { name: '题库查询', exact: true })).toHaveCount(0)
   await expect(page.getByRole('link', { name: '题库维护面板' })).toHaveAttribute('href', '/panel/')
+  await page.goto('/questions')
+  await expect(page.getByRole('heading', { name: '页面不存在', level: 1 })).toBeVisible()
+  await page.goto('/tasks')
+  await expect(page.getByRole('heading', { name: '任务监控', level: 1 })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '用户答案报告' })).toBeVisible()
   await expect(page.getByRole('button', { name: '测试', exact: true })).toHaveCount(0)
-  await page.getByRole('button', { name: '进入题库面板' }).click()
-  expect(await page.evaluate(() => (window as unknown as { __tikuPanel?: string }).__tikuPanel)).toBe('/panel/')
 })
 
 

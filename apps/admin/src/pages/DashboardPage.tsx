@@ -21,7 +21,6 @@ import {
   Button,
   Card,
   CardHeader,
-  EmptyState,
   ErrorState,
   LoadingBlock,
   Metric,
@@ -375,7 +374,7 @@ export function DashboardPage() {
               任务摘要读取失败。<button className="text-link" onClick={tasksPreview.reload}>重试</button>
             </div>
           ) : (
-            <EmptyState title="暂无进行中的任务" description="当前没有执行、验证或需要关注的任务。" />
+            <p className="empty-line">当前没有执行中、等待验证或需要关注的任务。</p>
           )}
 
         </Card>
@@ -399,7 +398,7 @@ export function DashboardPage() {
             }
           />
           {!canReadEvents ? (
-            <EmptyState title="当前角色没有事件读取权限" description="运行摘要仍可查看；实时事件需要 events.read 权限。" />
+            <p className="empty-line">当前角色没有事件读取权限。</p>
           ) : events.length ? (
             <div className="event-list">
               {events.map(event => (
@@ -431,7 +430,7 @@ export function DashboardPage() {
               ))}
             </div>
           ) : (
-            <EmptyState title="暂无实时事件" description="暂无可显示的事件，运行状态以页面摘要为准。" />
+            <p className="empty-line">暂无可显示的实时事件。</p>
           )}
 
         </Card>

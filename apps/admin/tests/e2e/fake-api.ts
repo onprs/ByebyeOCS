@@ -1048,6 +1048,28 @@ export async function installFakeApi(
       return json(route, 200, { items: questionQueries, next_cursor: null })
     }
 
+    if (path === '/question-cache-reports' && method === 'GET') {
+      return json(route, 200, {
+        items: [
+          {
+            id: 'rep_e2e_1',
+            status: 'pending',
+            reason: '答案与选项不匹配',
+            created_at: '2026-10-20T14:20:00Z',
+            resolved_at: null,
+            query: { id: 'q_e2e_1', model: { offering_id: 'qmo_standard', display_name: '标准模型' } },
+            cache_entry_id: 'ce_e2e_1',
+          },
+        ],
+        next_cursor: null,
+      })
+    }
+
+    if (path.startsWith('/question-cache-reports/') && path.endsWith('/review') && method === 'POST') {
+      if (!requireCsrf()) return apiError(route, 403, 'csrf_invalid', 'CSRF 校验失败。')
+      return json(route, 200, { id: 'rep_e2e_1', status: 'resolved' })
+    }
+
     if (path === '/question-cache/invalidations' && method === 'POST') {
       if (!requireCsrf()) return apiError(route, 403, 'csrf_invalid', 'CSRF 校验失败。')
       return json(route, 200, { invalidated: true, cache_entry_id: body?.cache_entry_id })

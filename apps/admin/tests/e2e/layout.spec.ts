@@ -13,7 +13,7 @@ for (const width of [1920, 1440, 1280, 1024, 768, 390]) {
     const state = await installFakeApi(page)
     state.loggedIn = true
     if (screenshots) await mkdir(directory, { recursive: true })
-    for (const route of ['dashboard', 'users', 'tasks', 'finance', 'questions', 'settings']) {
+    for (const route of ['dashboard', 'users', 'tasks', 'finance', 'settings']) {
       await page.goto('/' + route)
       await expect(page.locator('main h1')).toBeVisible()
       await expect(page.locator('[aria-busy=true]')).toHaveCount(0)

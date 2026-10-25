@@ -60,7 +60,7 @@ Flutter 共享组件位于 `apps/client_flutter/lib/design/`，管理员端位�
 
 任务界面分别展示平台确认、执行观察和媒体记录；没有真实播放证据时显示“无播放记录”。钱包以服务端状态为准，未定价、未收费、付款状态与到账状态按事实展示。独立题库查询页仅查询、展示与报告问题；安排中的自动答题流程沿用既定业务权限。
 
-主管理端的题库页只读核对目录与用量，通过独立入口进入题库维护面板。正式面板是 `services/tiku/internal/platform/panel/assets/`，随 `cmd/ocs-tiku-fork` 内嵌发布。
+管理端不再提供题库查询页；模型、价格、查询记录与缓存统一在独立题库维护面板查看和维护。答案报告由主服务保存，复核入口位于任务监控。正式面板是 `services/tiku/internal/platform/panel/assets/`，随 `cmd/ocs-tiku-fork` 内嵌发布。
 
 `services/tiku/frontend/` 仍被根级上游兼容服务和其单文件发布脚本使用，保留为独立兼容前端。本轮未删除其代码，也不将它作为正式 `/panel/` 的构建来源。
 

@@ -4,7 +4,6 @@ import { useTableOverflowAffordance } from '../lib/useTableOverflowAffordance'
 import {
   ChevronDown,
   ChevronRight,
-  Cpu,
   CreditCard,
   ExternalLink,
   LayoutDashboard,
@@ -34,7 +33,6 @@ const navigation = [
   { path: '/dashboard', label: '运行总览', icon: LayoutDashboard, permission: 'learning.read' },
   { path: '/users', label: '用户与账号', icon: Users, permission: 'learning.read' },
   { path: '/tasks', label: '任务监控', icon: ListTodo, permission: 'learning.read' },
-  { path: '/questions', label: '题库查询', icon: Cpu, permission: 'question:read' },
   { path: '/finance', label: '财务与订单', icon: CreditCard, permission: 'billing.read' },
 ]
 
