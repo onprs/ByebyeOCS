@@ -2,10 +2,15 @@
 
 package app
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/onprs/ByebyeOCS/server/internal/questions"
+)
 
 func TestCacheReportReviewIsReachableThroughAdminAPI(t *testing.T) {
-	fixture := newRuntimeFixture(t, fixtureOptions{fork: &accountedFork{}})
+	fork := &accountedFork{}
+	fixture := newRuntimeFixture(t, fixtureOptions{fork: fork})
 	user, admin := fixtureClient(), fixtureClient()
 	defer user.CloseIdleConnections()
 	defer admin.CloseIdleConnections()
@@ -15,12 +20,10 @@ func TestCacheReportReviewIsReachableThroughAdminAPI(t *testing.T) {
 		t.Fatal("测试管理员未登录")
 	}
 	adminCSRF := login["csrf_token"].(string)
-	status, _, model := requestJSON(t, admin, "POST", fixture.admin.URL+"/admin/api/v1/question-models", adminCSRF, map[string]any{"display_name": "报告核对模型", "provider_ref": "report-review-fixture", "capabilities": []string{"text"}}, nil)
-	if status != 201 {
-		t.Fatalf("创建测试模型失败：%d", status)
-	}
+	modelID := seedOffering(t, fork, "报告核对模型", "report-review-fixture",
+		questions.CachePolicy{Allow: true, Scope: "user", TTLDays: 7}, nil, true)
 	status, _, query := requestJSON(t, user, "POST", fixture.user.URL+"/api/v1/question-queries", csrf, map[string]any{
-		"model_offering_id": model["id"], "mode": "always_llm",
+		"model_offering_id": modelID, "mode": "always_llm",
 		"question": map[string]any{"title": "不得通过报告列表回传的题目", "type": "single", "options": "A. 第一项\nB. 第二项", "images": []string{}},
 		"budget":   map[string]int{"max_output_tokens": 100},
 	}, map[string]string{"Idempotency-Key": "report-review-query"})

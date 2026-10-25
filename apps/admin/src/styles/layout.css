@@ -143,6 +143,14 @@
   transition: background 0.15s ease, color 0.15s ease;
 }
 
+a.admin-nav-item {
+  text-decoration: none;
+}
+
+a.admin-nav-item svg:last-child:not(:first-child) {
+  opacity: 0.5;
+}
+
 a.admin-nav-item:hover {
   background: color-mix(in srgb, var(--sidebar-text) 8%, transparent);
   color: var(--sidebar-strong);

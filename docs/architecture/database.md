@@ -62,7 +62,7 @@
 | question_queries / learning_work_runs | 查询内容与用量、冻结安排版本、试卷指纹、查询引用和提交状态 | 查询与自动提交分离，原题敏感字段限期保留 |
 | wallets / ledger_accounts | user_id、currency、可用/预占缓存 | 用户币种钱包唯一，缓存可由账本重建 |
 | journals / postings | 业务键、关联对象、账本账户、整数变动 | 业务键唯一，每笔 journal 变动和为零 |
-| question_model_offerings | 公开名称、fork 上游引用、能力、启停、默认、价格版本、输入/输出微元价、缓存策略 | 主平台发布给用户的模型；不保存上游密钥 |
+| question_offerings | 公开名称、fork 上游引用、能力、启停、默认、价格版本、输入/输出微元价、缓存策略 | 题库目录的只读镜像；由题库面板发布并同步，主库不承担定价权 |
 | question_queries | 用户/任务、公开条目、作答方式、缓存作用域、fork request_id、答案快照、用量汇总、价格版本、微元成本、完成状态 | 查询与提交分离；相同 request_id 幂等 |
 | question_calls | query_id、slot（caption/answer/agent）、输入/输出/total token、上游模型、状态、时间 | 每次模型调用的分解；用于展示和核对 |
 | learning_work_runs | task_id、plan_revision_id、试卷指纹、公开模型、模式、query_ids、答案摘要、提交状态 | 任务级最终提交独占，提交前检查租约；结果不明只核验 |
@@ -109,9 +109,9 @@ erDiagram
 
 非课程任务等未来业务可扩展收费主体类型；不把所有财务交易强行外键到执行尝试。
 
-**题库 fork 使用独立 PostgreSQL 数据库**（建议 `ocs_tiku`）和独立角色。其表包括 `fork_model_offerings`、`fork_answer_cache`、`fork_question_requests`、`fork_model_calls`、`fork_cache_reports` 和幂等记录；主平台不直接读取这些表，也不做跨数据库 join。主平台只保存公开条目、查询事实、token 汇总、价格和账本引用。
+**题库 fork 使用独立 PostgreSQL 数据库**（建议 `ocs_tiku`）和独立角色。主要表为 `tiku.offerings`（公开条目与费率）、`tiku.offering_price_versions`（只追加价格版本）、`tiku.model_overrides`、`tiku.model_tests`、`tiku.requests`、`tiku.queries`、`tiku.model_calls`、`tiku.cache_entries` 和 `tiku.panel_audit`；主平台不直接读取这些表，也不做跨数据库 join。主平台保存目录镜像、查询事实、token 汇总、冻结价格快照和账本引用。
 
-主平台 `question_model_offerings.provider_ref` 是 fork 内部上游引用的 opaque ID；上游服务名、模型名和密钥留在 fork 的受保护配置中。
+公开条目 `provider_ref` 是 fork 配置中的模型引用；上游服务名、模型名、地址和密钥留在 fork 的受保护配置中，不进入主库或浏览器。主库 `question_offerings` 以题库条目 UUID 为关联键，价格版本与费率随每次目录读取同步；已发生查询另存冻结快照。主库价格版本表和主库模型测试表已删除。
 
 答案缓存按 `cache_key`、作用域、公开条目、规范化/提示词版本和 TTL 存储；缓存条目不是账本，不能代替 `question_queries` 或资金证据。
 

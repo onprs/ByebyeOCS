@@ -28,14 +28,20 @@ type ForkBudget struct {
 	MaxOutputTokens int `json:"max_output_tokens"`
 }
 
+type ForkCachePolicy struct {
+	Allow   bool `json:"allow"`
+	TTLDays int  `json:"ttl_days"`
+}
+
 type ForkAnswerRequest struct {
-	RequestID       string       `json:"request_id"`
-	ModelOfferingID string       `json:"model_offering_id"`
-	Mode            string       `json:"mode"`
-	CacheScope      string       `json:"cache_scope"`
-	CacheScopeKey   string       `json:"cache_scope_key"`
-	Question        ForkQuestion `json:"question"`
-	Budget          ForkBudget   `json:"budget"`
+	RequestID       string           `json:"request_id"`
+	ModelOfferingID string           `json:"model_offering_id"`
+	Mode            string           `json:"mode"`
+	CacheScope      string           `json:"cache_scope"`
+	CacheScopeKey   string           `json:"cache_scope_key"`
+	Question        ForkQuestion     `json:"question"`
+	Budget          ForkBudget       `json:"budget"`
+	CachePolicy     *ForkCachePolicy `json:"cache_policy,omitempty"`
 }
 
 type ForkModel struct {
@@ -78,6 +84,26 @@ type ForkAnswerResponse struct {
 	LatencyMS int64     `json:"latency_ms"`
 }
 
+// ForkOffering 是题库服务发布的公开模型条目；价格与缓存策略由题库维护。
+type ForkOffering struct {
+	ID           string           `json:"id"`
+	PublicID     string           `json:"public_id"`
+	DisplayName  string           `json:"display_name"`
+	Description  string           `json:"description"`
+	ProviderRef  string           `json:"provider_ref"`
+	Capabilities []string         `json:"capabilities"`
+	Pricing      *OfferingPricing `json:"pricing"`
+	PriceVersion string           `json:"price_version"`
+	CachePolicy  CachePolicy      `json:"cache_policy"`
+	Enabled      bool             `json:"enabled"`
+	Default      bool             `json:"is_default"`
+	SortOrder    int              `json:"sort_order"`
+	Health       string           `json:"health"`
+	Version      int64            `json:"version"`
+	CreatedAt    time.Time        `json:"created_at"`
+	UpdatedAt    time.Time        `json:"updated_at"`
+}
+
 type ForkTestResult struct {
 	Kind       string `json:"kind"`
 	Status     string `json:"status"`
@@ -113,6 +139,8 @@ func safeForkCode(code string) string {
 
 type ForkClient interface {
 	Answer(ctx context.Context, request ForkAnswerRequest, idempotencyKey string) (ForkAnswerResponse, error)
+	// Offerings 读取题库发布的公开模型目录；主平台不缓存价格来源以外的副本。
+	Offerings(ctx context.Context) ([]ForkOffering, error)
 	TestModel(ctx context.Context, providerRef, kind string, confirmCost bool) (ForkTestResult, error)
 	// InvalidateCache 返回 fork 是否真的标记了条目失效；已失效或已过期条目返回 false。
 	InvalidateCache(ctx context.Context, entryID, reason string) (bool, error)
@@ -207,6 +235,16 @@ func (c *httpFork) Answer(ctx context.Context, request ForkAnswerRequest, idempo
 	var response ForkAnswerResponse
 	err := c.doJSON(ctx, http.MethodPost, "/api/v2/answers", idempotencyKey, request, &response)
 	return response, err
+}
+
+func (c *httpFork) Offerings(ctx context.Context) ([]ForkOffering, error) {
+	var response struct {
+		Items []ForkOffering `json:"items"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/internal/v1/offerings", "", nil, &response); err != nil {
+		return nil, err
+	}
+	return response.Items, nil
 }
 
 func (c *httpFork) TestModel(ctx context.Context, providerRef, kind string, confirmCost bool) (ForkTestResult, error) {

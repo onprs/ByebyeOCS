@@ -123,7 +123,7 @@ function renderSettings() {
         <AppearanceProvider>
           <Routes>
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/questions" element={<div>题库与模型页面</div>} />
+            <Route path="/questions" element={<div>题库查询页面</div>} />
           </Routes>
         </AppearanceProvider>
       </ToastProvider>
@@ -183,16 +183,17 @@ describe('计费设置价格契约', () => {
     expect(screen.queryByText('¥1.234567')).not.toBeInTheDocument()
   })
 
-  it('从题库计价直接进入公开模型价格配置', async () => {
+  it('从题库计价打开独立的题库维护面板', async () => {
     api.getBillingSettings.mockResolvedValue({
       data: billingSettings('ceil'),
       etag: '"v4"',
     })
     const user = userEvent.setup()
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
     renderSettings()
 
     await screen.findByText('题库按公开模型的 token 价格单独计费，不在全局设置中维护费率。')
-    await user.click(screen.getByRole('button', { name: '管理模型与价格' }))
-    expect(await screen.findByText('题库与模型页面')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '打开题库面板' }))
+    expect(open).toHaveBeenCalledWith('/panel/', '_blank', 'noopener,noreferrer')
   })
 })

@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Cpu,
   CreditCard,
+  ExternalLink,
   LayoutDashboard,
   ListTodo,
   LogOut,
@@ -24,12 +25,13 @@ import { useToast } from '../components/toast'
 import { useClickOutside } from '../lib/hooks'
 import { useAppearance } from '../theme/AppearanceProvider'
 import { hasPermission } from '../auth/permissions'
+import { tikuPanelUrl } from '../lib/tikuPanel'
 
 const navigation = [
   { path: '/dashboard', label: '运行总览', icon: LayoutDashboard, permission: 'learning.read' },
   { path: '/users', label: '用户与账号', icon: Users, permission: 'learning.read' },
   { path: '/tasks', label: '任务监控', icon: ListTodo, permission: 'learning.read' },
-  { path: '/questions', label: '题库与模型', icon: Cpu, permission: 'question:read' },
+  { path: '/questions', label: '题库查询', icon: Cpu, permission: 'question:read' },
   { path: '/finance', label: '财务与订单', icon: CreditCard, permission: 'billing.read' },
 ]
 
@@ -124,6 +126,19 @@ export function AdminLayout() {
               <span>{item.label}</span>
             </NavLink>
           ))}
+          {hasPermission(me, 'question:read') ? (
+            <a
+              className="admin-nav-item"
+              href={tikuPanelUrl}
+              target="_blank"
+              rel="noreferrer"
+              title="在新标签页打开题库维护面板"
+              onClick={() => setNavOpen(false)}
+            >
+              <ExternalLink size={16} aria-hidden="true" />
+              <span>题库维护面板</span>
+            </a>
+          ) : null}
         </nav>
         <div className="nav-heading">平台管理</div>
         <nav className="admin-nav">

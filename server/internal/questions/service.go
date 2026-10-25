@@ -1,6 +1,6 @@
-// Package questions 提供主平台公开模型目录、题库查询、缓存报告与受控平台提交。
+// Package questions 提供题库目录读取、查询、缓存报告与受控平台提交。
 //
-// 上游题库是独立 fork 服务；本包只保存公开条目和查询/计费事实，不保存上游地址、模型名或密钥。
+// 公开模型与价格由独立题库面板维护；本包只同步目录镜像并保存查询/计费事实，不保存上游地址、模型名或密钥。
 package questions
 
 import (
@@ -253,10 +253,8 @@ func (s *Service) RegisterUser(mux *http.ServeMux) {
 }
 
 func (s *Service) RegisterAdmin(mux *http.ServeMux) {
+	// 公开条目、价格与缓存策略只在题库面板维护；主平台管理员只读目录与用量。
 	mux.HandleFunc("GET /admin/api/v1/question-models", s.adminListOfferings)
-	mux.HandleFunc("POST /admin/api/v1/question-models", s.adminCreateOffering)
-	mux.HandleFunc("PATCH /admin/api/v1/question-models/{id}", s.adminPatchOffering)
-	mux.HandleFunc("POST /admin/api/v1/question-models/{id}/tests", s.adminTestOffering)
 	mux.HandleFunc("GET /admin/api/v1/question-usage", s.adminUsage)
 	mux.HandleFunc("GET /admin/api/v1/question-queries", s.adminListQueries)
 	mux.HandleFunc("GET /admin/api/v1/question-cache-reports", s.adminListCacheReports)
@@ -537,13 +535,17 @@ func (s *Service) resolveChargingAllowed(ctx context.Context) (bool, error) {
 }
 
 // PublicPricing 返回能力发现所需的公开布尔元数据，不要求管理员身份。
-// configured 依据已发布且可用的模型自身 pricing，而不是遗留全局单价。
+// configured 依据题库面板发布的公开条目及其价格，不再读取主库副本。
 func (s *Service) PublicPricing(ctx context.Context) (configured bool, automatic bool, err error) {
-	if err := s.pool.QueryRow(ctx, `SELECT EXISTS (
-		SELECT 1 FROM public.question_offerings
-		WHERE enabled AND health <> 'unavailable' AND pricing IS NOT NULL
-	)`).Scan(&configured); err != nil {
+	items, err := s.fetchCatalogue(ctx)
+	if err != nil {
 		return false, false, fault.New("service_unavailable", "无法读取题库价格状态")
+	}
+	for _, item := range items {
+		if item.Enabled && item.Health != "unavailable" && item.Pricing != nil {
+			configured = true
+			break
+		}
 	}
 	automatic, err = s.resolveChargingAllowed(ctx)
 	if err != nil {

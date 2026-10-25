@@ -556,66 +556,13 @@ export async function getFinanceSummary(
   return { data: normalizeFinanceSummary(response.data), etag: response.etag }
 }
 
-// —— 题库与模型 ——
+// —— 题库目录与查询 ——
 
 export async function listQuestionModels(
   params: { cursor?: string | null; limit?: number } = {},
 ): Promise<ApiResponse<Paginated<QuestionModel>>> {
   const response = await apiGet<unknown>(`/question-models${queryString({ ...params, limit: params.limit ?? 100 })}`)
   return { data: normalizeList(response.data, normalizeModel), etag: response.etag }
-}
-
-export async function createQuestionModel(input: Record<string, unknown>): Promise<QuestionModel> {
-  const response = await apiRequest<unknown>('/question-models', {
-    method: 'POST',
-    idempotencyKey: newIdempotencyKey(),
-    body: input,
-  })
-  const data = asObject(unwrapData(response.data)) ?? {}
-  return normalizeModel(pickObject(data, ['model', 'offering']) ?? data)
-}
-
-export async function updateQuestionModel(
-  id: string,
-  input: Record<string, unknown>,
-  version: number | null,
-): Promise<QuestionModel> {
-  const response = await apiRequest<unknown>(`/question-models/${encodeURIComponent(id)}`, {
-    method: 'PATCH',
-    body: input,
-    ifMatch: version !== null && version > 0 ? `"v${version}"` : null,
-  })
-  const data = asObject(unwrapData(response.data)) ?? {}
-  return normalizeModel(pickObject(data, ['model', 'offering']) ?? data)
-}
-
-export async function testQuestionModel(
-  id: string,
-  kind: 'reachability' | 'functional',
-): Promise<{
-  kind: string | null
-  status: string | null
-  reachable: boolean | null
-  functional: boolean | null
-  latencyMs: number | null
-  errorCode: string | null
-  requestId: string | null
-}> {
-  const response = await apiRequest<unknown>(`/question-models/${encodeURIComponent(id)}/tests`, {
-    method: 'POST',
-    idempotencyKey: newIdempotencyKey(),
-    body: { kind, confirm_cost: kind === 'functional' },
-  })
-  const data = asObject(unwrapData(response.data)) ?? {}
-  return {
-    kind: pickString(data, ['kind']),
-    status: pickString(data, ['status']),
-    reachable: pickBool(data, ['reachable']),
-    functional: pickBool(data, ['functional']),
-    latencyMs: pickNumber(data, ['latency_ms']),
-    errorCode: pickString(data, ['error_code']),
-    requestId: pickString(data, ['request_id']),
-  }
 }
 
 export async function getQuestionUsage(

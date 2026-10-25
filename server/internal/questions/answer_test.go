@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -398,6 +397,7 @@ func TestAnswerRealLedgerChargesConcurrentReplayOnce(t *testing.T) {
 
 // idempotentFork 模拟 fork 的 request_id 幂等：重复 HTTP 调用不增加模型调用数。
 type idempotentFork struct {
+	catalog    *testCatalog
 	mu         sync.Mutex
 	responses  map[string]ForkAnswerResponse
 	requests   []ForkAnswerRequest
@@ -409,7 +409,11 @@ type idempotentFork struct {
 }
 
 func newIdempotentFork() *idempotentFork {
-	return &idempotentFork{responses: make(map[string]ForkAnswerResponse)}
+	return &idempotentFork{responses: make(map[string]ForkAnswerResponse), catalog: &testCatalog{}}
+}
+
+func (f *idempotentFork) Offerings(ctx context.Context) ([]ForkOffering, error) {
+	return f.catalog.Offerings(ctx)
 }
 
 func (f *idempotentFork) Answer(_ context.Context, request ForkAnswerRequest, _ string) (ForkAnswerResponse, error) {
@@ -802,6 +806,18 @@ func TestAnswerCancellationFinalizesAndReleasesHold(t *testing.T) {
 	release := make(chan struct{})
 	var startOnce, releaseOnce sync.Once
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/internal/v1/offerings" {
+			now := time.Now().UTC()
+			_ = json.NewEncoder(w).Encode(map[string]any{"items": []any{map[string]any{
+				"id": web.NewID(), "public_id": "qm_0123456789abcdef0123456789abcdef",
+				"display_name": "取消模型", "description": "", "provider_ref": "internal-cancel",
+				"capabilities": []string{"text"}, "pricing": testPricing(10_000_000, 20_000_000, 10000),
+				"price_version": "price-v1", "enabled": true, "is_default": true, "sort_order": 0,
+				"health": "configured", "version": 1, "created_at": now, "updated_at": now,
+				"cache_policy": map[string]any{"allow": true, "scope": "user", "ttl_days": 7},
+			}}})
+			return
+		}
 		if r.Method != http.MethodPost || r.URL.Path != "/api/v2/answers" {
 			http.NotFound(w, r)
 			return
@@ -823,7 +839,6 @@ func TestAnswerCancellationFinalizesAndReleasesHold(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := newTestEnv(t, envOptions{auto: true, billing: true, fork: fork})
-	env.createOffering(t, "取消模型", "internal-cancel", testPricing(10_000_000, 20_000_000, 10000), true)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
@@ -1273,16 +1288,11 @@ func TestAnswerQueriesAfterDefaultModelPublished(t *testing.T) {
 // 在入口被 422 cache_not_allowed 拒绝后停在人工处理。
 func TestValidateQuestionPolicyRejectsCacheFirstWithoutCache(t *testing.T) {
 	env := newTestEnv(t, envOptions{})
-	recorder := env.call(t, http.MethodPost, "/admin/api/v1/question-models", map[string]any{
-		"display_name": "无缓存模型", "provider_ref": "internal-no-cache", "capabilities": []string{"text"},
-		"cache_policy": map[string]any{"allow": false, "scope": "user", "ttl_days": 7},
-	}, env.admin(), nil)
-	if recorder.Code != http.StatusCreated {
-		t.Fatalf("无法创建无缓存模型：%d %s", recorder.Code, recorder.Body.String())
-	}
-	var view adminOfferingView
-	if err := json.Unmarshal(recorder.Body.Bytes(), &view); err != nil {
-		t.Fatal(err)
+	view := env.createOffering(t, "无缓存模型", "internal-no-cache", nil, true)
+	if !env.catalogue.updateOffering(view.ID, func(item *ForkOffering) {
+		item.CachePolicy.Allow = false
+	}) {
+		t.Fatal("无法关闭题库条目的缓存")
 	}
 	err := env.service.ValidateQuestionPolicy(context.Background(), view.ID, "cache_first")
 	var safe *fault.Error
@@ -1324,12 +1334,7 @@ func TestAnswerRetriesReleasedPreCallFailureWithNewGeneration(t *testing.T) {
 	// 两次尝试之间发布新价格版本：重驱动必须沿用原冻结价格，不按新价格多占。
 	repriced := *testPricing(20_000_000, 40_000_000, 10000)
 	repriced.Version = "price-v2"
-	changed := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+model.ID,
-		map[string]any{"price_version": repriced.Version, "pricing": repriced}, env.admin(),
-		map[string]string{"If-Match": fmt.Sprintf(`"v%d"`, model.Version)})
-	if changed.Code != http.StatusOK {
-		t.Fatalf("无法发布新价格版本：%d %s", changed.Code, changed.Body.String())
-	}
+	env.republish(t, model.ID, &repriced)
 
 	view, err := env.service.Answer(context.Background(), env.userID, key, input)
 	if err != nil || view.Status != "answered" {
@@ -1395,12 +1400,7 @@ func TestAnswerRealLedgerNewGenerationAfterReleasedPreCallFailure(t *testing.T) 
 
 	repriced := *testPricing(20_000_000, 40_000_000, 10000)
 	repriced.Version = "price-v2"
-	changed := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+model.ID,
-		map[string]any{"price_version": repriced.Version, "pricing": repriced}, env.admin(),
-		map[string]string{"If-Match": fmt.Sprintf(`"v%d"`, model.Version)})
-	if changed.Code != http.StatusOK {
-		t.Fatalf("无法发布新价格版本：%d %s", changed.Code, changed.Body.String())
-	}
+	env.republish(t, model.ID, &repriced)
 
 	view, err := env.service.Answer(ctx, env.userID, key, input)
 	if err != nil || view.Status != "answered" {
@@ -1557,12 +1557,7 @@ func TestAnswerFreezesNoChargeDecisionAcrossRepricing(t *testing.T) {
 
 	repriced := *testPricing(20_000_000, 40_000_000, 10000)
 	repriced.Version = "price-v2"
-	changed := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+model.ID,
-		map[string]any{"price_version": repriced.Version, "pricing": repriced}, env.admin(),
-		map[string]string{"If-Match": fmt.Sprintf(`"v%d"`, model.Version)})
-	if changed.Code != http.StatusOK {
-		t.Fatalf("无法发布新价格版本：%d %s", changed.Code, changed.Body.String())
-	}
+	env.republish(t, model.ID, &repriced)
 	env.service.auto = true
 
 	view, err := env.service.Answer(ctx, env.userID, key, input)
@@ -1607,12 +1602,7 @@ func TestAnswerFreezesUnpricedDecisionAcrossPricing(t *testing.T) {
 	}
 	repriced := *testPricing(20_000_000, 40_000_000, 10000)
 	repriced.Version = "price-v2"
-	changed := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+model.ID,
-		map[string]any{"price_version": repriced.Version, "pricing": repriced}, env.admin(),
-		map[string]string{"If-Match": fmt.Sprintf(`"v%d"`, model.Version)})
-	if changed.Code != http.StatusOK {
-		t.Fatalf("无法发布新价格版本：%d %s", changed.Code, changed.Body.String())
-	}
+	env.republish(t, model.ID, &repriced)
 
 	view, err := env.service.Answer(ctx, env.userID, key, input)
 	if err != nil || view.Status != "answered" {

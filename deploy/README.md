@@ -84,7 +84,9 @@ sudo -u ocs-tiku /opt/byebyeocs/current/bin/ocs-tiku-fork migrate \
 ## 3. HTTPS 与 SSE
 
 `configs/nginx-user.example.conf` 和 `configs/nginx-admin.example.conf` 是独立域名示例。
-按实际证书、域名和代理网络替换；管理员入口应加 VPN、mTLS 或 IP allowlist。SSE 路径
+按实际证书、域名和代理网络替换；管理员入口应加 VPN、mTLS 或 IP allowlist。管理员域名需要
+把 `/panel/` 代理到题库服务（示例已包含），并在题库配置中把 `panel.origin` 设为同一管理员
+域名，否则题库面板无法登录或写入。SSE 路径
 `/api/v1/events` 与 `/admin/api/v1/events` 示例已关闭代理缓冲、缓存和 gzip，并延长读取超时。
 反向代理不是安装前提；使用其他入口时同样要关闭 SSE 缓冲并设置合理请求体上限。
 

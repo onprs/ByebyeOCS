@@ -1024,54 +1024,6 @@ export async function installFakeApi(
       return json(route, 200, { items: questionModels, next_cursor: null })
     }
 
-    if (path === '/question-models' && method === 'POST') {
-      if (!requireCsrf()) return apiError(route, 403, 'csrf_invalid', 'CSRF 校验失败。')
-      return json(route, 201, {
-        id: 'qmo_new',
-        offering_id: 'qmo_new',
-        ...body,
-        enabled: body?.enabled === true,
-        default: body?.default === true,
-        health: 'configured',
-        version: 1,
-        created_at: '2026-10-20T06:50:00Z',
-        updated_at: '2026-10-20T06:50:00Z',
-      })
-    }
-
-    if (path.startsWith('/question-models/') && path.endsWith('/tests') && method === 'POST') {
-      if (!requireCsrf()) return apiError(route, 403, 'csrf_invalid', 'CSRF 校验失败。')
-      if (body?.kind === 'functional' && body?.confirm_cost !== true) {
-        return apiError(route, 428, 'cost_confirmation_required', '功能性测试需要费用确认。')
-      }
-      return json(route, 200, {
-        kind: body?.kind,
-        status: 'ok',
-        reachable: true,
-        functional: body?.kind === 'functional' ? true : false,
-        latency_ms: 42,
-        error_code: '',
-        cost_confirmed: body?.kind === 'functional',
-      })
-    }
-
-    if (path.startsWith('/question-models/') && method === 'PATCH') {
-      if (!requireCsrf()) return apiError(route, 403, 'csrf_invalid', 'CSRF 校验失败。')
-      if (request.headers()['if-match'] !== '"v2"' && request.headers()['if-match'] !== '"v1"') {
-        return apiError(route, 412, 'version_conflict', '模型条目已被其他操作更新，请重新加载。')
-      }
-      const id = decodeURIComponent(path.slice('/question-models/'.length))
-      const current = questionModels.find(model => model.id === id)
-      return json(route, 200, {
-        ...current,
-        ...body,
-        enabled: body?.enabled ?? current?.enabled,
-        default: body?.default ?? current?.default,
-        version: (current?.version ?? 1) + 1,
-        updated_at: '2026-10-20T06:51:00Z',
-      }, { ETag: `"v${(current?.version ?? 1) + 1}"` })
-    }
-
     if (path === '/question-usage' && method === 'GET') {
       return json(route, 200, {
         items: [

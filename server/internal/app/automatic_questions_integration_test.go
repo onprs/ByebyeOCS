@@ -86,7 +86,14 @@ type automaticWorkFork struct {
 	before      atomic.Value
 	invalid     bool
 	incomplete  bool
+	catalog     appCatalog
 }
+
+func (f *automaticWorkFork) Offerings(ctx context.Context) ([]questions.ForkOffering, error) {
+	return f.catalog.Offerings(ctx)
+}
+
+func (f *automaticWorkFork) seedOffering(item questions.ForkOffering) { f.catalog.add(item) }
 
 func (f *automaticWorkFork) Answer(ctx context.Context, request questions.ForkAnswerRequest, _ string) (questions.ForkAnswerResponse, error) {
 	f.calls.Add(1)
@@ -153,13 +160,11 @@ func TestRuntimeAutomaticQuestionsSubmitWithoutConfirmation(t *testing.T) {
 			}
 			admin := session["admin"].(map[string]any)
 			actor := web.Actor{ID: admin["id"].(string), Kind: "admin", Permissions: []string{"*"}, AuthenticatedAt: time.Now()}
-			code, _, model := requestJSON(t, adminClient, "POST", fixture.admin.URL+"/admin/api/v1/question-models", session["csrf_token"].(string),
-				map[string]any{"display_name": "自动测验模型", "provider_ref": "automatic-fixture-model", "capabilities": []string{"text"},
-					"pricing": map[string]string{"version": "automatic-question-v1", "input_micros_per_million_tokens": "1000000",
-						"output_micros_per_million_tokens": "2000000", "micros_per_minor": "10000", "rounding": "ceil", "rule": "tokens_x_micros_per_million_v1"}}, nil)
-			if code != 201 {
-				t.Fatal("模型发布失败", code, model)
-			}
+			modelID := seedOffering(t, fork, "自动测验模型", "automatic-fixture-model",
+				questions.CachePolicy{Allow: true, Scope: "user", TTLDays: 7},
+				&questions.OfferingPricing{Version: "automatic-question-v1", InputMicrosPerMillionTokens: 1000000,
+					OutputMicrosPerMillionTokens: 2000000, MicrosPerMinor: 10000, Rounding: "ceil",
+					Rule: "tokens_x_micros_per_million_v1"}, true)
 			ctx := context.Background()
 			wallet, err := fixture.runtime.Ledger.GetWallet(ctx, userID)
 			if err != nil {
@@ -187,7 +192,7 @@ func TestRuntimeAutomaticQuestionsSubmitWithoutConfirmation(t *testing.T) {
 			})
 			code, _, plan := requestJSON(t, client, "POST", fixture.user.URL+"/api/v1/plans", csrf, map[string]any{
 				"name": "全自动测验安排", "course_ids": []string{courseID}, "scope": map[string]string{"kind": "all"}, "task_types": []string{"quiz"},
-				"question_policy": map[string]any{"enabled": true, "model_offering_id": model["id"], "answer_mode": "always_llm"}}, nil)
+				"question_policy": map[string]any{"enabled": true, "model_offering_id": modelID, "answer_mode": "always_llm"}}, nil)
 			if code != 201 {
 				t.Fatal("自动安排创建失败", code, plan)
 			}
@@ -216,7 +221,7 @@ func TestRuntimeAutomaticQuestionsSubmitWithoutConfirmation(t *testing.T) {
 			}
 			if !scenario.invalid {
 				var recordedModel string
-				if err := fixture.runtime.db.Pool().QueryRow(ctx, `SELECT model_offering_id FROM public.learning_work_runs WHERE task_id=$1`, taskID).Scan(&recordedModel); err != nil || recordedModel != model["id"] {
+				if err := fixture.runtime.db.Pool().QueryRow(ctx, `SELECT model_offering_id FROM public.learning_work_runs WHERE task_id=$1`, taskID).Scan(&recordedModel); err != nil || recordedModel != modelID {
 					t.Fatal("执行没有使用冻结的公开模型", err)
 				}
 			}

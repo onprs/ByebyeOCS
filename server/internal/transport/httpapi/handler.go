@@ -104,7 +104,7 @@ func handler(audience string, check Readiness, logger *slog.Logger, options Opti
 			return
 		case strings.HasPrefix(path, prefix) && options.Business != nil:
 			operation = audience + "_business"
-			if r.Method == "POST" && options.LongRequestTimeout > 0 && (path == "/api/v1/question-queries" || (strings.HasPrefix(path, "/admin/api/v1/question-models/") && strings.HasSuffix(path, "/tests"))) {
+			if r.Method == "POST" && options.LongRequestTimeout > 0 && path == "/api/v1/question-queries" {
 				controller := http.NewResponseController(w)
 				_ = controller.SetReadDeadline(time.Now().Add(45 * time.Second))
 				_ = controller.SetWriteDeadline(time.Now().Add(options.LongRequestTimeout + 45*time.Second))

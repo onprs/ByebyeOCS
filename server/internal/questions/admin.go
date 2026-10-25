@@ -26,6 +26,11 @@ func (s *Service) adminUsage(w http.ResponseWriter, r *http.Request) {
 	if _, ok := web.Require(w, r, "admin", "question:read"); !ok {
 		return
 	}
+	// 用量核对优先刷新目录；题库暂不可用时仍展示已同步的历史汇总，
+	// 不把展示失败扩大成财务事实丢失。价格与报价路径仍按目录失败关闭。
+	if catalogue, err := s.fetchCatalogue(r.Context()); err == nil {
+		_ = s.syncCatalogue(r.Context(), catalogue)
+	}
 	rows, err := s.pool.Query(r.Context(), `SELECT o.public_id, o.display_name, o.pricing,
 		count(q.id), count(q.id) FILTER (WHERE q.cache_hit),
 		COALESCE(SUM(CASE WHEN q.usage->>'input_tokens' ~ '^[0-9]+$' THEN (q.usage->>'input_tokens')::bigint ELSE 0 END), 0),
@@ -33,6 +38,7 @@ func (s *Service) adminUsage(w http.ResponseWriter, r *http.Request) {
 		COALESCE(SUM(CASE WHEN q.pricing->>'state' = 'quoted' AND q.pricing->>'charged' = 'true'
 			THEN (q.pricing->>'cost_micros')::bigint ELSE 0 END), 0)
 		FROM public.question_offerings o LEFT JOIN public.question_queries q ON q.offering_id = o.id
+		WHERE q.id IS NOT NULL OR o.enabled
 		GROUP BY o.id, o.public_id, o.display_name ORDER BY o.sort_order, o.public_id`)
 	if err != nil {
 		web.Error(w, r, 503, "service_unavailable", "无法读取题库用量")

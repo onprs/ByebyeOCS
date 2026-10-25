@@ -47,7 +47,7 @@
 | GET `/tasks` | 当前任务、异常、历史 | 按用户、安排和状态过滤 |
 | GET `/tasks/{id}` | 任务证据与时间线 | 观察/平台/媒体字段独立 |
 | POST `/tasks/{id}/controls` | 暂停、继续、取消、重调度 | 状态条件、命令版本和幂等 |
-| GET `/question-models` | 管理员已发布且用户可用的模型条目 | 不含上游模型名、服务密钥或内部健康细节 |
+| GET `/question-models` | 题库面板已发布且用户可用的模型条目 | 不含上游模型名、服务密钥或内部健康细节 |
 | POST `/question-queries` | 查询答案，提交模型条目、`cache_first`/`always_llm`、预算 | 服务端价格快照、预占、`Idempotency-Key`；不能提交任意上游模型 |
 | GET `/question-queries/{id}` | 原题、答案、模型、缓存命中、token 分解与状态 | 无虚构置信度；不返回上游密钥 |
 | POST `/question-cache-reports` | 报告错误缓存/答案 | 标记待复核，不直接删除财务证据 |
@@ -77,15 +77,16 @@
 | POST `/refunds` | 资金来源核对、渠道能力和审批 |
 | GET/POST `/reconciliations` | 对账状态、复核与异步扫描 |
 | GET/PATCH `/settings/{group}` | 配置版本与校验；密钥只接受安全写入，不返回原值 |
-| GET/POST/PATCH `/question-models` | 发布、下架、排序、能力、默认项、价格版本和缓存策略 | 下架不删除历史；已引用条目不能静默切换 |
-| POST `/question-models/{id}/tests` | 可达性/功能性测试分开 | 功能性测试会产生 token 费用并需确认 |
-| GET `/question-usage` | 查询次数、缓存命中、输入/输出 token、估算微元成本 | 价格未发布时显示“未定价”，不显示虚假收入 |
+| GET `/question-models` | 只读题库公开目录与价格 | 发布、编辑、下架和测试只在题库维护面板；主管理端不写目录 |
+| GET `/question-usage` | 查询次数、缓存命中、输入/输出 token、估算微元成本 | 目录从题库同步；价格未发布时显示“未定价” |
 | GET `/question-queries` | 跨用户查询与用量，权限受限 | 题目内容按权限和保留期脱敏 |
 | POST `/question-cache/invalidations` | 标记错误缓存失效 | 记录操作者、原因、影响条目 |
 | POST `/providers/{id}/tests` | 可达性/功能测试分开，功能测试需成本确认 |
 | GET `/audit-events` | 脱敏审计、分页和导出权限 |
 | POST `/backups`、POST `/maintenance/updates` | 提升验证、备份/签名/维护流程，不执行任意 shell |
 | GET `/events` | 管理员事件流，受角色过滤 |
+
+题库维护面板使用独立账号和 Cookie，不经过主管理端会话。主平台通过服务令牌读取题库内部接口 `GET /internal/v1/offerings`；该接口只在内网或回环入口提供，不面向用户。
 
 支付回调使用单独 `/payments/callbacks/{provider}` 入口，不使用用户 Cookie；通过提供商验签、商户与订单校验认证。路径命中不代表可以写钱包。
 

@@ -4,6 +4,8 @@ package app
 
 import (
 	"context"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -13,9 +15,64 @@ import (
 	"github.com/onprs/ByebyeOCS/server/internal/web"
 )
 
+// appCatalog 是集成测试中的题库公开目录；主平台只读取它。
+type appCatalog struct {
+	mu        sync.Mutex
+	offerings []questions.ForkOffering
+}
+
+func (c *appCatalog) Offerings(context.Context) ([]questions.ForkOffering, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	result := make([]questions.ForkOffering, len(c.offerings))
+	copy(result, c.offerings)
+	return result, nil
+}
+
+func (c *appCatalog) add(item questions.ForkOffering) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if item.Default {
+		for i := range c.offerings {
+			c.offerings[i].Default = false
+		}
+	}
+	c.offerings = append(c.offerings, item)
+}
+
 type accountedFork struct {
-	calls  atomic.Int64
-	before func(context.Context)
+	calls   atomic.Int64
+	before  func(context.Context)
+	catalog appCatalog
+}
+
+func (f *accountedFork) Offerings(ctx context.Context) ([]questions.ForkOffering, error) {
+	return f.catalog.Offerings(ctx)
+}
+
+func (f *accountedFork) seedOffering(item questions.ForkOffering) { f.catalog.add(item) }
+
+// seedOffering 在题库目录夹具中发布条目并返回公开编号。
+func seedOffering(t *testing.T, fork questions.ForkClient, displayName, providerRef string,
+	policy questions.CachePolicy, pricing *questions.OfferingPricing, isDefault bool) string {
+	t.Helper()
+	seeder, ok := fork.(interface{ seedOffering(questions.ForkOffering) })
+	if !ok {
+		t.Fatal("测试题库夹具不支持公开目录")
+	}
+	now := time.Now().UTC()
+	publicID := "qm_" + strings.ReplaceAll(web.NewID(), "-", "")
+	priceVersion := ""
+	if pricing != nil {
+		priceVersion = pricing.Version
+	}
+	seeder.seedOffering(questions.ForkOffering{
+		ID: web.NewID(), PublicID: publicID, DisplayName: displayName, ProviderRef: providerRef,
+		Capabilities: []string{"text"}, Pricing: pricing, PriceVersion: priceVersion,
+		CachePolicy: policy, Enabled: true, Default: isDefault, Health: "configured",
+		Version: 1, CreatedAt: now, UpdatedAt: now,
+	})
+	return publicID
 }
 
 func (f *accountedFork) Answer(ctx context.Context, r questions.ForkAnswerRequest, key string) (questions.ForkAnswerResponse, error) {
@@ -48,12 +105,11 @@ func TestQuestionLedgerPreauthorizesAndRespectsOperatingSwitch(t *testing.T) {
 	}
 	admin := session["admin"].(map[string]any)
 	actor := web.Actor{ID: admin["id"].(string), Kind: "admin", Permissions: []string{"*"}, AuthenticatedAt: time.Now()}
-	adminCSRF := session["csrf_token"].(string)
-	code, _, model := requestJSON(t, adminClient, "POST", fixture.admin.URL+"/admin/api/v1/question-models", adminCSRF, map[string]any{"display_name": "计费联调模型", "provider_ref": "controlled-fixture-model", "capabilities": []string{"text"}, "pricing": map[string]string{"version": "question-price-v1", "input_micros_per_million_tokens": "1000000", "output_micros_per_million_tokens": "2000000", "micros_per_minor": "10000", "rounding": "ceil", "rule": "tokens_x_micros_per_million_v1"}}, nil)
-	if code != 201 {
-		t.Fatal("价格发布失败", code, model)
-	}
-	modelID := model["id"].(string)
+	modelID := seedOffering(t, fork, "计费联调模型", "controlled-fixture-model",
+		questions.CachePolicy{Allow: true, Scope: "user", TTLDays: 7},
+		&questions.OfferingPricing{Version: "question-price-v1", InputMicrosPerMillionTokens: 1000000,
+			OutputMicrosPerMillionTokens: 2000000, MicrosPerMinor: 10000, Rounding: "ceil",
+			Rule: "tokens_x_micros_per_million_v1"}, true)
 	wallet, err := fixture.runtime.Ledger.GetWallet(ctx, userID)
 	if err != nil {
 		t.Fatal(err)

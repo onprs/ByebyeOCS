@@ -23,7 +23,7 @@ const queryColumns = `id, user_id::text, idempotency_key, request_fingerprint, o
 	COALESCE(question_options, ''), question_type, image_count, status, COALESCE(answer, ''), cache_hit,
 	COALESCE(cache_entry_id, ''), cache_created_at, usage, pricing, billing_state,
 	COALESCE(billing_hold_id, ''), reserved_minor, content_expired,
-	COALESCE(error_code, ''), fork_request_id, version, created_at, updated_at, completed_at`
+	COALESCE(error_code, ''), fork_request_id, version, created_at, updated_at, completed_at, fork_cache_policy`
 
 const (
 	// cleanupTimeout 限制回滚、补偿释放等后台清理；请求取消后也必须有界完成。
@@ -81,19 +81,26 @@ type queryRecord struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	CompletedAt         *time.Time
+	ForkCachePolicy     *ForkCachePolicy
 }
 
 func scanQuery(row pgx.Row) (*queryRecord, error) {
 	var q queryRecord
+	var cachePolicy []byte
 	err := row.Scan(&q.ID, &q.UserID, &q.IdempotencyKey, &q.Fingerprint, &q.OfferingID,
 		&q.OfferingPublicID, &q.OfferingDisplayName, &q.OfferingProviderRef, &q.Mode, &q.CacheScope,
 		&q.ScopeKeyHash, &q.QuestionTitle,
 		&q.QuestionOptions, &q.QuestionType, &q.ImageCount, &q.Status, &q.Answer, &q.CacheHit,
 		&q.CacheEntryID, &q.CacheCreatedAt, &q.Usage, &q.Pricing, &q.BillingState,
 		&q.BillingHoldID, &q.ReservedMinor, &q.ContentExpired,
-		&q.ErrorCode, &q.ForkRequestID, &q.Version, &q.CreatedAt, &q.UpdatedAt, &q.CompletedAt)
+		&q.ErrorCode, &q.ForkRequestID, &q.Version, &q.CreatedAt, &q.UpdatedAt, &q.CompletedAt, &cachePolicy)
 	if err != nil {
 		return nil, err
+	}
+	if len(cachePolicy) > 0 {
+		if err := json.Unmarshal(cachePolicy, &q.ForkCachePolicy); err != nil {
+			return nil, errors.New("题库缓存策略快照无效")
+		}
 	}
 	return &q, nil
 }
@@ -255,15 +262,20 @@ func snapshotFromQuote(quote Quote, reserved int64, holdID, billingState, billin
 
 func (s *Service) insertPendingQuery(ctx context.Context, queryID string, actorID string, idem, fp string,
 	offering *Offering, input QueryInput, scopeHash string, images imageValidation) (bool, *queryRecord, error) {
+	// 主库条目是题库目录的镜像；写入查询前先同步本次使用的条目。
+	if err := s.syncOffering(ctx, offering); err != nil {
+		return false, nil, err
+	}
+	cachePolicy, _ := json.Marshal(forkCachePolicyFor(offering))
 	tag, err := s.pool.Exec(ctx, `INSERT INTO public.question_queries
 		(id, user_id, idempotency_key, request_fingerprint, offering_id, offering_public_id, offering_display_name,
 		 offering_provider_ref, mode, cache_scope, scope_key_hash, question_title, question_options, question_type,
-		 image_count, status, usage, pricing, billing_state, fork_request_id)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending','{}','{}','pending',$1)
+		 image_count, status, usage, pricing, billing_state, fork_request_id, fork_cache_policy)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending','{}','{}','pending',$1,$16)
 		ON CONFLICT (user_id, idempotency_key) DO NOTHING`,
 		queryID, actorID, idem, fp, offering.ID, offering.PublicID, offering.DisplayName,
 		offering.ProviderRef, input.Mode, input.CacheScope, scopeHash, input.Question.Title,
-		input.Question.Options, input.Question.Type, images.Count)
+		input.Question.Options, input.Question.Type, images.Count, string(cachePolicy))
 	if err != nil {
 		return false, nil, err
 	}
@@ -399,9 +411,14 @@ func forkRequestFor(queryID string, offering *Offering, input QueryInput, scopeK
 	return ForkAnswerRequest{
 		RequestID: queryID, ModelOfferingID: offering.ProviderRef, Mode: input.Mode,
 		CacheScope: input.CacheScope, CacheScopeKey: scopeKey,
-		Question: ForkQuestion{Title: input.Question.Title, Options: input.Question.Options, Type: input.Question.Type, Images: input.Question.Images},
-		Budget:   ForkBudget{MaxOutputTokens: input.Budget.MaxOutputTokens},
+		Question:    ForkQuestion{Title: input.Question.Title, Options: input.Question.Options, Type: input.Question.Type, Images: input.Question.Images},
+		Budget:      ForkBudget{MaxOutputTokens: input.Budget.MaxOutputTokens},
+		CachePolicy: forkCachePolicyFor(offering),
 	}
+}
+
+func forkCachePolicyFor(offering *Offering) *ForkCachePolicy {
+	return &ForkCachePolicy{Allow: offering.CachePolicy.Allow, TTLDays: offering.CachePolicy.TTLDays}
 }
 
 // dispatchQuery 在已存在或被重驱动的查询行上完成预占与 fork 调用。
@@ -675,6 +692,8 @@ var preCallFailureCodes = map[string]bool{
 	"invalid_question":      true,
 	"budget_exceeded":       true,
 	"shared_cache_disabled": true,
+	"invalid_cache_policy":  true,
+	"cache_not_allowed":     true,
 }
 
 // preCallFailure 判断一条已保存的失败是否可证明从未调用模型。
@@ -798,6 +817,7 @@ func (s *Service) retryPreCallFailure(ctx context.Context, userID, fp string, in
 		frozen = &decision
 	}
 	request := forkRequestFor(claimed.ID, offering, input, scopeKey)
+	request.CachePolicy = claimed.ForkCachePolicy
 	return s.dispatchQuery(ctx, claimed.ID, userID, offering, request, input, imageCount, claimed.Version, frozen)
 }
 
@@ -967,8 +987,9 @@ func (s *Service) resumeQuery(ctx context.Context, q *queryRecord, fp string, in
 	request := ForkAnswerRequest{
 		RequestID: q.ID, ModelOfferingID: q.OfferingProviderRef, Mode: q.Mode,
 		CacheScope: q.CacheScope, CacheScopeKey: scopeKey,
-		Question: ForkQuestion{Title: input.Question.Title, Options: input.Question.Options, Type: input.Question.Type, Images: input.Question.Images},
-		Budget:   ForkBudget{MaxOutputTokens: input.Budget.MaxOutputTokens},
+		Question:    ForkQuestion{Title: input.Question.Title, Options: input.Question.Options, Type: input.Question.Type, Images: input.Question.Images},
+		Budget:      ForkBudget{MaxOutputTokens: input.Budget.MaxOutputTokens},
+		CachePolicy: q.ForkCachePolicy,
 	}
 	return s.completeAnswer(ctx, answerCompletion{
 		queryID: q.ID, userID: q.UserID, offering: offering, request: request,
@@ -1067,6 +1088,7 @@ func (s *Service) redriveInterruptedQuery(ctx context.Context, q *queryRecord, f
 		return QueryView{}, newQueryError("service_unavailable", "无法重新驱动题库查询", http.StatusServiceUnavailable, true)
 	}
 	request := forkRequestFor(q.ID, offering, input, scopeKey)
+	request.CachePolicy = q.ForkCachePolicy
 	return s.dispatchQuery(ctx, q.ID, q.UserID, offering, request, input, len(input.Question.Images), q.Version, frozen)
 }
 

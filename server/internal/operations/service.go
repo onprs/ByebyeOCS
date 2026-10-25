@@ -151,7 +151,7 @@ func (s *Service) Disk() Disk {
 }
 func (s *Service) Guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		questionRequest := r.Method == "POST" && (r.URL.Path == "/api/v1/question-queries" || (strings.HasPrefix(r.URL.Path, "/admin/api/v1/question-models/") && strings.HasSuffix(r.URL.Path, "/tests")))
+		questionRequest := r.Method == "POST" && r.URL.Path == "/api/v1/question-queries"
 		if questionRequest {
 			release, err := s.AcquireQuestion(r.Context())
 			if err != nil {

@@ -30,6 +30,65 @@ type fakeFork struct {
 	invalidationMiss bool
 	answer           func(ForkAnswerRequest) (ForkAnswerResponse, error)
 	testResult       ForkTestResult
+	catalog          *testCatalog
+}
+
+// testCatalog 是题库公开条目的内存夹具；目录内容由题库面板维护。
+type testCatalog struct {
+	mu        sync.Mutex
+	offerings []ForkOffering
+}
+
+func (c *testCatalog) Offerings(context.Context) ([]ForkOffering, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	result := make([]ForkOffering, len(c.offerings))
+	copy(result, c.offerings)
+	return result, nil
+}
+
+func (c *testCatalog) addOffering(item ForkOffering) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !item.Enabled {
+		item.Default = false
+	}
+	if item.Default {
+		for i := range c.offerings {
+			c.offerings[i].Default = false
+		}
+	}
+	c.offerings = append(c.offerings, item)
+}
+
+// updateOffering 模拟题库面板修改公开条目；价格更新随后由主平台的目录读取生效。
+func (c *testCatalog) updateOffering(publicID string, mutate func(*ForkOffering)) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.offerings {
+		if c.offerings[i].PublicID != publicID {
+			continue
+		}
+		mutate(&c.offerings[i])
+		if !c.offerings[i].Enabled {
+			c.offerings[i].Default = false
+		}
+		c.offerings[i].Version++
+		c.offerings[i].UpdatedAt = time.Now().UTC()
+		if c.offerings[i].Default {
+			for j := range c.offerings {
+				if j != i {
+					c.offerings[j].Default = false
+				}
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func (f *fakeFork) Offerings(ctx context.Context) ([]ForkOffering, error) {
+	return f.catalog.Offerings(ctx)
 }
 
 func (f *fakeFork) Answer(_ context.Context, request ForkAnswerRequest, _ string) (ForkAnswerResponse, error) {
@@ -168,13 +227,14 @@ func (b *fakeBilling) counts() (int, int, int, int64, int64) {
 }
 
 type testEnv struct {
-	pool    *pgxpool.Pool
-	service *Service
-	mux     *http.ServeMux
-	fork    *fakeFork
-	billing *fakeBilling
-	userID  string
-	adminID string
+	pool      *pgxpool.Pool
+	service   *Service
+	mux       *http.ServeMux
+	fork      *fakeFork
+	catalogue *testCatalog
+	billing   *fakeBilling
+	userID    string
+	adminID   string
 }
 
 type envOptions struct {
@@ -193,12 +253,22 @@ func newTestEnv(t *testing.T, options envOptions) *testEnv {
 	userID := addUser(t, pool)
 	adminID := addAdmin(t, pool)
 	fork := options.fork
+	catalogue := &testCatalog{}
 	var fakeForkClient *fakeFork
 	if fork == nil {
-		fakeForkClient = &fakeFork{}
+		fakeForkClient = &fakeFork{catalog: catalogue}
 		fork = fakeForkClient
 	} else if value, ok := fork.(*fakeFork); ok {
 		fakeForkClient = value
+		if value.catalog == nil {
+			value.catalog = catalogue
+		}
+		catalogue = value.catalog
+	} else if value, ok := fork.(*idempotentFork); ok {
+		if value.catalog == nil {
+			value.catalog = catalogue
+		}
+		catalogue = value.catalog
 	}
 	var billing Billing
 	var fakeBill *fakeBilling
@@ -223,7 +293,18 @@ func newTestEnv(t *testing.T, options envOptions) *testEnv {
 	}
 	mux := http.NewServeMux()
 	service.Register(mux)
-	return &testEnv{pool: pool, service: service, mux: mux, fork: fakeForkClient, billing: fakeBill, userID: userID, adminID: adminID}
+	return &testEnv{pool: pool, service: service, mux: mux, fork: fakeForkClient, catalogue: catalogue, billing: fakeBill, userID: userID, adminID: adminID}
+}
+
+// republish 模拟题库面板发布新价格版本；主平台在下一次目录读取时生效。
+func (e *testEnv) republish(t *testing.T, publicID string, pricing *OfferingPricing) {
+	t.Helper()
+	if !e.catalogue.updateOffering(publicID, func(item *ForkOffering) {
+		item.Pricing = pricing
+		item.PriceVersion = pricing.Version
+	}) {
+		t.Fatal("无法发布新价格版本")
+	}
 }
 
 func addUser(t *testing.T, pool *pgxpool.Pool) string {
@@ -286,22 +367,26 @@ func testPricing(input, output, microsPerMinor Micros) *OfferingPricing {
 
 func (e *testEnv) createOffering(t *testing.T, displayName, providerRef string, pricing *OfferingPricing, isDefault bool) adminOfferingView {
 	t.Helper()
-	body := map[string]any{
-		"display_name": displayName, "provider_ref": providerRef, "capabilities": []string{"text"},
-		"default": isDefault,
+	if e.catalogue == nil {
+		t.Fatal("测试需要题库目录夹具")
 	}
+	now := time.Now().UTC()
+	publicID := "qm_" + strings.ReplaceAll(web.NewID(), "-", "")
+	priceVersion := ""
 	if pricing != nil {
-		body["pricing"] = pricing
+		priceVersion = pricing.Version
 	}
-	recorder := e.call(t, http.MethodPost, "/admin/api/v1/question-models", body, e.admin(), nil)
-	if recorder.Code != http.StatusCreated {
-		t.Fatalf("创建模型条目失败：%d %s", recorder.Code, recorder.Body.String())
+	item := ForkOffering{
+		ID: web.NewID(), PublicID: publicID, DisplayName: displayName, ProviderRef: providerRef,
+		Capabilities: []string{"text"}, Pricing: pricing, PriceVersion: priceVersion,
+		CachePolicy: CachePolicy{Allow: true, Scope: "user", TTLDays: 7},
+		Enabled:     true, Default: isDefault, Health: "configured", Version: 1, CreatedAt: now, UpdatedAt: now,
 	}
-	var view adminOfferingView
-	if err := json.Unmarshal(recorder.Body.Bytes(), &view); err != nil {
-		t.Fatal(err)
-	}
-	return view
+	e.catalogue.addOffering(item)
+	return adminOfferingView{ID: publicID, OfferingID: publicID, DisplayName: displayName, ProviderRef: providerRef,
+		Capabilities: []string{"text"}, Enabled: true, Default: isDefault, PriceVersion: priceVersion,
+		Pricing: pricing, CachePolicy: item.CachePolicy, Health: "configured", Version: 1,
+		CreatedAt: now, UpdatedAt: now}
 }
 
 func queryBody(title, mode string) QueryInput {
@@ -558,10 +643,11 @@ func TestPerOfferingRatesAndMillionPrecision(t *testing.T) {
 	}
 	nextPricing := testPricing(4_000_000, 0, 10000)
 	nextPricing.Version = "price-v2"
-	patched := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+b.ID,
-		map[string]any{"pricing": nextPricing}, env.admin(), map[string]string{"If-Match": `"v1"`})
-	if patched.Code != http.StatusOK || !strings.Contains(patched.Body.String(), `"input_micros_per_million_tokens":"4000000"`) {
-		t.Fatalf("管理员应能按条目更新价格：%d %s", patched.Code, patched.Body.String())
+	if !env.catalogue.updateOffering(b.ID, func(item *ForkOffering) {
+		item.Pricing = nextPricing
+		item.PriceVersion = nextPricing.Version
+	}) {
+		t.Fatal("题库条目价格未能更新")
 	}
 	oldB := decodeQuery(t, env.call(t, http.MethodGet, "/api/v1/question-queries/"+viewB.ID, nil, env.user(), nil))
 	if oldB.Pricing.CostMicros != "300" || oldB.Pricing.Pricing == nil || oldB.Pricing.Pricing.InputMicrosPerMillionTokens != second.InputMicrosPerMillionTokens {
@@ -711,23 +797,11 @@ func TestCacheHitZeroTokensNoCharge(t *testing.T) {
 	}
 }
 
-func TestModelDisabledVersionConflictAndForkFailure(t *testing.T) {
+func TestOfferingDisabledAndForkFailure(t *testing.T) {
 	env := newTestEnv(t, envOptions{})
 	offering := env.createOffering(t, "版本模型", "internal-version", nil, true)
-	missing := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+offering.ID,
-		map[string]any{"enabled": false}, env.admin(), nil)
-	if missing.Code != http.StatusPreconditionRequired {
-		t.Fatalf("缺少 If-Match 应 428：%d", missing.Code)
-	}
-	conflict := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+offering.ID,
-		map[string]any{"enabled": false}, env.admin(), map[string]string{"If-Match": `"v9"`})
-	if conflict.Code != http.StatusPreconditionFailed {
-		t.Fatalf("版本冲突应 412：%d %s", conflict.Code, conflict.Body.String())
-	}
-	disabled := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+offering.ID,
-		map[string]any{"enabled": false}, env.admin(), map[string]string{"If-Match": `"v1"`})
-	if disabled.Code != http.StatusOK {
-		t.Fatalf("下架失败：%d %s", disabled.Code, disabled.Body.String())
+	if !env.catalogue.updateOffering(offering.ID, func(item *ForkOffering) { item.Enabled = false }) {
+		t.Fatal("题库条目未能下架")
 	}
 	disabledBody := queryBody("下架题", "cache_first")
 	disabledBody.ModelOfferingID = offering.ID
@@ -752,23 +826,18 @@ func TestModelDisabledVersionConflictAndForkFailure(t *testing.T) {
 	}
 }
 
-func TestAdminTestsInvalidationAndPermissions(t *testing.T) {
+func TestAdminReadOnlyCatalogueAndPermissions(t *testing.T) {
 	env := newTestEnv(t, envOptions{billing: false})
 	offering := env.createOffering(t, "测试模型", "internal-test", nil, true)
-	noConfirm := env.call(t, http.MethodPost, "/admin/api/v1/question-models/"+offering.ID+"/tests",
-		map[string]any{"kind": "functional"}, env.admin(), nil)
-	if noConfirm.Code != http.StatusPreconditionRequired {
-		t.Fatalf("功能性测试需成本确认：%d %s", noConfirm.Code, noConfirm.Body.String())
+	create := env.call(t, http.MethodPost, "/admin/api/v1/question-models",
+		map[string]any{"display_name": "管理员写入"}, env.admin(), nil)
+	if create.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("主平台管理员不应能创建公开条目：%d %s", create.Code, create.Body.String())
 	}
-	functional := env.call(t, http.MethodPost, "/admin/api/v1/question-models/"+offering.ID+"/tests",
-		map[string]any{"kind": "functional", "confirm_cost": true}, env.admin(), nil)
-	if functional.Code != http.StatusOK || !strings.Contains(functional.Body.String(), `"functional":true`) {
-		t.Fatalf("功能性测试失败：%d %s", functional.Code, functional.Body.String())
-	}
-	reach := env.call(t, http.MethodPost, "/admin/api/v1/question-models/"+offering.ID+"/tests",
+	test := env.call(t, http.MethodPost, "/admin/api/v1/question-models/"+offering.ID+"/tests",
 		map[string]any{"kind": "reachability"}, env.admin(), nil)
-	if reach.Code != http.StatusOK || !strings.Contains(reach.Body.String(), `"reachable":true`) {
-		t.Fatalf("可达性测试失败：%d %s", reach.Code, reach.Body.String())
+	if test.Code != http.StatusNotFound {
+		t.Fatalf("模型测试应只在题库面板提供：%d %s", test.Code, test.Body.String())
 	}
 	userAsAdmin := env.call(t, http.MethodGet, "/admin/api/v1/question-models", nil, env.user(), nil)
 	if userAsAdmin.Code != http.StatusForbidden {
@@ -945,27 +1014,21 @@ func TestInsufficientBalanceBlocksFork(t *testing.T) {
 	}
 }
 
-// 不可用模型不能被设为默认：默认条目会被用户查询跳过，且唯一默认索引会阻止其他条目接管。
-func TestUnavailableModelCannotBeDefault(t *testing.T) {
+// 默认条目不可用时不会静默改选其他模型：查询在入口停止，等待管理员处理。
+func TestUnavailableDefaultDoesNotFallBack(t *testing.T) {
 	env := newTestEnv(t, envOptions{})
-	create := env.call(t, http.MethodPost, "/admin/api/v1/question-models", map[string]any{
-		"display_name": "不可用默认", "provider_ref": "internal-unavailable",
-		"capabilities": []string{"text"}, "default": true, "health": "unavailable",
-	}, env.admin(), nil)
-	if create.Code != http.StatusUnprocessableEntity || errorCode(create) != "validation_failed" {
-		t.Fatalf("不可用模型不能直接设为默认：%d %s", create.Code, create.Body.String())
-	}
-
+	env.createOffering(t, "备用模型", "internal-backup", nil, false)
 	offering := env.createOffering(t, "可用默认", "internal-available", nil, true)
-	deadDefault := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+offering.ID,
-		map[string]any{"health": "unavailable"}, env.admin(), map[string]string{"If-Match": `"v1"`})
-	if deadDefault.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("默认模型不能单独改为不可用：%d %s", deadDefault.Code, deadDefault.Body.String())
+	if !env.catalogue.updateOffering(offering.ID, func(item *ForkOffering) { item.Health = "unavailable" }) {
+		t.Fatal("默认条目不可用状态未能更新")
 	}
-	retire := env.call(t, http.MethodPatch, "/admin/api/v1/question-models/"+offering.ID,
-		map[string]any{"health": "unavailable", "default": false}, env.admin(), map[string]string{"If-Match": `"v1"`})
-	if retire.Code != http.StatusOK {
-		t.Fatalf("同时取消默认并标为不可用应允许：%d %s", retire.Code, retire.Body.String())
+	query := env.call(t, http.MethodPost, "/api/v1/question-queries", queryBody("默认不可用题", "cache_first"), env.user(),
+		map[string]string{"Idempotency-Key": "dead-default-key-0001"})
+	if query.Code != http.StatusServiceUnavailable || errorCode(query) != "not_configured" {
+		t.Fatalf("不可用默认应停止查询：%d %s", query.Code, query.Body.String())
+	}
+	if env.fork.callCount() != 0 {
+		t.Fatal("默认条目不可用时不得调用模型")
 	}
 }
 

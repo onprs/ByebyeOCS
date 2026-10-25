@@ -25,27 +25,17 @@ func TestConfiguredSharedCacheReachesQuestionService(t *testing.T) {
 		t.Run(map[bool]string{false: "默认关闭", true: "显式开启"}[enabled], func(t *testing.T) {
 			fork := &sharedScopeFork{}
 			fixture := newRuntimeFixture(t, fixtureOptions{fork: fork, sharedCache: enabled})
-			client, admin := fixtureClient(), fixtureClient()
+			client := fixtureClient()
 			defer client.CloseIdleConnections()
-			defer admin.CloseIdleConnections()
 			csrf, _ := loginFixtureUser(t, fixture, client, "learner-a")
-			status, _, login := requestJSON(t, admin, "POST", fixture.admin.URL+"/admin/api/v1/auth/login", "", map[string]string{"username": fixtureAdminName, "password": fixtureAdminPassword, "totp_code": fixtureTOTP()}, nil)
-			if status != 200 {
-				t.Fatal("测试管理员未登录")
-			}
-			status, _, model := requestJSON(t, admin, "POST", fixture.admin.URL+"/admin/api/v1/question-models", login["csrf_token"].(string), map[string]any{
-				"display_name": "共享缓存联调模型", "provider_ref": "shared-cache-fixture", "capabilities": []string{"text"},
-				"cache_policy": map[string]any{"allow": true, "scope": "shared", "ttl_days": 7},
-			}, nil)
-			if status != 201 {
-				t.Fatalf("创建共享缓存条目失败：%d", status)
-			}
+			modelID := seedOffering(t, fork, "共享缓存联调模型", "shared-cache-fixture",
+				questions.CachePolicy{Allow: true, Scope: "shared", TTLDays: 7}, nil, true)
 			status, _, caps := requestJSON(t, client, "GET", fixture.user.URL+"/api/v1/capabilities", "", nil, nil)
 			if status != 200 || caps["features"].(map[string]any)["shared_question_cache"] != enabled {
 				t.Fatal("公开能力与显式配置不一致")
 			}
 			status, _, _ = requestJSON(t, client, "POST", fixture.user.URL+"/api/v1/question-queries", csrf, map[string]any{
-				"model_offering_id": model["id"], "mode": "cache_first", "cache_scope": "shared",
+				"model_offering_id": modelID, "mode": "cache_first", "cache_scope": "shared",
 				"question": map[string]any{"title": "共享缓存受控题", "type": "single", "options": "A. 第一项\nB. 第二项", "images": []string{}},
 				"budget":   map[string]int{"max_output_tokens": 100},
 			}, map[string]string{"Idempotency-Key": "shared-cache-runtime"})

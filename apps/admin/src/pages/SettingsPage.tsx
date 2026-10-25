@@ -43,6 +43,7 @@ import {
   parseYuanToMinor,
 } from '../lib/format'
 import { useAsync } from '../lib/hooks'
+import { openTikuPanel } from '../lib/tikuPanel'
 import { colorSchemeOptions, themeModeOptions, useAppearance } from '../theme/AppearanceProvider'
 
 type SettingsSection = 'appearance' | 'billing' | 'runtime' | 'maintenance'
@@ -203,7 +204,6 @@ function BillingPanel() {
   const { notify } = useToast()
   const { me } = useAuth()
   const canManage = hasPermission(me, 'billing.manage')
-  const navigate = useNavigate()
   const billing = useAsync(() => getBillingSettings().then(response => response.data), [])
   const [servicePrice, setServicePrice] = useState('')
   const [unitLabel, setUnitLabel] = useState('有效任务点')
@@ -443,7 +443,7 @@ function BillingPanel() {
         <CardHeader
           title="题库计价"
           subtitle="题库按公开模型的 token 价格单独计费，不在全局设置中维护费率。"
-          actions={<Button size="sm" onClick={() => navigate('/questions')}>管理模型与价格</Button>}
+          actions={<Button size="sm" onClick={openTikuPanel}>打开题库面板</Button>}
         />
         <div className="settings-body" style={{ paddingTop: 16 }}>
           <div className="billing-status" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
@@ -451,7 +451,7 @@ function BillingPanel() {
             <div><span>计价方式</span><b>按公开模型 token 价格</b></div>
           </div>
           <p className="form-hint" style={{ marginTop: 10 }}>
-            输入、输出价格与缓存策略在“题库与模型”按条目维护；实际查询使用所选的已发布模型价格。
+            输入、输出价格与缓存策略在题库维护面板按条目发布；实际查询使用查询时冻结的已发布价格。
           </p>
         </div>
       </Card>
@@ -619,7 +619,7 @@ const featureLabels: Record<string, string> = {
   users: '用户与账号',
   tasks: '任务监控',
   finance: '财务与订单',
-  question_bank: '题库与模型',
+  question_bank: '题库查询',
 }
 
 function authMethodLabel(method: string): string {
