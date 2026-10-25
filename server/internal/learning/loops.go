@@ -751,17 +751,29 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 	}
 	var snapshotVersion int64
 	processed := 0
+	partial := 0
 	for _, course := range courses {
 		if err := s.assertCourseSyncLease(ctx, &job); err != nil {
 			return
 		}
-		snapshot, err := s.opts.Platform.DiscoverCourse(ctx, session, PlatformCourseRef{
+		ref := PlatformCourseRef{
 			ExternalCourseID: course.ExternalCourseID, ExternalClassID: course.ExternalClassID,
 			CPI: course.CPI, CycleKey: "current",
-		})
+		}
+		snapshot, err := s.opts.Platform.DiscoverCourse(ctx, session, ref)
 		if err != nil {
-			s.finishSyncFailure(ctx, job, s.classifySyncError(err))
-			return
+			failure := failureOf(err)
+			s.opts.Logger.Warn("课程结构读取失败", "user_id", job.UserID, "course_index", processed, "class", string(failure.Class), "detail", failure.Detail)
+			if failure.Class != FailureCapabilityMissing {
+				s.finishSyncFailure(ctx, job, s.classifySyncError(err))
+				return
+			}
+			// 结构暂不兼容的课程仍保留课程条目，避免整次同步被单门课程阻塞。
+			partial++
+			snapshot = PlatformCourseSnapshot{
+				Course: ref, Title: course.Title, Teacher: course.Teacher, Term: course.Term,
+				Adapter: capabilities.Adapter,
+			}
 		}
 		if snapshot.Adapter == "" {
 			snapshot.Adapter = capabilities.Adapter
@@ -790,7 +802,12 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 			s.opts.Logger.Warn("课程同步进度写入失败", "user_id", job.UserID, "code", describe(err))
 		}
 	}
-	if err := s.finishCourseSync(ctx, &job, "succeeded", "", len(courses), snapshotVersion); err != nil {
+	status, errorCode := "succeeded", ""
+	if partial > 0 {
+		status, errorCode = "needs_attention", "course_structure_partial"
+		s.opts.Logger.Warn("课程同步部分完成", "user_id", job.UserID, "partial", partial, "total", len(courses))
+	}
+	if err := s.finishCourseSync(ctx, &job, status, errorCode, len(courses), snapshotVersion); err != nil {
 		s.opts.Logger.Warn("课程同步完成状态写入失败", "code", describe(err))
 	}
 }

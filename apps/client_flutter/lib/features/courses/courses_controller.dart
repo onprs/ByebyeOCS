@@ -63,6 +63,7 @@ class CoursesController extends AsyncNotifier<CourseListState> {
   Page<CourseSummary>? _page;
   StreamSubscription<RealtimeEvent>? _events;
   bool _autoSyncTried = false;
+  bool _autoRetryTried = false;
   bool _polling = false;
   bool _disposed = false;
 
@@ -73,6 +74,7 @@ class CoursesController extends AsyncNotifier<CourseListState> {
   Future<CourseListState> build() async {
     _disposed = false;
     _autoSyncTried = false;
+    _autoRetryTried = false;
     _polling = false;
     _requestSeq++;
     ref.watch(sessionEpochProvider);
@@ -269,11 +271,16 @@ class CoursesController extends AsyncNotifier<CourseListState> {
         return;
       }
       if (latest != null && latest.needsAttention) {
+        if (latest.errorCode == 'external_disabled' && !_autoRetryTried) {
+          _autoRetryTried = true;
+          await syncCourses(automatic: true);
+          return;
+        }
         state = AsyncData(
           current.copyWith(
             syncing: false,
             syncResult: latest,
-            syncError: '课程同步未完成，请重试',
+            syncError: _syncFailureMessage(latest),
           ),
         );
         return;
@@ -304,7 +311,7 @@ class CoursesController extends AsyncNotifier<CourseListState> {
         (state.valueOrNull ?? current).copyWith(
           syncing: result.running,
           syncResult: result,
-          syncError: result.needsAttention ? '课程同步未完成，请重试' : null,
+          syncError: result.needsAttention ? _syncFailureMessage(result) : null,
           clearSyncError: !result.needsAttention,
         ),
       );
@@ -332,6 +339,13 @@ class CoursesController extends AsyncNotifier<CourseListState> {
     }
   }
 
+  String _syncFailureMessage(CourseSyncResult result) {
+    if (result.errorCode == 'course_structure_partial') {
+      return '部分课程结构待适配，已同步可用课程';
+    }
+    return '课程同步未完成，请重试';
+  }
+
   Future<void> _pollCourseSync(String id) async {
     if (_polling) return;
     _polling = true;
@@ -353,7 +367,8 @@ class CoursesController extends AsyncNotifier<CourseListState> {
           current.copyWith(
             syncing: !finished,
             syncResult: result,
-            syncError: result.needsAttention ? '课程同步未完成，请重试' : null,
+            syncError:
+                result.needsAttention ? _syncFailureMessage(result) : null,
             clearSyncError: !result.needsAttention,
           ),
         );

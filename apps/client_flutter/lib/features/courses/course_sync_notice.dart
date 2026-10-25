@@ -58,11 +58,14 @@ class CourseSyncNotice extends StatelessWidget {
       );
     }
     if (!failed) return const SizedBox.shrink();
+    final partial = result?.errorCode == 'course_structure_partial';
     return InlineNotice(
       tone: StatusTone.warning,
       icon: Icons.cloud_off_outlined,
       message: current.syncError ?? '课程同步未完成，请重试',
-      action: TextButton(onPressed: onRetry, child: const Text('重试')),
+      action: partial
+          ? null
+          : TextButton(onPressed: onRetry, child: const Text('重试')),
     );
   }
 }
