@@ -7,14 +7,47 @@ import '../../design/components.dart';
 import '../../design/theme.dart';
 
 class AppShell extends ConsumerStatefulWidget {
-  const AppShell({super.key, required this.child});
-  final Widget child;
+  const AppShell({super.key, required this.navigationShell});
+  final StatefulNavigationShell navigationShell;
   @override
   ConsumerState<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends ConsumerState<AppShell> {
+class _AppShellState extends ConsumerState<AppShell>
+    with SingleTickerProviderStateMixin {
   final _pageStorage = PageStorageBucket();
+  late final AnimationController _fade = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 160),
+    reverseDuration: const Duration(milliseconds: 90),
+    value: 1,
+  );
+  bool _switching = false;
+
+  @override
+  void dispose() {
+    _fade.dispose();
+    super.dispose();
+  }
+
+  Future<void> _navigate(int index) async {
+    final current = widget.navigationShell.currentIndex;
+    if (index == current) {
+      widget.navigationShell.goBranch(index, initialLocation: true);
+      return;
+    }
+    if (_switching) return;
+    if (MediaQuery.disableAnimationsOf(context)) {
+      widget.navigationShell.goBranch(index);
+      return;
+    }
+    _switching = true;
+    await _fade.animateTo(0, curve: Curves.easeIn);
+    if (!mounted) return;
+    widget.navigationShell.goBranch(index);
+    await _fade.animateTo(1, curve: Curves.easeOut);
+    _switching = false;
+  }
 
   static const _destinations = <_ShellDestination>[
     _ShellDestination(
@@ -49,10 +82,11 @@ class _AppShellState extends ConsumerState<AppShell> {
 
   @override
   Widget build(BuildContext context) {
-    final location = GoRouterState.of(context).matchedLocation;
     final colors = context.colors;
     final narrow = MediaQuery.sizeOf(context).width < 760;
-    final selected = _selectedIndex(location);
+    final selected = widget.navigationShell.currentIndex < _destinations.length
+        ? widget.navigationShell.currentIndex
+        : -1;
     final user = ref.watch(currentUserProvider);
     final initial = user?.displayLabel.characters.first ?? '我';
     return Scaffold(
@@ -66,29 +100,16 @@ class _AppShellState extends ConsumerState<AppShell> {
               selectedIndex: selected,
               destinations: _destinations,
               initial: initial,
-              onNavigate: (path) => context.go(path),
-              onSettings: () => context.go('/settings'),
+              onNavigate: _navigate,
+              onSettings: () => _navigate(4),
             ),
             Expanded(
               child: ClipRect(
                 child: PageStorage(
                   bucket: _pageStorage,
-                  child: AnimatedSwitcher(
-                    duration: Duration(
-                        milliseconds:
-                            MediaQuery.disableAnimationsOf(context) ? 0 : 160),
-                    transitionBuilder: (child, animation) => FadeTransition(
-                      opacity: animation,
-                      child: AnimatedBuilder(
-                        animation: animation,
-                        builder: (context, child) => Transform.translate(
-                            offset: Offset(0, 4 * (1 - animation.value)),
-                            child: child),
-                        child: child,
-                      ),
-                    ),
-                    child: KeyedSubtree(
-                        key: ValueKey(location), child: widget.child),
+                  child: FadeTransition(
+                    opacity: _fade,
+                    child: widget.navigationShell,
                   ),
                 ),
               ),
@@ -97,20 +118,12 @@ class _AppShellState extends ConsumerState<AppShell> {
               _BottomNavigation(
                 destinations: _destinations,
                 selectedIndex: selected,
-                onNavigate: (path) => context.go(path),
+                onNavigate: _navigate,
               ),
           ],
         ),
       ),
     );
-  }
-
-  int _selectedIndex(String location) {
-    for (var index = 0; index < _destinations.length; index++) {
-      final path = _destinations[index].path;
-      if (location == path || location.startsWith('$path/')) return index;
-    }
-    return -1;
   }
 }
 
@@ -128,7 +141,7 @@ class _TopBar extends StatelessWidget {
   final int selectedIndex;
   final List<_ShellDestination> destinations;
   final String initial;
-  final ValueChanged<String> onNavigate;
+  final ValueChanged<int> onNavigate;
   final VoidCallback onSettings;
 
   @override
@@ -148,7 +161,7 @@ class _TopBar extends StatelessWidget {
                 horizontal: narrow ? 16 : AppMetrics.pagePadding),
             child: Row(
               children: [
-                AppLogo(compact: narrow, onTap: () => onNavigate('/home')),
+                AppLogo(compact: narrow, onTap: () => onNavigate(0)),
                 if (!narrow) ...[
                   const SizedBox(width: 32),
                   Expanded(
@@ -160,8 +173,7 @@ class _TopBar extends StatelessWidget {
                           labels:
                               destinations.map((item) => item.label).toList(),
                           selectedIndex: selectedIndex,
-                          onSelected: (index) =>
-                              onNavigate(destinations[index].path),
+                          onSelected: onNavigate,
                         ),
                       ),
                     ),
@@ -231,7 +243,7 @@ class _BottomNavigation extends StatelessWidget {
       required this.onNavigate});
   final List<_ShellDestination> destinations;
   final int selectedIndex;
-  final ValueChanged<String> onNavigate;
+  final ValueChanged<int> onNavigate;
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
@@ -251,7 +263,7 @@ class _BottomNavigation extends StatelessWidget {
           ],
           vertical: true,
           selectedIndex: selectedIndex,
-          onSelected: (index) => onNavigate(destinations[index].path),
+          onSelected: onNavigate,
         ),
       ),
     );

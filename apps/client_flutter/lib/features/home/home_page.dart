@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../app/providers.dart';
+import '../../app/scroll_controllers.dart';
 import '../../core/api/api_error.dart';
 import '../../core/models/course.dart';
 import '../../core/models/plan.dart';
@@ -22,6 +23,7 @@ class HomePage extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(currentUserProvider);
+    final scroll = ref.watch(tabScrollControllerProvider('home'));
     final coursesAsync = ref.watch(coursesControllerProvider);
     final plansAsync = ref.watch(plansControllerProvider);
     final walletAsync = ref.watch(walletControllerProvider);
@@ -61,106 +63,161 @@ class HomePage extends ConsumerWidget {
       onRefresh: () => _refresh(ref),
       child: SingleChildScrollView(
         key: const PageStorageKey('home-scroll'),
+        controller: scroll,
+        primary: false,
         physics: const AlwaysScrollableScrollPhysics(),
         child: ResponsiveContent(
-            child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            LayoutBuilder(builder: (context, constraints) {
-              final greetingWidget = _Greeting(
-                  greeting: greeting,
-                  name: user?.displayLabel ?? '学习通用户',
-                  school: user?.schoolLabel ?? '—',
-                  dateText: dateText,
-                  connected: user?.platformActive ?? false);
-              final balance = _HomeBalance(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _Greeting(
+                greeting: greeting,
+                name: user?.displayLabel ?? '学习通用户',
+                school: user?.schoolLabel ?? '—',
+                dateText: dateText,
+                connected: user?.platformActive ?? false,
+              ),
+              const SizedBox(height: 22),
+              LayoutBuilder(builder: (context, constraints) {
+                final overview = _LearningOverview(
+                  course: courses.isEmpty ? null : courses.first,
+                  courseCount: coursesAsync.hasValue ? courses.length : null,
+                  pendingPoints: pendingPoints,
+                  loading: coursesAsync.isLoading,
+                  error: coursesAsync.hasError,
+                  onOpenCourse: courses.isEmpty
+                      ? null
+                      : () => context.go('/courses/${courses.first.id}'),
+                  onOpenCourses: () => context.go('/courses'),
+                  onRetry: () => ref.invalidate(coursesControllerProvider),
+                );
+                final walletCard = _WalletCard(
                   loading: walletAsync.isLoading,
                   error: walletAsync.hasError,
                   wallet: wallet,
                   onRetry: () => ref.invalidate(walletControllerProvider),
-                  onOpen: () => context.go('/wallet'));
-              return constraints.maxWidth >= 900
-                  ? Row(children: [
-                      Expanded(child: greetingWidget),
-                      const SizedBox(width: 24),
-                      Flexible(child: balance)
-                    ])
-                  : Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                          greetingWidget,
-                          const SizedBox(height: 12),
-                          balance
-                        ]);
-            }),
-            const SizedBox(height: 20),
-            _StatsStrip(
+                  onRecharge: () => context.go('/wallet'),
+                  onDetails: () => context.go('/wallet'),
+                );
+                if (constraints.maxWidth < 900) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      overview,
+                      const SizedBox(height: 16),
+                      walletCard,
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(child: overview),
+                    const SizedBox(width: 18),
+                    SizedBox(width: 320, child: walletCard),
+                  ],
+                );
+              }),
+              const SizedBox(height: 22),
+              _StatsStrip(
                 courseCount: coursesAsync.hasValue ? courses.length : null,
                 pendingPoints: coursesAsync.hasValue ? pendingPoints : null,
                 enabledPlans: plansAsync.hasValue ? enabledPlans : null,
                 confirmedTasks: tasksAsync.hasValue ? confirmedTasks : null,
                 onCourses: () => context.go('/courses'),
-                onPlans: () => context.go('/plans')),
-            if (attention.isNotEmpty) ...[
-              const SizedBox(height: 16),
-              _AttentionBanner(
+                onPlans: () => context.go('/plans'),
+              ),
+              if (attention.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                _AttentionBanner(
                   task: attention.first,
                   count: attention.length,
-                  onOpen: () => context.go('/plans')),
-            ],
-            if (coursesAsync.hasError ||
-                plansAsync.hasError ||
-                tasksAsync.hasError) ...[
-              const SizedBox(height: 16),
-              InlineNotice(
+                  onOpen: () => context.go('/plans'),
+                ),
+              ],
+              if (coursesAsync.hasError ||
+                  plansAsync.hasError ||
+                  tasksAsync.hasError) ...[
+                const SizedBox(height: 16),
+                InlineNotice(
                   tone: StatusTone.warning,
                   message: _errorSummary(coursesAsync, plansAsync, tasksAsync),
                   action: TextButton(
-                      onPressed: () => _refresh(ref), child: const Text('重试'))),
-            ],
-            const SizedBox(height: 24),
-            _SectionHeading(
-                title: '我的课程',
+                    onPressed: () => _refresh(ref),
+                    child: const Text('重试'),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 30),
+              _SectionHeading(
+                title: '继续你的学习',
+                subtitle: '平台确认的任务点会累计到课程进度。',
                 action: TextButton(
-                    onPressed: () => context.go('/courses'),
-                    child: const Text('全部课程'))),
-            const SizedBox(height: 8),
-            if (coursesAsync.isLoading)
-              const LoadingList(rows: 3, height: 64)
-            else if (coursesAsync.hasError)
-              ErrorPanel(
+                  onPressed: () => context.go('/courses'),
+                  child: const Text('全部课程'),
+                ),
+              ),
+              const SizedBox(height: 14),
+              if (coursesAsync.isLoading && !coursesAsync.hasValue)
+                const LoadingList(rows: 2, height: 180)
+              else if (coursesAsync.hasError && courses.isEmpty)
+                ErrorPanel(
                   message: coursesAsync.error is ApiException
                       ? (coursesAsync.error! as ApiException).userMessage
                       : '课程暂时无法加载',
                   compact: true,
-                  onRetry: () => ref.invalidate(coursesControllerProvider))
-            else if (courses.isEmpty)
-              EmptyState(
+                  onRetry: () => ref.invalidate(coursesControllerProvider),
+                )
+              else if (courses.isEmpty)
+                EmptyState(
                   title: '还没有同步课程',
+                  message: '同步学习通课程后，章节和任务点会显示在这里。',
                   compact: true,
                   action: OutlinedButton(
-                      onPressed: () => context.go('/courses'),
-                      child: const Text('同步课程')))
-            else
-              Column(children: [
-                for (final course in courses.take(3))
-                  _HomeCourseRow(
-                      course: course,
-                      onTap: () => context.go('/courses/${course.id}'))
-              ]),
-            const SizedBox(height: 24),
-            _PlansSection(
-              async: plansAsync,
-              onOpen: () => context.go('/plans'),
-              onRetry: () => ref.invalidate(plansControllerProvider),
-              recent: _RecentSection(
+                    onPressed: () => context.go('/courses'),
+                    child: const Text('同步课程'),
+                  ),
+                )
+              else
+                _CourseGrid(
+                  courses: courses.take(3).toList(growable: false),
+                  onOpen: (course) => context.go('/courses/${course.id}'),
+                ),
+              const SizedBox(height: 30),
+              LayoutBuilder(builder: (context, constraints) {
+                final plansCard = _PlansCard(
+                  async: plansAsync,
+                  onOpen: () => context.go('/plans'),
+                  onRetry: () => ref.invalidate(plansControllerProvider),
+                );
+                final recentCard = _RecentCard(
                   async: tasksAsync,
                   tasks: recent,
                   onOpen: () => context.go('/plans'),
-                  onRetry: () => ref.invalidate(homeTasksProvider)),
-            ),
-          ],
-        )),
+                  onRetry: () => ref.invalidate(homeTasksProvider),
+                );
+                if (constraints.maxWidth < 900) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      plansCard,
+                      const SizedBox(height: 18),
+                      recentCard,
+                    ],
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(flex: 11, child: plansCard),
+                    const SizedBox(width: 18),
+                    Expanded(flex: 9, child: recentCard),
+                  ],
+                );
+              }),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -246,13 +303,14 @@ class _Greeting extends StatelessWidget {
                 shape: BoxShape.circle,
               ),
             ),
-            const SizedBox(width: 6),
+            const SizedBox(width: 7),
             Expanded(
               child: Text(
                 connected ? '$school · 学习通已连接' : '$school · 需要重新验证',
                 style: TextStyle(
                   color: colors.textSecondary,
                   fontSize: 12,
+                  letterSpacing: 0.2,
                 ),
               ),
             ),
@@ -262,15 +320,24 @@ class _Greeting extends StatelessWidget {
             ),
           ],
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: 14),
         Text(
           '$greeting，$name。',
           style: TextStyle(
             color: colors.text,
-            fontSize: 26,
+            fontSize: 28,
             fontWeight: FontWeight.w600,
-            letterSpacing: -0.8,
-            height: 1.25,
+            letterSpacing: -0.9,
+            height: 1.22,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '平台确认的进度，会同步到你的学习空间。',
+          style: TextStyle(
+            color: colors.textSecondary,
+            fontSize: 13.5,
+            height: 1.6,
           ),
         ),
       ],
@@ -278,98 +345,872 @@ class _Greeting extends StatelessWidget {
   }
 }
 
-class _StatsStrip extends StatelessWidget {
-  const _StatsStrip(
-      {required this.courseCount,
-      required this.pendingPoints,
-      required this.enabledPlans,
-      required this.confirmedTasks,
-      required this.onCourses,
-      required this.onPlans});
-  final int? courseCount, pendingPoints, enabledPlans, confirmedTasks;
-  final VoidCallback onCourses, onPlans;
+class _LearningOverview extends StatelessWidget {
+  const _LearningOverview({
+    required this.course,
+    required this.courseCount,
+    required this.pendingPoints,
+    required this.loading,
+    required this.error,
+    required this.onOpenCourse,
+    required this.onOpenCourses,
+    required this.onRetry,
+  });
+
+  final CourseSummary? course;
+  final int? courseCount;
+  final int pendingPoints;
+  final bool loading;
+  final bool error;
+  final VoidCallback? onOpenCourse;
+  final VoidCallback onOpenCourses;
+  final VoidCallback onRetry;
+
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final values = [courseCount, pendingPoints, enabledPlans, confirmedTasks];
-    const labels = ['已同步课程', '待确认', '开启安排', '近期确认'];
     return Container(
       decoration: BoxDecoration(
-          border: Border(
-              top: BorderSide(color: colors.border),
-              bottom: BorderSide(color: colors.border))),
-      child: IntrinsicHeight(
-          child: Row(children: [
-        for (var index = 0; index < labels.length; index++) ...[
-          if (index > 0)
-            VerticalDivider(
-                width: 1, color: colors.border, indent: 16, endIndent: 16),
-          Expanded(
-              child: InkWell(
-            onTap: index == 0 ? onCourses : onPlans,
-            child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [colors.accentSoft, colors.surface],
+        ),
+        borderRadius: colors.cardRadius,
+        border: Border.all(color: colors.border),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: LayoutBuilder(builder: (context, constraints) {
+        final wide = constraints.maxWidth >= 640;
+        final content = Padding(
+          padding: EdgeInsets.all(wide ? 26 : 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: MainAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.play_circle_outline,
+                      size: 16, color: colors.accent),
+                  const SizedBox(width: 7),
+                  Text(
+                    '继续学习',
+                    style: TextStyle(
+                      color: colors.accent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.6,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              if (loading && course == null)
+                const SkeletonBlock(width: 240, height: 32)
+              else if (error && course == null)
+                Text('课程摘要暂时无法读取',
+                    style: TextStyle(color: colors.textSecondary, fontSize: 14))
+              else if (course == null)
+                Text(
+                  '从同步课程开始',
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: wide ? 26 : 22,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.6,
+                  ),
+                )
+              else
+                Text(
+                  course!.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: colors.text,
+                    fontSize: wide ? 26 : 22,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -0.6,
+                    height: 1.3,
+                  ),
+                ),
+              const SizedBox(height: 10),
+              Text(
+                course == null
+                    ? '同步学习通课程，按章节查看任务点与平台确认进度。'
+                    : [
+                        if (course!.term != null) course!.term!,
+                        if (course!.teacher != null) course!.teacher!,
+                        '${course!.chapterCount} 章节',
+                      ].join(' · '),
+                style: TextStyle(
+                  color: colors.textSecondary,
+                  fontSize: 13,
+                  height: 1.6,
+                ),
+              ),
+              if (course != null) ...[
+                const SizedBox(height: 20),
+                Row(
                   children: [
-                    Text(values[index]?.toString() ?? '—',
+                    Expanded(
+                      child: Text(
+                        '平台已确认 ${course!.confirmedTaskPoints} / ${course!.taskPointCount} 个任务点',
                         style: TextStyle(
-                            color: colors.text,
-                            fontSize: 26,
-                            fontWeight: FontWeight.w600,
-                            fontFeatures: const [
-                              FontFeature.tabularFigures()
-                            ])),
-                    const SizedBox(height: 4),
-                    Text(labels[index],
-                        style: TextStyle(
-                            color: colors.textSecondary, fontSize: 12)),
+                          color: colors.text,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    Text(
+                      course!.taskPointCount == 0
+                          ? '—'
+                          : '${((course!.confirmedTaskPoints / course!.taskPointCount) * 100).round()}%',
+                      style: TextStyle(
+                        color: colors.textSecondary,
+                        fontSize: 12,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
+                    ),
                   ],
-                )),
-          )),
-        ],
-      ])),
+                ),
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: course!.taskPointCount == 0
+                        ? 0
+                        : course!.confirmedTaskPoints / course!.taskPointCount,
+                    minHeight: 6,
+                    backgroundColor: colors.border,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      course!.allConfirmed ? colors.success : colors.accent,
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 22),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  if (onOpenCourse != null)
+                    FilledButton(
+                      onPressed: onOpenCourse,
+                      child: const Text('查看课程'),
+                    ),
+                  OutlinedButton(
+                    onPressed: error ? onRetry : onOpenCourses,
+                    child: Text(error ? '重新加载' : '课程列表'),
+                  ),
+                  if (courseCount != null && courseCount! > 1)
+                    Text(
+                      '已同步 $courseCount 门课程',
+                      style: TextStyle(
+                        color: colors.textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        );
+        if (!wide || course == null) return content;
+        return Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(child: content),
+            SizedBox(
+              width: 230,
+              child: CourseArt(
+                seed: course!.id,
+                height: 280,
+                background: false,
+              ),
+            ),
+          ],
+        );
+      }),
     );
   }
 }
 
-class _HomeBalance extends StatelessWidget {
-  const _HomeBalance(
-      {required this.loading,
-      required this.error,
-      required this.wallet,
-      required this.onRetry,
-      required this.onOpen});
-  final bool loading, error;
+class _WalletCard extends StatelessWidget {
+  const _WalletCard({
+    required this.loading,
+    required this.error,
+    required this.wallet,
+    required this.onRetry,
+    required this.onRecharge,
+    required this.onDetails,
+  });
+
+  final bool loading;
+  final bool error;
   final WalletSnapshot? wallet;
-  final VoidCallback onRetry, onOpen;
+  final VoidCallback onRetry;
+  final VoidCallback onRecharge;
+  final VoidCallback onDetails;
+
   @override
-  Widget build(BuildContext context) => Wrap(
-        crossAxisAlignment: WrapCrossAlignment.center,
-        spacing: 12,
-        runSpacing: 8,
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: colors.cardRadius,
+        border: Border.all(color: colors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('我的钱包',
-              style:
-                  TextStyle(color: context.colors.textSecondary, fontSize: 13)),
-          if (loading)
-            const SkeletonBlock(width: 100, height: 26)
-          else if (error)
-            TextButton(onPressed: onRetry, child: const Text('余额读取失败，重试'))
-          else
-            Text(wallet?.available.text ?? '—',
-                style: const TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w600,
-                    fontFeatures: [FontFeature.tabularFigures()])),
-          if (!loading && !error)
-            Text('预占 ${wallet?.reserved.text ?? '—'}',
+          Row(
+            children: [
+              Container(
+                width: 30,
+                height: 30,
+                decoration: BoxDecoration(
+                  color: colors.accentSoft,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(Icons.account_balance_wallet_outlined,
+                    size: 16, color: colors.accent),
+              ),
+              const SizedBox(width: 9),
+              Text(
+                '我的钱包',
                 style: TextStyle(
-                    color: context.colors.textSecondary, fontSize: 12)),
-          OutlinedButton(onPressed: onOpen, child: const Text('充值')),
+                  color: colors.text,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              TextButton(
+                onPressed: onDetails,
+                style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 6),
+                  minimumSize: const Size(0, 32),
+                ),
+                child: const Text('明细'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 18),
+          if (loading && wallet == null)
+            const SkeletonBlock(width: 140, height: 34)
+          else if (error)
+            TextButton(
+              onPressed: onRetry,
+              child: const Text('余额读取失败，重试'),
+            )
+          else
+            Text(
+              wallet?.available.text ?? '—',
+              style: TextStyle(
+                color: colors.text,
+                fontSize: 32,
+                fontWeight: FontWeight.w600,
+                letterSpacing: -1,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          const SizedBox(height: 4),
+          Text(
+            '预占 ${wallet?.reserved.text ?? '—'} · 余额以账户流水为准',
+            style: TextStyle(
+              color: colors.textSecondary,
+              fontSize: 12,
+              height: 1.5,
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: onRecharge,
+                  child: const Text('充值'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: onDetails,
+                  child: const Text('查看明细'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatsStrip extends StatelessWidget {
+  const _StatsStrip({
+    required this.courseCount,
+    required this.pendingPoints,
+    required this.enabledPlans,
+    required this.confirmedTasks,
+    required this.onCourses,
+    required this.onPlans,
+  });
+
+  final int? courseCount, pendingPoints, enabledPlans, confirmedTasks;
+  final VoidCallback onCourses, onPlans;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final items = [
+      (Icons.menu_book_outlined, courseCount, '已同步课程', onCourses),
+      (Icons.pending_actions_outlined, pendingPoints, '待确认', onCourses),
+      (Icons.calendar_month_outlined, enabledPlans, '开启安排', onPlans),
+      (Icons.verified_outlined, confirmedTasks, '近期确认', onPlans),
+    ];
+    return LayoutBuilder(builder: (context, constraints) {
+      final narrow = constraints.maxWidth < 640;
+      Widget item((IconData, int?, String, VoidCallback) data,
+          {required bool last}) {
+        return Expanded(
+          child: InkWell(
+            onTap: data.$4,
+            borderRadius: BorderRadius.circular(8),
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                vertical: narrow ? 12 : 16,
+                horizontal: narrow ? 10 : 12,
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: colors.surfaceSubtle,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: colors.border),
+                    ),
+                    child: Icon(data.$1, size: 16, color: colors.textSecondary),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          data.$2?.toString() ?? '—',
+                          style: TextStyle(
+                            color: colors.text,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w600,
+                            height: 1.2,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          data.$3,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: colors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (!narrow)
+                    Icon(Icons.chevron_right, size: 16, color: colors.muted),
+                ],
+              ),
+            ),
+          ),
+        );
+      }
+
+      if (narrow) {
+        return Column(
+          children: [
+            Row(children: [
+              item(items[0], last: false),
+              VerticalDivider(width: 1, color: colors.border),
+              item(items[1], last: true),
+            ]),
+            Divider(height: 1, color: colors.border),
+            Row(children: [
+              item(items[2], last: false),
+              VerticalDivider(width: 1, color: colors.border),
+              item(items[3], last: true),
+            ]),
+          ],
+        );
+      }
+      return Container(
+        decoration: BoxDecoration(
+          border: Border(
+            top: BorderSide(color: colors.border),
+            bottom: BorderSide(color: colors.border),
+          ),
+        ),
+        child: Row(
+          children: [
+            for (var index = 0; index < items.length; index++) ...[
+              if (index > 0) VerticalDivider(width: 1, color: colors.border),
+              item(items[index], last: index == items.length - 1),
+            ],
+          ],
+        ),
+      );
+    });
+  }
+}
+
+class _SectionHeading extends StatelessWidget {
+  const _SectionHeading({
+    required this.title,
+    this.subtitle,
+    required this.action,
+  });
+
+  final String title;
+  final String? subtitle;
+  final Widget action;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  color: colors.text,
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: -0.3,
+                ),
+              ),
+              if (subtitle != null) ...[
+                const SizedBox(height: 4),
+                Text(
+                  subtitle!,
+                  style: TextStyle(
+                    color: colors.textSecondary,
+                    fontSize: 12.5,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+        action,
+      ],
+    );
+  }
+}
+
+class _CourseGrid extends StatelessWidget {
+  const _CourseGrid({required this.courses, required this.onOpen});
+
+  final List<CourseSummary> courses;
+  final ValueChanged<CourseSummary> onOpen;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(builder: (context, constraints) {
+      final columns = constraints.maxWidth >= 1000
+          ? 3
+          : constraints.maxWidth >= 640
+              ? 2
+              : 1;
+      const gap = 16.0;
+      final width = (constraints.maxWidth - gap * (columns - 1)) / columns;
+      return Wrap(
+        spacing: gap,
+        runSpacing: gap,
+        children: [
+          for (final course in courses)
+            SizedBox(
+              width: width,
+              child: _CourseCard(
+                course: course,
+                onTap: () => onOpen(course),
+              ),
+            ),
         ],
       );
+    });
+  }
+}
+
+class _CourseCard extends StatelessWidget {
+  const _CourseCard({required this.course, required this.onTap});
+
+  final CourseSummary course;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final ratio = course.taskPointCount == 0
+        ? 0.0
+        : course.confirmedTaskPoints / course.taskPointCount;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: colors.cardRadius,
+      child: Container(
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: colors.cardRadius,
+          border: Border.all(color: colors.border),
+        ),
+        clipBehavior: Clip.antiAlias,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            CourseArt(seed: course.id, height: 118),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          [
+                            if (course.term != null) course.term!,
+                            '${course.chapterCount} 章节',
+                          ].join(' · '),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: colors.muted,
+                            fontSize: 11.5,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                      ),
+                      if (course.stale)
+                        const StatusPill(
+                          label: '待同步',
+                          tone: StatusTone.warning,
+                          compact: true,
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 7),
+                  SizedBox(
+                    height: 42,
+                    child: Text(
+                      course.title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: colors.text,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        height: 1.4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    course.teacher ?? '教师待同步',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '平台已确认 ${course.confirmedTaskPoints} / ${course.taskPointCount}',
+                          style: TextStyle(
+                            color: colors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${(ratio * 100).round()}%',
+                        style: TextStyle(
+                          color: colors.textSecondary,
+                          fontSize: 11.5,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(3),
+                    child: LinearProgressIndicator(
+                      value: ratio,
+                      minHeight: 5,
+                      backgroundColor: colors.border,
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        course.allConfirmed ? colors.success : colors.accent,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Icon(
+                        course.allConfirmed
+                            ? Icons.verified_outlined
+                            : Icons.schedule_outlined,
+                        size: 15,
+                        color: course.allConfirmed
+                            ? colors.success
+                            : colors.textSecondary,
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          course.allConfirmed
+                              ? '任务点已全部确认'
+                              : '${course.incompleteTaskPointCount} 个任务点待完成',
+                          style: TextStyle(
+                            color: course.allConfirmed
+                                ? colors.success
+                                : colors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
+                      Icon(Icons.arrow_forward, size: 15, color: colors.muted),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PlansCard extends StatelessWidget {
+  const _PlansCard({
+    required this.async,
+    required this.onOpen,
+    required this.onRetry,
+  });
+
+  final AsyncValue<PlansState> async;
+  final VoidCallback onOpen, onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return SectionCard(
+      title: '你的学习安排',
+      action: TextButton(onPressed: onOpen, child: const Text('管理安排')),
+      child: async.when(
+        loading: () => const LoadingList(rows: 2, height: 60),
+        error: (error, _) => ErrorPanel(
+          message: error is ApiException ? error.userMessage : '安排暂时无法加载',
+          compact: true,
+          onRetry: onRetry,
+        ),
+        data: (data) => data.plans.isEmpty
+            ? _InlineEmpty(
+                message: '还没有任务安排',
+                action: TextButton(
+                  onPressed: onOpen,
+                  child: const Text('新建安排'),
+                ),
+              )
+            : Column(
+                children: [
+                  for (final plan in data.plans.take(3))
+                    _HomePlanRow(plan: plan, onTap: onOpen),
+                ],
+              ),
+      ),
+    );
+  }
+}
+
+class _HomePlanRow extends StatelessWidget {
+  const _HomePlanRow({required this.plan, required this.onTap});
+
+  final LearningPlan plan;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 2),
+        child: Row(
+          children: [
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: colors.surfaceSubtle,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: colors.border),
+              ),
+              child: Icon(
+                Icons.calendar_today_outlined,
+                size: 16,
+                color: colors.textSecondary,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    plan.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      color: colors.text,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${plan.courseIds.length} 门课程 · ${plan.taskTypes.length} 种任务',
+                    style: TextStyle(
+                      color: colors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            StatusPill(
+              label: plan.isActive ? '已开启' : '已暂停',
+              tone: plan.isActive ? StatusTone.success : StatusTone.warning,
+              compact: true,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RecentCard extends StatelessWidget {
+  const _RecentCard({
+    required this.async,
+    required this.tasks,
+    required this.onOpen,
+    required this.onRetry,
+  });
+
+  final AsyncValue<HomeTasksState> async;
+  final List<LearningTask> tasks;
+  final VoidCallback onOpen;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    return SectionCard(
+      title: '最近确认',
+      action: TextButton(onPressed: onOpen, child: const Text('查看全部')),
+      child: async.when(
+        loading: () => const LoadingList(rows: 2, height: 52),
+        error: (error, _) => ErrorPanel(
+          message: error is ApiException ? error.userMessage : '任务摘要暂时无法加载',
+          compact: true,
+          onRetry: onRetry,
+        ),
+        data: (_) {
+          if (tasks.isEmpty) {
+            return const _InlineEmpty(message: '暂无平台确认记录');
+          }
+          return Column(
+            children: [
+              for (final task in tasks)
+                InkWell(
+                  onTap: onOpen,
+                  borderRadius: BorderRadius.circular(8),
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(vertical: 9, horizontal: 2),
+                    child: Row(
+                      children: [
+                        Icon(
+                          task.platform.isConfirmed
+                              ? Icons.verified_outlined
+                              : Icons.fact_check_outlined,
+                          size: 17,
+                          color: task.platform.isConfirmed
+                              ? context.colors.success
+                              : context.colors.warning,
+                        ),
+                        const SizedBox(width: 9),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                task.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: context.colors.text,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                task.courseTitle ?? '课程',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  color: context.colors.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        StatusPill(
+                          label: task.state.label,
+                          tone: taskStateTone(task.state),
+                          compact: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      ),
+    );
+  }
 }
 
 class _AttentionBanner extends StatelessWidget {
@@ -435,272 +1276,26 @@ class _AttentionBanner extends StatelessWidget {
 
 class _InlineEmpty extends StatelessWidget {
   const _InlineEmpty({required this.message, this.action});
+
   final String message;
   final Widget? action;
+
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 20),
-        child: Row(children: [
-          Expanded(
-              child: Text(message,
-                  style: TextStyle(
-                      color: context.colors.textSecondary, fontSize: 14))),
-          if (action != null) action!,
-        ]),
-      );
-}
-
-class _SectionHeading extends StatelessWidget {
-  const _SectionHeading({required this.title, required this.action});
-  final String title;
-  final Widget action;
-  @override
-  Widget build(BuildContext context) => Row(children: [
-        Expanded(
-            child: Text(title,
-                style: const TextStyle(
-                    fontSize: 16, fontWeight: FontWeight.w600))),
-        action
-      ]);
-}
-
-class _HomeCourseRow extends StatelessWidget {
-  const _HomeCourseRow({required this.course, required this.onTap});
-  final CourseSummary course;
-  final VoidCallback onTap;
-  @override
-  Widget build(BuildContext context) => InkWell(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          decoration: BoxDecoration(
-              border: Border(bottom: BorderSide(color: context.colors.border))),
-          child: Row(children: [
-            Expanded(
-                child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                  Text(course.title,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                          fontSize: 14, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 4),
-                  Text(
-                      '平台已确认 ${course.confirmedTaskPoints} / ${course.taskPointCount}',
-                      style: TextStyle(
-                          color: context.colors.textSecondary, fontSize: 13)),
-                ])),
-            const SizedBox(width: 16),
-            const Icon(Icons.chevron_right, size: 16),
-          ]),
-        ),
-      );
-}
-
-class _PlansSection extends StatelessWidget {
-  const _PlansSection(
-      {required this.async,
-      required this.onOpen,
-      required this.onRetry,
-      required this.recent});
-  final AsyncValue<PlansState> async;
-  final VoidCallback onOpen, onRetry;
-  final Widget recent;
-  @override
-  Widget build(BuildContext context) => SectionCard(
-        title: '你的学习安排',
-        framed: false,
-        padding: EdgeInsets.zero,
-        headerPadding: EdgeInsets.zero,
-        action: TextButton(onPressed: onOpen, child: const Text('管理安排')),
-        child:
-            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          async.when(
-            loading: () => const LoadingList(rows: 2, height: 64),
-            error: (error, _) => ErrorPanel(
-                message: error is ApiException ? error.userMessage : '安排暂时无法加载',
-                compact: true,
-                onRetry: onRetry),
-            data: (data) => data.plans.isEmpty
-                ? _InlineEmpty(
-                    message: '还没有任务安排',
-                    action: TextButton(
-                        onPressed: onOpen, child: const Text('新建安排')))
-                : Column(children: [
-                    for (final plan in data.plans.take(3))
-                      _HomePlanRow(plan: plan, onTap: onOpen)
-                  ]),
-          ),
-          const SizedBox(height: 16),
-          Divider(color: context.colors.border),
-          recent,
-        ]),
-      );
-}
-
-class _HomePlanRow extends StatelessWidget {
-  const _HomePlanRow({required this.plan, required this.onTap});
-
-  final LearningPlan plan;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.colors;
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(colors.radius - 3),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 9, horizontal: 2),
+        padding: const EdgeInsets.symmetric(vertical: 18),
         child: Row(
           children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: colors.surfaceSubtle,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: colors.border),
-              ),
-              child: Icon(
-                Icons.calendar_today_outlined,
-                size: 16,
-                color: colors.textSecondary,
-              ),
-            ),
-            const SizedBox(width: 10),
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    plan.name,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: colors.text,
-                      fontSize: 13,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    '${plan.courseIds.length} 门课程 · ${plan.taskTypes.length} 种任务',
-                    style: TextStyle(
-                      color: colors.textSecondary,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
+              child: Text(
+                message,
+                style: TextStyle(
+                  color: context.colors.textSecondary,
+                  fontSize: 13,
+                ),
               ),
             ),
-            const SizedBox(width: 8),
-            StatusPill(
-              label: plan.isActive ? '已开启' : '已暂停',
-              tone: plan.isActive ? StatusTone.success : StatusTone.warning,
-              compact: true,
-            ),
+            if (action != null) action!,
           ],
         ),
-      ),
-    );
-  }
+      );
 }
-
-class _RecentSection extends StatelessWidget {
-  const _RecentSection({
-    required this.async,
-    required this.tasks,
-    required this.onOpen,
-    required this.onRetry,
-  });
-
-  final AsyncValue<HomeTasksState> async;
-  final List<LearningTask> tasks;
-  final VoidCallback onOpen;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return SectionCard(
-      title: '最近确认',
-      framed: false,
-      padding: EdgeInsets.zero,
-      headerPadding: EdgeInsets.zero,
-      child: async.when(
-        loading: () => const LoadingList(rows: 2, height: 52),
-        error: (error, _) => ErrorPanel(
-          message: error is ApiException ? error.userMessage : '任务摘要暂时无法加载',
-          compact: true,
-          onRetry: onRetry,
-        ),
-        data: (_) {
-          if (tasks.isEmpty) {
-            return const _InlineEmpty(message: '暂无平台确认记录');
-          }
-          return Column(
-            children: [
-              for (final task in tasks)
-                InkWell(
-                  onTap: onOpen,
-                  borderRadius: BorderRadius.circular(colorsFor(context)),
-                  child: Padding(
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 9, horizontal: 2),
-                    child: Row(
-                      children: [
-                        Icon(
-                          task.platform.isConfirmed
-                              ? Icons.verified_outlined
-                              : Icons.fact_check_outlined,
-                          size: 17,
-                          color: task.platform.isConfirmed
-                              ? context.colors.success
-                              : context.colors.warning,
-                        ),
-                        const SizedBox(width: 9),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                task.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: context.colors.text,
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                task.courseTitle ?? '课程',
-                                style: TextStyle(
-                                  color: context.colors.textSecondary,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        StatusPill(
-                          label: task.state.label,
-                          tone: taskStateTone(task.state),
-                          compact: true,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-            ],
-          );
-        },
-      ),
-    );
-  }
-}
-
-double colorsFor(BuildContext context) => context.colors.radius - 3;

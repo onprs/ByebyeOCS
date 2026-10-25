@@ -17,6 +17,33 @@ import '../features/settings/settings_page.dart';
 import '../features/shell/app_shell.dart';
 import '../features/wallet/wallet_page.dart';
 
+Page<void> _fadePage(GoRouterState state, Widget child) {
+  return CustomTransitionPage<void>(
+    key: state.pageKey,
+    child: child,
+    transitionDuration: const Duration(milliseconds: 220),
+    reverseTransitionDuration: const Duration(milliseconds: 160),
+    transitionsBuilder: (context, animation, secondary, child) {
+      if (MediaQuery.disableAnimationsOf(context)) return child;
+      final curved = CurvedAnimation(
+        parent: animation,
+        curve: Curves.easeOutCubic,
+        reverseCurve: Curves.easeInCubic,
+      );
+      return ColoredBox(
+        color: context.colors.background,
+        child: SlideTransition(
+          position: Tween<Offset>(
+            begin: const Offset(0.03, 0),
+            end: Offset.zero,
+          ).animate(curved),
+          child: child,
+        ),
+      );
+    },
+  );
+}
+
 final routerProvider = Provider<GoRouter>((ref) {
   final refresh = ValueNotifier<int>(0);
   ref.listen(authControllerProvider, (previous, next) {
@@ -75,46 +102,74 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/deletion-receipt',
         builder: (context, state) => const DeletionReceiptPage(),
       ),
-      ShellRoute(
-        builder: (context, state, child) => AppShell(child: child),
-        routes: [
-          GoRoute(
-            path: '/home',
-            builder: (context, state) => const HomePage(),
-          ),
-          GoRoute(
-            path: '/courses',
-            builder: (context, state) => const CoursesPage(),
+      StatefulShellRoute.indexedStack(
+        builder: (context, state, navigationShell) =>
+            AppShell(navigationShell: navigationShell),
+        branches: [
+          StatefulShellBranch(
             routes: [
               GoRoute(
-                path: ':id',
-                builder: (context, state) => CourseDetailPage(
-                  courseId: state.pathParameters['id'] ?? '',
+                path: '/home',
+                builder: (context, state) => const HomePage(),
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/courses',
+                builder: (context, state) => const CoursesPage(),
+                routes: [
+                  GoRoute(
+                    path: ':id',
+                    pageBuilder: (context, state) => _fadePage(
+                      state,
+                      CourseDetailPage(
+                        courseId: state.pathParameters['id'] ?? '',
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/plans',
+                builder: (context, state) => PlansPage(
+                  initialCourseId: state.uri.queryParameters['course'],
+                  initialPlanId: state.uri.queryParameters['plan'],
                 ),
               ),
             ],
           ),
-          GoRoute(
-            path: '/plans',
-            builder: (context, state) => PlansPage(
-              initialCourseId: state.uri.queryParameters['course'],
-              initialPlanId: state.uri.queryParameters['plan'],
-            ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/wallet',
+                builder: (context, state) => WalletPage(
+                  orderId: state.uri.queryParameters['order_id'] ??
+                      state.uri.queryParameters['order'],
+                ),
+              ),
+            ],
           ),
-          GoRoute(
-            path: '/wallet',
-            builder: (context, state) => WalletPage(
-              orderId: state.uri.queryParameters['order_id'] ??
-                  state.uri.queryParameters['order'],
-            ),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/settings',
+                builder: (context, state) => const SettingsPage(),
+              ),
+            ],
           ),
-          GoRoute(
-            path: '/questions',
-            builder: (context, state) => const QuestionQueryPage(),
-          ),
-          GoRoute(
-            path: '/settings',
-            builder: (context, state) => const SettingsPage(),
+          StatefulShellBranch(
+            routes: [
+              GoRoute(
+                path: '/questions',
+                builder: (context, state) => const QuestionQueryPage(),
+              ),
+            ],
           ),
         ],
       ),

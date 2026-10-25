@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../app/providers.dart';
 import '../../core/api/api_error.dart';
 import '../../core/models/course.dart';
+import '../../app/scroll_controllers.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
 import 'courses_controller.dart';
@@ -44,7 +45,11 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
     final async = ref.watch(coursesControllerProvider);
     final user = ref.watch(currentUserProvider);
     final capabilities = ref.watch(authCapabilitiesProvider);
+    final scroll = ref.watch(tabScrollControllerProvider('courses'));
     return SingleChildScrollView(
+      key: const PageStorageKey('courses-scroll'),
+      controller: scroll,
+      primary: false,
       padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
       child: ResponsiveContent(
         child: Column(

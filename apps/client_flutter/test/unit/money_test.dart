@@ -12,9 +12,9 @@ void main() {
       expect(formatMinor(0), '0.00');
       expect(formatMinor(-350), '-3.50');
       expect(formatMinor(123456789), '1,234,567.89');
-      expect(const Money(5450).text, '¥54.50');
-      expect(const Money(-350).text, '-¥3.50');
-      expect(const Money(100).signedText, '+¥1.00');
+      expect(const Money(5450).text, '￥54.50');
+      expect(const Money(-350).text, '-￥3.50');
+      expect(const Money(100).signedText, '+￥1.00');
     });
 
     test('充值输入只接受最多两位小数', () {
@@ -46,7 +46,7 @@ void main() {
       });
       expect(paid.stage, RechargeStage.paidWaitingCredit);
       expect(paid.stageLabel, '支付成功 · 入账处理中');
-      expect(paid.amount.text, '¥10.00');
+      expect(paid.amount.text, '￥10.00');
 
       final credited = RechargeOrder.parse({
         'id': 'o3',

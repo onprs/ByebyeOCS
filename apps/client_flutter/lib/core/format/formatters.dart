@@ -32,7 +32,7 @@ class Money {
 
   String get text {
     final prefix = switch (currency) {
-      'CNY' => '¥',
+      'CNY' => '￥',
       'USD' => r'$',
       'EUR' => '€',
       _ => '$currency ',

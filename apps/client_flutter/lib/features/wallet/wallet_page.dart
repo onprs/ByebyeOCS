@@ -9,6 +9,7 @@ import '../../core/models/question.dart';
 import '../../core/models/plan.dart';
 import '../../core/models/wallet.dart';
 import '../../core/platform/external_link.dart';
+import '../../app/scroll_controllers.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
 import 'wallet_controller.dart';
@@ -26,7 +27,7 @@ class WalletPage extends ConsumerStatefulWidget {
 
 class _WalletPageState extends ConsumerState<WalletPage> {
   final _amountController = TextEditingController();
-  final _scrollController = ScrollController();
+  late final ScrollController _scrollController;
   _WalletTab _tab = _WalletTab.orders;
   String? _selectedChannel;
   String? _idempotencyKey;
@@ -39,6 +40,7 @@ class _WalletPageState extends ConsumerState<WalletPage> {
   @override
   void initState() {
     super.initState();
+    _scrollController = ref.read(tabScrollControllerProvider('wallet'));
     _activeOrderId = widget.orderId;
     WidgetsBinding.instance.addPostFrameCallback((_) => _handleReturn());
   }
@@ -46,7 +48,6 @@ class _WalletPageState extends ConsumerState<WalletPage> {
   @override
   void dispose() {
     _amountController.dispose();
-    _scrollController.dispose();
     super.dispose();
   }
 
@@ -101,6 +102,7 @@ class _WalletPageState extends ConsumerState<WalletPage> {
           onRefresh: () =>
               ref.read(walletControllerProvider.notifier).refresh(silent: true),
           child: CustomScrollView(
+            key: const PageStorageKey('wallet-scroll'),
             controller: _scrollController,
             physics: const AlwaysScrollableScrollPhysics(),
             slivers: [
@@ -771,7 +773,7 @@ class _RechargeCard extends ConsumerWidget {
               ],
               decoration: InputDecoration(
                 labelText: '充值金额',
-                prefixText: '¥ ',
+                prefixText: '￥ ',
                 hintText: '0.00',
                 errorText: amountError,
                 helperText: _rangeLabel(recharge),

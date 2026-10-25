@@ -109,7 +109,7 @@ void main() {
 
     expect(find.textContaining('沈知夏'), findsOneWidget);
     expect(find.text('我的钱包'), findsOneWidget);
-    expect(find.text('¥54.50'), findsOneWidget);
+    expect(find.text('￥54.50'), findsOneWidget);
     expect(find.text('设计思维与创新方法'), findsWidgets);
     expect(find.text('已同步课程'), findsOneWidget);
     expect(find.text('你的学习安排'), findsOneWidget);
@@ -183,7 +183,7 @@ void main() {
     await pumpTestPage(tester, const WalletPage());
 
     expect(find.text('余额与订单'), findsOneWidget);
-    expect(find.text('¥54.50'), findsOneWidget);
+    expect(find.text('￥54.50'), findsOneWidget);
     expect(find.text('待支付'), findsWidgets);
     expect(find.text('支付成功 · 入账处理中'), findsWidgets);
     expect(find.text('已到账'), findsWidgets);
@@ -246,8 +246,8 @@ void main() {
       handler: server.call,
     );
 
-    expect(find.text('¥54.50'), findsOneWidget);
-    expect(find.text('¥64.50'), findsNothing);
+    expect(find.text('￥54.50'), findsOneWidget);
+    expect(find.text('￥64.50'), findsNothing);
   });
 
   testWidgets('未连接服务时提供连接入口', (tester) async {

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'palette.dart';
 import 'theme.dart';
 
 enum StatusTone { neutral, accent, success, warning, danger, info }
@@ -917,19 +918,144 @@ class ProgressBar extends StatelessWidget {
 }
 
 class CourseArt extends StatelessWidget {
-  const CourseArt({super.key, required this.seed, this.height = 64});
+  const CourseArt(
+      {super.key,
+      required this.seed,
+      this.height = 118,
+      this.background = true});
+
   final String seed;
   final double height;
+  final bool background;
+
   @override
-  Widget build(BuildContext context) => Container(
-        height: height,
-        width: double.infinity,
-        color: context.colors.surfaceSubtle,
-        alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        child: Icon(Icons.menu_book_outlined,
-            size: 20, color: context.colors.textSecondary),
-      );
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return SizedBox(
+      height: height,
+      width: double.infinity,
+      child: CustomPaint(
+        painter: _CourseArtPainter(
+          seed: seed,
+          colors: colors,
+          background: background,
+        ),
+        child: const SizedBox.expand(),
+      ),
+    );
+  }
+}
+
+class _CourseArtPainter extends CustomPainter {
+  _CourseArtPainter(
+      {required this.seed, required this.colors, this.background = true});
+
+  final String seed;
+  final AppColors colors;
+  final bool background;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final hash = seed.hashCode.abs();
+    final shift = ((hash % 5) - 2) * 0.07;
+    if (background) {
+      final fill = Paint()
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color.alphaBlend(
+              colors.accent.withValues(alpha: 0.12),
+              colors.surfaceSubtle,
+            ),
+            colors.surface,
+          ],
+        ).createShader(Offset.zero & size);
+      canvas.drawRect(Offset.zero & size, fill);
+    }
+
+    final accent = colors.accent;
+    canvas.drawCircle(
+      Offset(size.width * 0.84, size.height * 0.16),
+      size.height * 0.62,
+      Paint()..color = accent.withValues(alpha: 0.10),
+    );
+    final ring = Paint()
+      ..color = accent.withValues(alpha: 0.26)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.1;
+    canvas.drawCircle(
+      Offset(size.width * 0.76, size.height * 0.28),
+      size.height * 0.36,
+      ring,
+    );
+    canvas.drawCircle(
+      Offset(size.width * 0.76, size.height * 0.28),
+      size.height * 0.20,
+      Paint()
+        ..color = accent.withValues(alpha: 0.14)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.1,
+    );
+
+    final frameCenter = Offset(size.width * 0.18, size.height * 0.82);
+    final frame = RRect.fromRectAndRadius(
+      Rect.fromCenter(
+        center: frameCenter,
+        width: size.height * 0.72,
+        height: size.height * 0.72,
+      ),
+      Radius.circular(size.height * 0.18),
+    );
+    canvas.save();
+    canvas.translate(frameCenter.dx, frameCenter.dy);
+    canvas.rotate(-0.22 + shift);
+    canvas.translate(-frameCenter.dx, -frameCenter.dy);
+    canvas.drawRRect(
+      frame,
+      Paint()..color = colors.surface.withValues(alpha: 0.55),
+    );
+    canvas.drawRRect(
+      frame,
+      Paint()
+        ..color = accent.withValues(alpha: 0.22)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1,
+    );
+    canvas.restore();
+
+    final line = Paint()
+      ..color = accent.withValues(alpha: 0.30)
+      ..strokeWidth = 1.2
+      ..strokeCap = StrokeCap.round;
+    final start = Offset(size.width * 0.08, size.height * 0.20);
+    canvas.drawLine(start, start + Offset(size.height * 0.18, 0), line);
+    canvas.drawLine(
+      start + const Offset(0, 6),
+      start + Offset(size.height * 0.11, 6),
+      line,
+    );
+
+    final dot = Paint()..color = accent.withValues(alpha: 0.24);
+    for (var row = 0; row < 2; row++) {
+      for (var column = 0; column < 4; column++) {
+        canvas.drawCircle(
+          Offset(
+            size.width * 0.66 + column * 10,
+            size.height * 0.72 + row * 10,
+          ),
+          1.4,
+          dot,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_CourseArtPainter oldDelegate) =>
+      oldDelegate.seed != seed ||
+      oldDelegate.colors != colors ||
+      oldDelegate.background != background;
 }
 
 Future<bool> showConfirmDialog(

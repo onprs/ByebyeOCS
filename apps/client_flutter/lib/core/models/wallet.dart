@@ -442,5 +442,5 @@ String formatMicrosYuan(int micros) {
   while (trimmed.length > 2 && trimmed.endsWith('0')) {
     trimmed = trimmed.substring(0, trimmed.length - 1);
   }
-  return '${negative ? '-' : ''}¥$yuan.$trimmed';
+  return '${negative ? '-' : ''}￥$yuan.$trimmed';
 }

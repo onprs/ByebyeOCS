@@ -10,6 +10,7 @@ import '../../core/format/formatters.dart';
 import '../../core/models/auth.dart';
 import '../../core/models/data_request.dart';
 import '../../core/models/preferences.dart';
+import '../../app/scroll_controllers.dart';
 import '../../design/components.dart';
 import '../../design/palette.dart';
 import '../../design/theme.dart';
@@ -33,8 +34,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final preferencesAsync = ref.watch(preferencesControllerProvider);
     final privacyAsync = ref.watch(privacyControllerProvider);
     final colors = context.colors;
+    final scroll = ref.watch(tabScrollControllerProvider('settings'));
     return SingleChildScrollView(
       key: const PageStorageKey('settings-scroll'),
+      controller: scroll,
+      primary: false,
       child: ResponsiveContent(
         maxWidth: 960,
         child:
