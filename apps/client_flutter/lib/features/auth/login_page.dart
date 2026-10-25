@@ -73,15 +73,26 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                       ),
                       Expanded(
                         flex: 5,
-                        child: SingleChildScrollView(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 46,
-                            vertical: 40,
-                          ),
-                          child: Center(
+                        child: LayoutBuilder(
+                          builder: (context, panel) => SingleChildScrollView(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 40,
+                              vertical: 32,
+                            ),
                             child: ConstrainedBox(
-                              constraints: const BoxConstraints(maxWidth: 460),
-                              child: _buildContent(context, auth, login),
+                              constraints: BoxConstraints(
+                                minHeight: (panel.maxHeight - 64).clamp(
+                                  0.0,
+                                  double.infinity,
+                                ),
+                              ),
+                              child: Center(
+                                child: ConstrainedBox(
+                                  constraints:
+                                      const BoxConstraints(maxWidth: 430),
+                                  child: _buildContent(context, auth, login),
+                                ),
+                              ),
                             ),
                           ),
                         ),
@@ -89,7 +100,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     ],
                   )
                 : SingleChildScrollView(
-                    padding: const EdgeInsets.fromLTRB(20, 22, 20, 32),
+                    padding: const EdgeInsets.fromLTRB(22, 26, 22, 32),
                     child: Center(
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(maxWidth: 520),
@@ -97,7 +108,9 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             const AppLogo(),
-                            const SizedBox(height: 26),
+                            const SizedBox(height: 24),
+                            _MobileIntro(colors: colors),
+                            const SizedBox(height: 24),
                             _buildContent(context, auth, login),
                           ],
                         ),
@@ -121,6 +134,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     LoginState login,
   ) {
     final colors = context.colors;
+    final wide = MediaQuery.sizeOf(context).width >= 980;
     if (auth.status == AuthStatus.unavailable) {
       return _AuthUnavailable(
         message: auth.error?.userMessage ?? '服务暂不可用，请稍后重试',
@@ -146,21 +160,41 @@ class _LoginPageState extends ConsumerState<LoginPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
+            if (wide) ...[
+              Text(
+                '账号登录',
+                style: TextStyle(
+                  color: colors.accent,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 2.4,
+                ),
+              ),
+              const SizedBox(height: 14),
+            ],
             Semantics(
               header: true,
               child: Text(
                 '使用学习通身份进入',
                 style: TextStyle(
                   color: colors.text,
-                  fontSize: 26,
+                  fontSize: 28,
                   height: 1.25,
                   fontWeight: FontWeight.w600,
-                  letterSpacing: -0.7,
+                  letterSpacing: -0.8,
                 ),
               ),
             ),
-            const SizedBox(height: 9),
-            const SizedBox(height: 24),
+            const SizedBox(height: 10),
+            Text(
+              '课程、任务安排与学习记录会关联到同一学习通账号。',
+              style: TextStyle(
+                color: colors.textSecondary,
+                fontSize: 13.5,
+                height: 1.75,
+              ),
+            ),
+            const SizedBox(height: 28),
             if (auth.notice != null && login.message == null) ...[
               InlineNotice(
                 tone: StatusTone.warning,
@@ -493,22 +527,229 @@ class _StoryPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: colors.heroBg,
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color.alphaBlend(
+              colors.accent.withValues(alpha: colors.isDark ? 0.12 : 0.09),
+              colors.heroBg,
+            ),
+            colors.heroBg,
+            colors.surfaceSubtle,
+          ],
+          stops: const [0, 0.58, 1],
+        ),
         border: Border(right: BorderSide(color: colors.border)),
       ),
-      padding: const EdgeInsets.all(48),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Stack(
+        fit: StackFit.expand,
         children: [
-          const AppLogo(),
-          const Spacer(),
-          Text('同步课程，管理学习安排。',
-              style: TextStyle(color: colors.text, fontSize: 16, height: 1.6)),
-          const Spacer(),
+          IgnorePointer(
+            child: ClipRect(
+              child: CustomPaint(painter: _LoginBackdropPainter(colors)),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(56, 46, 56, 40),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const AppLogo(),
+                const Spacer(flex: 5),
+                Row(
+                  children: [
+                    Container(
+                      width: 26,
+                      height: 2,
+                      color: colors.accent,
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      '学习通身份接入',
+                      style: TextStyle(
+                        color: colors.accent,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  '让每一次学习\n都有据可依。',
+                  style: TextStyle(
+                    color: colors.heroText,
+                    fontSize: 42,
+                    height: 1.26,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: -1.2,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 470),
+                  child: Text(
+                    '同步课程与任务点，按章节安排学习；\n完成情况以平台返回结果为准。',
+                    style: TextStyle(
+                      color: colors.textSecondary,
+                      fontSize: 15,
+                      height: 1.8,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 36),
+                _CapabilityRow(colors: colors),
+                const Spacer(flex: 4),
+                Row(
+                  children: [
+                    Icon(Icons.lock_outline, size: 14, color: colors.muted),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '密码仅用于本次身份验证，不会保存在平台。',
+                        style: TextStyle(
+                          color: colors.muted,
+                          fontSize: 12,
+                          height: 1.6,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+class _MobileIntro extends StatelessWidget {
+  const _MobileIntro({required this.colors});
+  final AppColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '让每一次学习都有据可依。',
+          style: TextStyle(
+            color: colors.heroText,
+            fontSize: 21,
+            height: 1.4,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -0.4,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          '同步课程与任务点，按章节安排学习。',
+          style: TextStyle(
+            color: colors.textSecondary,
+            fontSize: 13.5,
+            height: 1.7,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CapabilityRow extends StatelessWidget {
+  const _CapabilityRow({required this.colors});
+  final AppColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    const items = [
+      (Icons.sync_alt, '课程同步'),
+      (Icons.event_note_outlined, '任务安排'),
+      (Icons.verified_outlined, '平台确认'),
+    ];
+    return Wrap(
+      spacing: 26,
+      runSpacing: 14,
+      children: [
+        for (final (icon, label) in items)
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 16, color: colors.accent),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: TextStyle(
+                  color: colors.textSecondary,
+                  fontSize: 13,
+                  letterSpacing: 0.4,
+                ),
+              ),
+            ],
+          ),
+      ],
+    );
+  }
+}
+
+class _LoginBackdropPainter extends CustomPainter {
+  _LoginBackdropPainter(this.colors);
+  final AppColors colors;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final accent = colors.accent;
+    final center = Offset(size.width * 0.9, size.height * 0.18);
+    for (final (radius, opacity) in [
+      (120.0, 0.11),
+      (210.0, 0.075),
+      (300.0, 0.05),
+    ]) {
+      canvas.drawCircle(
+        center,
+        radius,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 1
+          ..color = accent.withValues(alpha: opacity),
+      );
+    }
+    final frameCenter = Offset(size.width * 0.14, size.height * 0.79);
+    final frame = RRect.fromRectAndRadius(
+      Rect.fromCenter(center: frameCenter, width: 230, height: 230),
+      const Radius.circular(58),
+    );
+    canvas.save();
+    canvas.translate(frameCenter.dx, frameCenter.dy);
+    canvas.rotate(-0.18);
+    canvas.translate(-frameCenter.dx, -frameCenter.dy);
+    canvas.drawRRect(
+      frame,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..color = accent.withValues(alpha: 0.09),
+    );
+    canvas.restore();
+    final dot = Paint()..color = accent.withValues(alpha: 0.13);
+    for (var row = 0; row < 6; row++) {
+      for (var column = 0; column < 6; column++) {
+        canvas.drawCircle(
+          Offset(size.width - 156 + column * 22, size.height - 168 + row * 22),
+          1.4,
+          dot,
+        );
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_LoginBackdropPainter oldDelegate) =>
+      oldDelegate.colors != colors;
 }
 
 AuthCapability? unusedCapability(AuthState state) => state.capabilities.auth;

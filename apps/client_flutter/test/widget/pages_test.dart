@@ -31,6 +31,41 @@ void main() {
     expect(find.widgetWithText(FilledButton, '注册'), findsNothing);
   });
 
+  testWidgets('桌面登录表单垂直居中，品牌区使用大标题', (tester) async {
+    await pumpTestPage(
+      tester,
+      const LoginPage(),
+      auth: anonymousState(),
+      size: const Size(1440, 900),
+    );
+
+    expect(find.text('让每一次学习\n都有据可依。'), findsOneWidget);
+    expect(find.text('课程同步'), findsOneWidget);
+    expect(find.text('任务安排'), findsOneWidget);
+    expect(find.text('平台确认'), findsOneWidget);
+    final form = tester.getRect(find.byType(Form));
+    expect((form.top + form.bottom) / 2, closeTo(450, 60));
+    expect(form.top, greaterThan(80));
+  });
+
+  testWidgets('手机登录页保留品牌标题且表单可滚动', (tester) async {
+    await pumpTestPage(
+      tester,
+      const LoginPage(),
+      auth: anonymousState(),
+      size: const Size(390, 844),
+    );
+
+    expect(find.text('让每一次学习都有据可依。'), findsOneWidget);
+    expect(find.text('使用学习通身份进入'), findsOneWidget);
+    await tester.dragUntilVisible(
+      find.text('学习通官方入口找回密码'),
+      find.byType(SingleChildScrollView).first,
+      const Offset(0, -220),
+    );
+    expect(find.text('学习通官方入口找回密码'), findsOneWidget);
+  });
+
   testWidgets('学习通未配置时显示明确不可用状态', (tester) async {
     const unavailable = Capabilities(
       auth: AuthCapability(
