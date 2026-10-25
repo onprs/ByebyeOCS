@@ -90,6 +90,45 @@ func offeringFromFork(item ForkOffering) (*Offering, error) {
 	}, nil
 }
 
+// mirrorOfferings 在题库目录暂不可用时返回主库已同步的只读镜像。
+// 仅用于管理员只读展示；查询报价与默认模型解析仍按目录失败关闭。
+func (s *Service) mirrorOfferings(ctx context.Context) ([]*Offering, error) {
+	rows, err := s.pool.Query(ctx, `SELECT id::text, public_id, display_name, description, provider_ref,
+		capabilities, enabled, is_default, sort_order, price_version, pricing, cache_policy, health, version,
+		created_at, updated_at FROM public.question_offerings ORDER BY sort_order, public_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]*Offering, 0, 8)
+	for rows.Next() {
+		var item Offering
+		var capabilities, pricing, policy []byte
+		if err := rows.Scan(&item.ID, &item.PublicID, &item.DisplayName, &item.Description, &item.ProviderRef,
+			&capabilities, &item.Enabled, &item.Default, &item.SortOrder, &item.PriceVersion, &pricing,
+			&policy, &item.Health, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(capabilities, &item.Capabilities); err != nil || len(item.Capabilities) == 0 {
+			item.Capabilities = []string{"text"}
+		}
+		if len(pricing) > 0 && string(pricing) != "null" {
+			var value OfferingPricing
+			if err := json.Unmarshal(pricing, &value); err != nil {
+				return nil, err
+			}
+			item.Pricing = &value
+		}
+		if err := json.Unmarshal(policy, &item.CachePolicy); err != nil {
+			return nil, err
+		}
+		item.CreatedAt = item.CreatedAt.UTC()
+		item.UpdatedAt = item.UpdatedAt.UTC()
+		items = append(items, &item)
+	}
+	return items, rows.Err()
+}
+
 // syncCatalogue 把题库目录写入主库只读镜像：更新现有条目、写入新条目，
 // 并把题库已移除的条目置为不可见；不删除历史行，避免查询外键和历史展示丢失。
 func (s *Service) syncCatalogue(ctx context.Context, items []*Offering) error {

@@ -89,13 +89,18 @@ func (s *Service) adminListOfferings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	items, err := s.fetchCatalogue(r.Context())
-	if err != nil {
-		web.Error(w, r, 503, "service_unavailable", "无法读取题库模型列表")
-		return
-	}
-	if err := s.syncCatalogue(r.Context(), items); err != nil {
-		web.Error(w, r, 503, "service_unavailable", "无法同步题库模型列表")
-		return
+	if err == nil {
+		if err := s.syncCatalogue(r.Context(), items); err != nil {
+			web.Error(w, r, 503, "service_unavailable", "无法同步题库模型列表")
+			return
+		}
+	} else {
+		// 管理员只读展示可以使用已同步镜像；题目报价路径仍以题库目录为准。
+		items, err = s.mirrorOfferings(r.Context())
+		if err != nil {
+			web.Error(w, r, 503, "service_unavailable", "无法读取题库模型列表")
+			return
+		}
 	}
 	sortOfferings(items)
 	start := 0

@@ -31,6 +31,7 @@ type fakeFork struct {
 	answer           func(ForkAnswerRequest) (ForkAnswerResponse, error)
 	testResult       ForkTestResult
 	catalog          *testCatalog
+	catalogueErr     error
 }
 
 // testCatalog 是题库公开条目的内存夹具；目录内容由题库面板维护。
@@ -88,6 +89,9 @@ func (c *testCatalog) updateOffering(publicID string, mutate func(*ForkOffering)
 }
 
 func (f *fakeFork) Offerings(ctx context.Context) ([]ForkOffering, error) {
+	if f.catalogueErr != nil {
+		return nil, f.catalogueErr
+	}
 	return f.catalog.Offerings(ctx)
 }
 
@@ -823,6 +827,20 @@ func TestOfferingDisabledAndForkFailure(t *testing.T) {
 		map[string]string{"Idempotency-Key": "fork-fail-key-0001"})
 	if failed.Code != http.StatusConflict || errorCode(failed) != "model_disabled" {
 		t.Fatalf("fork 模型下架应 409：%d %s", failed.Code, failed.Body.String())
+	}
+}
+
+// 题库目录暂时不可用时，管理员只读列表回退到已同步镜像；用户报价仍失败关闭。
+func TestAdminCatalogueFallsBackToMirror(t *testing.T) {
+	env := newTestEnv(t, envOptions{})
+	env.fork.catalogueErr = errors.New("题库不可用")
+	adminList := env.call(t, http.MethodGet, "/admin/api/v1/question-models", nil, env.admin(), nil)
+	if adminList.Code != http.StatusOK || !strings.Contains(adminList.Body.String(), `"items":[]`) {
+		t.Fatalf("管理员只读列表未回退镜像：%d %s", adminList.Code, adminList.Body.String())
+	}
+	public := env.call(t, http.MethodGet, "/api/v1/question-models", nil, env.user(), nil)
+	if public.Code != http.StatusServiceUnavailable {
+		t.Fatalf("用户目录不得使用陈旧镜像：%d %s", public.Code, public.Body.String())
 	}
 }
 
