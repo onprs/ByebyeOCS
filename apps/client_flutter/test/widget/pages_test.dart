@@ -66,6 +66,25 @@ void main() {
     expect(find.text('学习通官方入口找回密码'), findsOneWidget);
   });
 
+  testWidgets('服务未提供密码登录方式时显示未开放而不是空表单', (tester) async {
+    const capabilities = Capabilities(
+      auth: AuthCapability(
+        provider: 'chaoxing',
+        methods: [],
+        enabled: true,
+      ),
+    );
+    await pumpTestPage(
+      tester,
+      const LoginPage(),
+      auth: anonymousState(capabilities: capabilities),
+    );
+
+    expect(find.text('学习通登录尚未开放'), findsOneWidget);
+    expect(find.text('学习通账号'), findsNothing);
+    expect(find.text('密码'), findsNothing);
+  });
+
   testWidgets('学习通未配置时显示明确不可用状态', (tester) async {
     const unavailable = Capabilities(
       auth: AuthCapability(

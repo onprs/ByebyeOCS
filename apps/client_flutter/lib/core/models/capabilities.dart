@@ -26,6 +26,7 @@ class AuthCapability {
       enabled == false ||
       configured == false ||
       verification == 'disabled' ||
+      (enabled == true && methods.isEmpty) ||
       (methods.isNotEmpty && !methods.contains('password'));
 
   bool get qrUnsupported => true;
