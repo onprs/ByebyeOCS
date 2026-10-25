@@ -212,7 +212,8 @@ export function DashboardPage() {
         ))}
       </section>
 
-      <div className="dashboard-grid-main">
+      <div className="dashboard-columns">
+        <div className="dashboard-column">
         <Card>
           <CardHeader
             title={chartPoints.length ? '任务运行趋势' : '任务状态分布'}
@@ -300,45 +301,6 @@ export function DashboardPage() {
             </div>
           ) : null}
    </Card>
-
-        <Card>
-          <CardHeader
-            title="运行资源"
-
-            actions={
-              healthReady ? <Badge tone="green" dot>就绪</Badge> : healthUnavailable ? <Badge tone="amber">未确认</Badge> : null
-            }
-          />
-          {data.resources.length ? (
-            <div className="resource-list">
-              {data.resources.map(resource => (
-                <div className="resource-row" key={resource.key}>
-                  <div className="resource-row-label">
-                    <span>{resourceIcon(resource.key)} {resource.label}</span>
-                  </div>
-                  <div className="resource-row-value">
-                    {resource.value ?? '—'}
-                    {resource.unit ? <small>{resource.unit}</small> : null}
-                    {resourceBadge(resource) ? <span className="u-margin-left-6px" >{resourceBadge(resource)}</span> : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="resource-empty">暂无资源监测数据</div>
-          )}
-          <div className="resource-limits">
-            <span>全局执行名额 <b>{formatNumber(Number.isFinite(globalConcurrency) ? globalConcurrency : null)}</b></span>
-            <span>账号默认并发 <b>{formatNumber(Number.isFinite(accountConcurrency) ? accountConcurrency : null)}</b></span>
-            <span>执行中任务 <b>{formatNumber(data.limits.running_tasks)}</b></span>
-            <span>等待队列 <b>{formatNumber(data.limits.queued_tasks)}</b></span>
-            <span>同一任务 <b>{data.limits.task_exclusive === null ? '—' : data.limits.task_exclusive ? '独占执行' : '未启用独占'}</b></span>
-          </div>
-
-        </Card>
-      </div>
-
-      <div className="dashboard-grid-bottom">
         <Card>
           <CardHeader
             title="正在处理"
@@ -378,7 +340,44 @@ export function DashboardPage() {
           )}
 
         </Card>
+        </div>
 
+        <div className="dashboard-column">
+        <Card>
+          <CardHeader
+            title="运行资源"
+
+            actions={
+              healthReady ? <Badge tone="green" dot>就绪</Badge> : healthUnavailable ? <Badge tone="amber">未确认</Badge> : null
+            }
+          />
+          {data.resources.length ? (
+            <div className="resource-list">
+              {data.resources.map(resource => (
+                <div className="resource-row" key={resource.key}>
+                  <div className="resource-row-label">
+                    <span>{resourceIcon(resource.key)} {resource.label}</span>
+                  </div>
+                  <div className="resource-row-value">
+                    {resource.value ?? '—'}
+                    {resource.unit ? <small>{resource.unit}</small> : null}
+                    {resourceBadge(resource) ? <span className="u-margin-left-6px" >{resourceBadge(resource)}</span> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="resource-empty">暂无资源监测数据</div>
+          )}
+          <div className="resource-limits">
+            <span>全局执行名额 <b>{formatNumber(Number.isFinite(globalConcurrency) ? globalConcurrency : null)}</b></span>
+            <span>账号默认并发 <b>{formatNumber(Number.isFinite(accountConcurrency) ? accountConcurrency : null)}</b></span>
+            <span>执行中任务 <b>{formatNumber(data.limits.running_tasks)}</b></span>
+            <span>等待队列 <b>{formatNumber(data.limits.queued_tasks)}</b></span>
+            <span>同一任务 <b>{data.limits.task_exclusive === null ? '—' : data.limits.task_exclusive ? '独占执行' : '未启用独占'}</b></span>
+          </div>
+
+        </Card>
         <Card>
           <CardHeader
             title="实时事件"
@@ -434,6 +433,7 @@ export function DashboardPage() {
           )}
 
         </Card>
+        </div>
       </div>
 
 

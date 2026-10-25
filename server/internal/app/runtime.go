@@ -167,6 +167,17 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 	runtime.Events = stream
 	mux := http.NewServeMux()
 	identity.Register(mux)
+	// 管理端健康检查走带会话认证的 API 前缀；公网入口隐藏 /health/*。
+	mux.HandleFunc("GET /admin/api/v1/health/live", func(w http.ResponseWriter, r *http.Request) {
+		web.JSON(w, r, http.StatusOK, map[string]any{"status": "ok"})
+	})
+	mux.HandleFunc("GET /admin/api/v1/health/ready", func(w http.ResponseWriter, r *http.Request) {
+		if err := db.Pool().Ping(r.Context()); err != nil {
+			web.Error(w, r, http.StatusServiceUnavailable, "service_unavailable", "服务暂未就绪")
+			return
+		}
+		web.JSON(w, r, http.StatusOK, map[string]any{"status": "ok"})
+	})
 	learn.Register(mux)
 	book.Register(mux)
 	answers.Register(mux)

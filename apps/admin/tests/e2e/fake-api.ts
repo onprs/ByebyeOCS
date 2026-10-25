@@ -1048,6 +1048,14 @@ export async function installFakeApi(
       return json(route, 200, { items: questionQueries, next_cursor: null })
     }
 
+    if (path === '/health/live' && method === 'GET') {
+      return json(route, 200, { status: 'ok', request_id: 'req_health_live' })
+    }
+
+    if (path === '/health/ready' && method === 'GET') {
+      return json(route, 200, { status: 'ok', request_id: 'req_health_ready' })
+    }
+
     if (path === '/question-cache-reports' && method === 'GET') {
       return json(route, 200, {
         items: [

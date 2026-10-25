@@ -1,7 +1,7 @@
 import { clearSessionMemory, getCsrfToken, notifyUnauthorized, setCsrfToken } from './session'
 
 export const API_BASE = (import.meta.env.VITE_ADMIN_API_BASE || '/admin/api/v1').replace(/\/+$/, '')
-export const HEALTH_BASE = (import.meta.env.VITE_HEALTH_BASE || '/health').replace(/\/+$/, '')
+export const HEALTH_BASE = (import.meta.env.VITE_HEALTH_BASE || `${API_BASE}/health`).replace(/\/+$/, '')
 
 export interface ApiErrorPayload {
   code: string

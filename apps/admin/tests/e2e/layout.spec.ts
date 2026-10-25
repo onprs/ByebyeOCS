@@ -21,6 +21,16 @@ for (const width of [1920, 1440, 1280, 1024, 768, 390]) {
       if (screenshots) await page.screenshot({ animations: 'disabled', path: resolve(directory, `${route}-${width}.png`) })
     }
     await page.goto('/tasks')
+    await expect(page.getByRole('heading', { name: '任务监控', level: 1 })).toBeVisible()
+    await expect(page.locator('[aria-busy=true]')).toHaveCount(0)
+    if (width >= 1024) {
+      const alignment = await page.evaluate(() => {
+        const content = document.querySelector('.page-view')!.getBoundingClientRect()
+        const actions = document.querySelector('.page-header')!.lastElementChild!.getBoundingClientRect()
+        return { contentRight: content.right, actionsRight: actions.right }
+      })
+      expect(Math.abs(alignment.contentRight - alignment.actionsRight)).toBeLessThanOrEqual(1)
+    }
     const opener = page.getByRole('button', { name: '查看任务 设计思维章节任务' })
     await opener.click()
     const dialog = page.getByRole('dialog')

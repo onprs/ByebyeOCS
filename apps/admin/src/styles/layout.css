@@ -630,7 +630,7 @@ a.admin-nav-item:hover {
   color: var(--accent);
 }
 
-.dashboard-grid-main {
+.dashboard-columns {
   display: grid;
   grid-template-columns: minmax(0, 1.75fr) minmax(290px, 1fr);
   gap: 18px;
@@ -638,11 +638,11 @@ a.admin-nav-item:hover {
   align-items: start;
 }
 
-.dashboard-grid-bottom {
-  display: grid;
-  align-items: start;
-  grid-template-columns: minmax(0, 1.45fr) minmax(280px, 1fr);
+.dashboard-column {
+  display: flex;
+  flex-direction: column;
   gap: 18px;
+  min-width: 0;
 }
 
 .throughput-summary {
@@ -1013,12 +1013,6 @@ a.admin-nav-item:hover {
 
 /* —— 窄屏 —— */
 @media (max-width: 1180px) {
-  .dashboard-grid-bottom {
-    grid-template-columns: minmax(0, 1.3fr) minmax(240px, 1fr);
-  }
-  .dashboard-grid-bottom > :last-child {
-    grid-column: 1 / -1;
-  }
   .event-list {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1066,10 +1060,9 @@ a.admin-nav-item:hover {
 }
 
 @media (max-width: 860px) {
-  .dashboard-grid-main {
+  .dashboard-columns {
     grid-template-columns: minmax(0, 1fr);
-    align-items: stretch;
-}
+  }
   .metric-band {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1078,12 +1071,6 @@ a.admin-nav-item:hover {
   }
   .metric:nth-child(-n + 2) {
     border-bottom: 1px solid var(--border);
-  }
-  .dashboard-grid-bottom {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .dashboard-grid-bottom > :last-child {
-    grid-column: auto;
   }
   .page-header {
     align-items: flex-start;
