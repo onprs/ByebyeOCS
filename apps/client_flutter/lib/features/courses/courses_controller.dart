@@ -244,18 +244,46 @@ class CoursesController extends AsyncNotifier<CourseListState> {
     }
   }
 
-  /// 首次进入且课程为空时自动同步；每个页面生命周期只尝试一次。
-  void autoSyncIfNeeded() {
+  /// 页面进入时自动接续运行中的同步；没有同步且课程为空时自动开始。
+  Future<void> autoSyncIfNeeded() async {
     if (_autoSyncTried) return;
     final current = state.valueOrNull;
-    if (current == null || current.courses.isNotEmpty || current.syncing) {
-      return;
-    }
+    if (current == null || current.syncing) return;
     _autoSyncTried = true;
     if (!ref.read(authControllerProvider).capabilities.courseSyncAvailable) {
       return;
     }
-    unawaited(syncCourses(automatic: true));
+    try {
+      final latest =
+          await ref.read(learningRepositoryProvider).fetchLatestCourseSync();
+      if (_disposed) return;
+      if (latest != null && latest.running) {
+        state = AsyncData(
+          current.copyWith(
+            syncing: true,
+            syncResult: latest,
+            clearSyncError: true,
+          ),
+        );
+        await _pollCourseSync(latest.id);
+        return;
+      }
+      if (latest != null && latest.needsAttention) {
+        state = AsyncData(
+          current.copyWith(
+            syncing: false,
+            syncResult: latest,
+            syncError: '课程同步未完成，请重试',
+          ),
+        );
+        return;
+      }
+    } catch (_) {
+      // 最新同步状态不可读取时仍允许在课程为空时重新开始。
+    }
+    if (current.courses.isEmpty) {
+      await syncCourses(automatic: true);
+    }
   }
 
   Future<void> syncCourses({bool automatic = false}) async {
@@ -308,8 +336,8 @@ class CoursesController extends AsyncNotifier<CourseListState> {
     if (_polling) return;
     _polling = true;
     try {
-      for (var attempt = 0; attempt < 1200; attempt++) {
-        await Future<void>.delayed(const Duration(milliseconds: 1500));
+      for (var attempt = 0; attempt < 2400; attempt++) {
+        await Future<void>.delayed(const Duration(milliseconds: 3000));
         if (_disposed) {
           return;
         }
@@ -333,7 +361,7 @@ class CoursesController extends AsyncNotifier<CourseListState> {
           await refresh(silent: true);
           return;
         }
-        if (attempt % 5 == 4) {
+        if (attempt % 10 == 9) {
           await refresh(silent: true);
         }
       }

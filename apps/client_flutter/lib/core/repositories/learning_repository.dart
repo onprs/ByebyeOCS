@@ -1,4 +1,5 @@
 import '../api/api_client.dart';
+import '../api/api_error.dart';
 import '../api/api_response.dart';
 import '../api/json.dart';
 import '../models/course.dart';
@@ -36,6 +37,16 @@ class LearningRepository {
     );
     return CourseSyncResult.parse(response.data,
         created: response.statusCode == 202);
+  }
+
+  Future<CourseSyncResult?> fetchLatestCourseSync() async {
+    try {
+      final response = await _api.get('course-syncs/latest');
+      return CourseSyncResult.parse(response.data);
+    } on ApiException catch (error) {
+      if (error.statusCode == 404) return null;
+      rethrow;
+    }
   }
 
   Future<CourseSyncResult> fetchCourseSync(String id) async {

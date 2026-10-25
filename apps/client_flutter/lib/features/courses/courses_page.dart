@@ -55,7 +55,8 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
     if (async.hasValue) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (context.mounted) {
-          ref.read(coursesControllerProvider.notifier).autoSyncIfNeeded();
+          unawaited(
+              ref.read(coursesControllerProvider.notifier).autoSyncIfNeeded());
         }
       });
     }

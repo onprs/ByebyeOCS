@@ -30,6 +30,7 @@ func (s *Service) Register(mux *http.ServeMux) {
 	user("GET /api/v1/courses", s.handleListCourses)
 	user("GET /api/v1/courses/{id}", s.handleGetCourse)
 	user("POST /api/v1/course-syncs", s.handleRequestCourseSync)
+	user("GET /api/v1/course-syncs/latest", s.handleLatestCourseSync)
 	user("GET /api/v1/course-syncs/{id}", s.handleGetCourseSync)
 	user("GET /api/v1/plans", s.handleListPlans)
 	user("POST /api/v1/plans", s.handleCreatePlan)
@@ -158,6 +159,15 @@ func (s *Service) handleRequestCourseSync(w http.ResponseWriter, r *http.Request
 		return
 	}
 	web.JSON(w, r, http.StatusAccepted, item)
+}
+
+func (s *Service) handleLatestCourseSync(w http.ResponseWriter, r *http.Request, actor Actor) {
+	item, err := s.LatestCourseSync(r.Context(), actor)
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	web.JSON(w, r, http.StatusOK, item)
 }
 
 func (s *Service) handleGetCourseSync(w http.ResponseWriter, r *http.Request, actor Actor) {
