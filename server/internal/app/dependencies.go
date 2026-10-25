@@ -1,6 +1,9 @@
 package app
 
 import (
+	"strings"
+	"time"
+
 	"github.com/onprs/ByebyeOCS/server/internal/adapters/chaoxing"
 	"github.com/onprs/ByebyeOCS/server/internal/adapters/chaoxing/authbridge"
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
@@ -30,9 +33,23 @@ func defaultDependencies(cfg config.Config) (Dependencies, error) {
 		result.Fork = fork
 	}
 	if cfg.Learning.Enabled {
-		probe, err := chaoxing.NewJSONSubjectProbe(chaoxing.JSONProbeOptions{Enabled: true, Endpoint: cfg.Learning.SubjectProbeURL, Method: cfg.Learning.SubjectProbeMethod, Namespace: cfg.Learning.SubjectNamespace, EvidenceRef: cfg.Learning.AuthorizationReference, SubjectPath: cfg.Learning.SubjectPath, ExpiresAtPath: cfg.Learning.SessionExpiryPath, ExpiresAtFormat: cfg.Learning.SessionExpiryFormat, DisplayNamePath: cfg.Learning.DisplayNamePath, SchoolPath: cfg.Learning.SchoolPath})
-		if err != nil {
-			return result, fault.New("config_invalid", "可信平台会话探针配置无效")
+		var probe chaoxing.SubjectProbe
+		if strings.EqualFold(strings.TrimSpace(cfg.Learning.SubjectProbeFormat), "profile") {
+			profile, err := chaoxing.NewProfileSubjectProbe(chaoxing.ProfileProbeOptions{
+				Enabled: true, AccountURL: cfg.Learning.SubjectProbeURL, SchoolURL: cfg.Learning.SchoolProbeURL,
+				Namespace: cfg.Learning.SubjectNamespace, EvidenceRef: cfg.Learning.AuthorizationReference,
+				TTL: time.Duration(cfg.Learning.SubjectTTLHours) * time.Hour,
+			})
+			if err != nil {
+				return result, fault.New("config_invalid", "账户资料探针配置无效")
+			}
+			probe = profile
+		} else {
+			jsonProbe, err := chaoxing.NewJSONSubjectProbe(chaoxing.JSONProbeOptions{Enabled: true, Endpoint: cfg.Learning.SubjectProbeURL, Method: cfg.Learning.SubjectProbeMethod, Namespace: cfg.Learning.SubjectNamespace, EvidenceRef: cfg.Learning.AuthorizationReference, SubjectPath: cfg.Learning.SubjectPath, ExpiresAtPath: cfg.Learning.SessionExpiryPath, ExpiresAtFormat: cfg.Learning.SessionExpiryFormat, DisplayNamePath: cfg.Learning.DisplayNamePath, SchoolPath: cfg.Learning.SchoolPath})
+			if err != nil {
+				return result, fault.New("config_invalid", "可信平台会话探针配置无效")
+			}
+			probe = jsonProbe
 		}
 		verifier, err := chaoxing.NewVerifier(chaoxing.VerifierOptions{Enabled: true, LoginEnabled: true, ReadOnlyAuthorized: true, Namespace: cfg.Learning.SubjectNamespace, EvidenceRef: cfg.Learning.AuthorizationReference, SubjectProbe: probe})
 		if err != nil {

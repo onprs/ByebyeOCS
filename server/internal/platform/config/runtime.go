@@ -38,6 +38,9 @@ type Learning struct {
 	SubjectNamespace           string `yaml:"subject_namespace"`
 	SubjectProbeURL            string `yaml:"subject_probe_url"`
 	SubjectProbeMethod         string `yaml:"subject_probe_method"`
+	SubjectProbeFormat         string `yaml:"subject_probe_format"`
+	SchoolProbeURL             string `yaml:"school_probe_url"`
+	SubjectTTLHours            int    `yaml:"subject_ttl_hours"`
 	SubjectPath                string `yaml:"subject_path"`
 	SessionExpiryPath          string `yaml:"session_expiry_path"`
 	SessionExpiryFormat        string `yaml:"session_expiry_format"`
@@ -221,8 +224,23 @@ func validateRuntime(cfg *Config) error {
 	if cfg.Learning.Enabled && (!cfg.Auth.Enabled || cfg.Learning.AuthorizationReference == "" || cfg.Learning.SubjectNamespace == "") {
 		return invalid("启用平台连接前须配置认证、授权依据和已验证主体命名空间")
 	}
-	if cfg.Learning.Enabled && (cfg.Learning.SubjectProbeURL == "" || cfg.Learning.SubjectPath == "" || cfg.Learning.SessionExpiryPath == "") {
-		return invalid("平台连接须配置已核实的主体查询地址、主体路径和会话到期路径")
+	if cfg.Learning.Enabled {
+		format := strings.ToLower(strings.TrimSpace(cfg.Learning.SubjectProbeFormat))
+		switch format {
+		case "", "json":
+			if cfg.Learning.SubjectProbeURL == "" || cfg.Learning.SubjectPath == "" || cfg.Learning.SessionExpiryPath == "" {
+				return invalid("平台连接须配置已核实的主体查询地址、主体路径和会话到期路径")
+			}
+		case "profile":
+			if cfg.Learning.SubjectProbeURL == "" {
+				return invalid("账户资料探针须配置已核实的账户资料地址")
+			}
+			if cfg.Learning.SubjectTTLHours < 1 || cfg.Learning.SubjectTTLHours > 168 {
+				return invalid("账户资料探针会话时长必须在 1 至 168 小时之间")
+			}
+		default:
+			return invalid("主体探针格式无效")
+		}
 	}
 	if cfg.Learning.ExecutionEnabled && cfg.Learning.ExecutionEvidenceReference == "" {
 		return invalid("启用原生请求执行须配置独立的目标验证依据")
