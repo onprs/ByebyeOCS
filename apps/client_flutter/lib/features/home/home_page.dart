@@ -195,12 +195,8 @@ class HomePage extends ConsumerWidget {
               else if (courses.isEmpty)
                 EmptyState(
                   title: '还没有同步课程',
-                  message: '同步学习通课程后，章节和任务点会显示在这里。',
+                  message: '课程同步完成后，章节和任务点会显示在这里。',
                   compact: true,
-                  action: OutlinedButton(
-                    onPressed: () => openTab(context, 1, '/courses'),
-                    child: const Text('同步课程'),
-                  ),
                 )
               else
                 _CourseGrid(

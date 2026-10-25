@@ -260,14 +260,7 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
                   ? '课程同步完成后，章节与任务点会显示在这里。'
                   : '调整搜索词或筛选条件后再试。',
               action: data.courses.isEmpty
-                  ? AsyncButton(
-                      label: '同步课程',
-                      icon: Icons.sync,
-                      busy: data.syncing,
-                      onPressed: () => ref
-                          .read(coursesControllerProvider.notifier)
-                          .syncCourses(),
-                    )
+                  ? null
                   : OutlinedButton(
                       onPressed: () {
                         _searchController.clear();

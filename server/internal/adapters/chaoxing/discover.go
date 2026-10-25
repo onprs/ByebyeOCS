@@ -271,11 +271,15 @@ func (p *Platform) readCards(ctx context.Context, session Session, course learni
 func parseAttachments(payload []byte) ([]learning.PlatformAttachment, int, error) {
 	config, err := parseCards(payload)
 	if err != nil {
+		// 没有任务点的章节会返回空的 mArg 初始化；这是空章节而不是结构损坏。
+		if bytes.Contains(payload, []byte("mArg")) {
+			return nil, 0, nil
+		}
 		return nil, 0, learning.Fail(learning.FailureCapabilityMissing, "任务卡片结构未识别")
 	}
 	rawAttachments, ok := config["attachments"].([]any)
 	if !ok {
-		return nil, 0, learning.Fail(learning.FailureCapabilityMissing, "任务卡片缺少附件列表")
+		return nil, 0, nil
 	}
 	skipped := 0
 	attachments := make([]learning.PlatformAttachment, 0, len(rawAttachments))

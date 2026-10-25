@@ -308,7 +308,7 @@ class CoursesController extends AsyncNotifier<CourseListState> {
     if (_polling) return;
     _polling = true;
     try {
-      for (var attempt = 0; attempt < 120; attempt++) {
+      for (var attempt = 0; attempt < 1200; attempt++) {
         await Future<void>.delayed(const Duration(milliseconds: 1500));
         if (_disposed) {
           return;
@@ -330,8 +330,11 @@ class CoursesController extends AsyncNotifier<CourseListState> {
           ),
         );
         if (finished) {
-          if (result.succeeded) await refresh(silent: true);
+          await refresh(silent: true);
           return;
+        }
+        if (attempt % 5 == 4) {
+          await refresh(silent: true);
         }
       }
       if (_disposed) return;
