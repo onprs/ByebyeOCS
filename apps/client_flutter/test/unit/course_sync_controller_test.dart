@@ -446,6 +446,30 @@ void main() {
     );
   });
 
+  test('新的后台同步成功后替换旧失败提示', () async {
+    var now = DateTime.utc(2026, 10, 26);
+    final repository = _SyncCourseRepository(
+      courses: [_course(syncedAt: now)],
+      latest: _sync('old-failure', 'needs_attention', errorCode: 'transient'),
+    );
+    final container = _container(repository, clock: () => now);
+    addTearDown(container.dispose);
+    await _warm(container);
+    final notifier = container.read(courseSyncControllerProvider.notifier);
+    await notifier.autoSyncIfNeeded();
+    expect(container.read(courseSyncControllerProvider).phase,
+        CourseSyncPhase.failed);
+    now = now.add(const Duration(minutes: 6));
+    repository.latest =
+        _sync('new-success', 'succeeded', courseCount: 1, finishedAt: now);
+    await notifier.autoSyncIfNeeded();
+    final updated = container.read(courseSyncControllerProvider);
+    expect(updated.phase, CourseSyncPhase.succeeded);
+    expect(updated.result?.id, 'new-success');
+    expect(updated.error, isNull);
+    expect(repository.requestCalls, 0);
+  });
+
   test('账号切换后丢弃旧的最近同步响应', () async {
     final now = DateTime.utc(2026, 10, 26);
     final gate = Completer<CourseSyncResult?>();

@@ -217,12 +217,14 @@ class CourseSyncController extends Notifier<CourseSyncState> {
         return;
       }
       if (latest != null && latest.succeeded) {
-        // 同一个任务在状态读取中断后已完成时，补上真实完成状态。
-        final currentId = state.result?.id;
-        if (currentId != null &&
-            currentId == latest.id &&
-            state.phase != CourseSyncPhase.succeeded) {
+        // 后台或另一设备完成的新同步也应替换旧失败提示。
+        final current = state.result;
+        if (current != null &&
+            (current.id == latest.id ||
+                state.phase == CourseSyncPhase.failed ||
+                state.phase == CourseSyncPhase.partial)) {
           _showResult(latest);
+          unawaited(_refreshCourses());
         }
         if (!_needsSync(coursesState.courses, latest)) return;
         await syncCourses(automatic: true);
