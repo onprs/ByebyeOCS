@@ -7,7 +7,6 @@ import '../../core/api/api_error.dart';
 import '../../core/models/course.dart';
 import '../../core/models/page.dart';
 import '../../core/realtime/realtime_event.dart';
-import '../auth/auth_controller.dart';
 
 class CourseListState {
   const CourseListState({
@@ -15,9 +14,6 @@ class CourseListState {
     this.nextCursor,
     this.search = '',
     this.refreshing = false,
-    this.syncing = false,
-    this.syncResult,
-    this.syncError,
     this.refreshError,
   });
 
@@ -25,9 +21,6 @@ class CourseListState {
   final String? nextCursor;
   final String search;
   final bool refreshing;
-  final bool syncing;
-  final CourseSyncResult? syncResult;
-  final String? syncError;
   final String? refreshError;
 
   bool get isEmpty => courses.isEmpty;
@@ -37,22 +30,15 @@ class CourseListState {
     String? nextCursor,
     String? search,
     bool? refreshing,
-    bool? syncing,
-    CourseSyncResult? syncResult,
-    String? syncError,
     String? refreshError,
-    bool clearSyncError = false,
     bool clearRefreshError = false,
-    bool clearSyncResult = false,
+    bool clearNextCursor = false,
   }) {
     return CourseListState(
       courses: courses ?? this.courses,
-      nextCursor: nextCursor ?? this.nextCursor,
+      nextCursor: clearNextCursor ? null : nextCursor ?? this.nextCursor,
       search: search ?? this.search,
       refreshing: refreshing ?? this.refreshing,
-      syncing: syncing ?? this.syncing,
-      syncResult: clearSyncResult ? null : syncResult ?? this.syncResult,
-      syncError: clearSyncError ? null : syncError ?? this.syncError,
       refreshError:
           clearRefreshError ? null : refreshError ?? this.refreshError,
     );
@@ -62,26 +48,17 @@ class CourseListState {
 class CoursesController extends AsyncNotifier<CourseListState> {
   Page<CourseSummary>? _page;
   StreamSubscription<RealtimeEvent>? _events;
-  bool _autoSyncTried = false;
-  bool _autoRetryTried = false;
-  bool _polling = false;
-  bool _disposed = false;
 
   /// 搜索、刷新与翻页共享同一请求序号；只允许最新一次结果写入界面。
   int _requestSeq = 0;
 
   @override
   Future<CourseListState> build() async {
-    _disposed = false;
-    _autoSyncTried = false;
-    _autoRetryTried = false;
-    _polling = false;
     _requestSeq++;
     ref.watch(sessionEpochProvider);
     final user = ref.watch(currentUserProvider);
     _events = ref.watch(realtimeServiceProvider).events.listen(_onEvent);
     ref.onDispose(() {
-      _disposed = true;
       _events?.cancel();
       _events = null;
     });
@@ -114,7 +91,6 @@ class CoursesController extends AsyncNotifier<CourseListState> {
         search: trimmed,
         refreshing: true,
         clearRefreshError: true,
-        clearSyncError: true,
       ),
     );
     try {
@@ -163,7 +139,6 @@ class CoursesController extends AsyncNotifier<CourseListState> {
       current.copyWith(
         refreshing: true,
         clearRefreshError: true,
-        clearSyncError: true,
       ),
     );
     try {
@@ -176,6 +151,7 @@ class CoursesController extends AsyncNotifier<CourseListState> {
         current.copyWith(
           courses: page.items,
           nextCursor: page.nextCursor,
+          clearNextCursor: page.nextCursor == null,
           refreshing: false,
           clearRefreshError: true,
         ),
@@ -232,6 +208,7 @@ class CoursesController extends AsyncNotifier<CourseListState> {
         current.copyWith(
           courses: merged,
           nextCursor: next.nextCursor,
+          clearNextCursor: next.nextCursor == null,
           refreshing: false,
         ),
       );
@@ -244,174 +221,6 @@ class CoursesController extends AsyncNotifier<CourseListState> {
         ),
       );
     }
-  }
-
-  /// 页面进入时自动接续运行中的同步；没有同步且课程为空时自动开始。
-  Future<void> autoSyncIfNeeded() async {
-    if (_autoSyncTried) return;
-    final current = state.valueOrNull;
-    if (current == null || current.syncing) return;
-    _autoSyncTried = true;
-    if (!ref.read(authControllerProvider).capabilities.courseSyncAvailable) {
-      return;
-    }
-    try {
-      final latest =
-          await ref.read(learningRepositoryProvider).fetchLatestCourseSync();
-      if (_disposed) return;
-      if (latest != null && latest.running) {
-        state = AsyncData(
-          current.copyWith(
-            syncing: true,
-            syncResult: latest,
-            clearSyncError: true,
-          ),
-        );
-        await _pollCourseSync(latest.id);
-        return;
-      }
-      if (latest != null && latest.needsAttention) {
-        if (latest.errorCode == 'external_disabled' && !_autoRetryTried) {
-          _autoRetryTried = true;
-          await syncCourses(automatic: true);
-          return;
-        }
-        state = AsyncData(
-          current.copyWith(
-            syncing: false,
-            syncResult: latest,
-            syncError: _syncFailureMessage(latest),
-          ),
-        );
-        return;
-      }
-    } catch (_) {
-      // 最新同步状态不可读取时仍允许在课程为空时重新开始。
-    }
-    if (current.courses.isEmpty) {
-      await syncCourses(automatic: true);
-    }
-  }
-
-  Future<void> syncCourses({bool automatic = false}) async {
-    final current = state.valueOrNull;
-    if (current == null || current.syncing) return;
-    state = AsyncData(
-      current.copyWith(
-        syncing: true,
-        clearSyncError: true,
-        clearSyncResult: true,
-      ),
-    );
-    try {
-      final result =
-          await ref.read(learningRepositoryProvider).requestCourseSync();
-      if (_disposed) return;
-      state = AsyncData(
-        (state.valueOrNull ?? current).copyWith(
-          syncing: result.running,
-          syncResult: result,
-          syncError: result.needsAttention ? _syncFailureMessage(result) : null,
-          clearSyncError: !result.needsAttention,
-        ),
-      );
-      if (result.running && result.id.isNotEmpty) {
-        await _pollCourseSync(result.id);
-      } else if (result.succeeded) {
-        await refresh(silent: true);
-      }
-    } on ApiException catch (error) {
-      if (_disposed) return;
-      state = AsyncData(
-        (state.valueOrNull ?? current).copyWith(
-          syncing: false,
-          syncError: error.userMessage,
-        ),
-      );
-    } catch (_) {
-      if (_disposed) return;
-      state = AsyncData(
-        (state.valueOrNull ?? current).copyWith(
-          syncing: false,
-          syncError: '课程同步请求未完成，请稍后重试',
-        ),
-      );
-    }
-  }
-
-  String _syncFailureMessage(CourseSyncResult result) {
-    if (result.errorCode == 'course_structure_partial') {
-      return '部分课程结构待适配，已同步可用课程';
-    }
-    return '课程同步未完成，请重试';
-  }
-
-  Future<void> _pollCourseSync(String id) async {
-    if (_polling) return;
-    _polling = true;
-    try {
-      for (var attempt = 0; attempt < 2400; attempt++) {
-        await Future<void>.delayed(const Duration(milliseconds: 3000));
-        if (_disposed) {
-          return;
-        }
-        final result =
-            await ref.read(learningRepositoryProvider).fetchCourseSync(id);
-        if (_disposed) {
-          return;
-        }
-        final current = state.valueOrNull;
-        if (current == null) return;
-        final finished = !result.running;
-        state = AsyncData(
-          current.copyWith(
-            syncing: !finished,
-            syncResult: result,
-            syncError:
-                result.needsAttention ? _syncFailureMessage(result) : null,
-            clearSyncError: !result.needsAttention,
-          ),
-        );
-        if (finished) {
-          await refresh(silent: true);
-          return;
-        }
-        if (attempt % 10 == 9) {
-          await refresh(silent: true);
-        }
-      }
-      if (_disposed) return;
-      final current = state.valueOrNull;
-      if (current != null) {
-        state = AsyncData(
-          current.copyWith(
-            syncing: false,
-            syncError: '课程同步时间较长，请稍后重试',
-          ),
-        );
-      }
-    } catch (_) {
-      if (_disposed) return;
-      final current = state.valueOrNull;
-      if (current != null) {
-        state = AsyncData(
-          current.copyWith(
-            syncing: false,
-            syncError: '课程同步状态读取未完成，请重试',
-          ),
-        );
-      }
-    } finally {
-      _polling = false;
-    }
-  }
-
-  void clearBanner() {
-    final current = state.valueOrNull;
-    if (current == null) return;
-    state = AsyncData(
-      current.copyWith(clearSyncResult: true, clearSyncError: true),
-    );
   }
 }
 

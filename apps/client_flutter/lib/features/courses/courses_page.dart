@@ -10,6 +10,7 @@ import '../../core/models/course.dart';
 import '../../app/scroll_controllers.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
+import 'course_sync_controller.dart';
 import 'course_sync_notice.dart';
 import 'courses_controller.dart';
 
@@ -47,16 +48,13 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
     final user = ref.watch(currentUserProvider);
     final capabilities = ref.watch(authCapabilitiesProvider);
     final scroll = ref.watch(tabScrollControllerProvider('courses'));
-    final syncState = async.valueOrNull;
-    final syncActive = syncState != null &&
-        (syncState.syncing ||
-            syncState.syncError != null ||
-            (syncState.syncResult?.needsAttention ?? false));
+    final sync = ref.watch(courseSyncControllerProvider);
     if (async.hasValue) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (context.mounted) {
-          unawaited(
-              ref.read(coursesControllerProvider.notifier).autoSyncIfNeeded());
+          unawaited(ref
+              .read(courseSyncControllerProvider.notifier)
+              .autoSyncIfNeeded());
         }
       });
     }
@@ -72,11 +70,13 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
             PageHeader(
               title: '课程与任务点',
             ),
-            if (syncActive) ...[
+            if (sync.visible) ...[
               CourseSyncNotice(
-                state: syncState,
+                state: sync,
+                onDismiss: () =>
+                    ref.read(courseSyncControllerProvider.notifier).dismiss(),
                 onRetry: () =>
-                    ref.read(coursesControllerProvider.notifier).syncCourses(),
+                    ref.read(courseSyncControllerProvider.notifier).retry(),
               ),
               const SizedBox(height: 16),
             ],
@@ -142,16 +142,6 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (data.syncResult != null || data.syncError != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: _SyncBanner(
-              result: data.syncResult,
-              error: data.syncError,
-              onClose: () =>
-                  ref.read(coursesControllerProvider.notifier).clearBanner(),
-            ),
-          ),
         if (data.refreshError != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 16),
@@ -360,50 +350,6 @@ class _FilterChip extends StatelessWidget {
           ),
         ),
       ),
-    );
-  }
-}
-
-class _SyncBanner extends StatelessWidget {
-  const _SyncBanner({
-    this.result,
-    this.error,
-    required this.onClose,
-  });
-
-  final CourseSyncResult? result;
-  final String? error;
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context) {
-    if (error != null) {
-      return InlineNotice(
-        tone: StatusTone.danger,
-        message: error!,
-        action: IconButton(
-          tooltip: '关闭',
-          onPressed: onClose,
-          icon: const Icon(Icons.close, size: 17),
-        ),
-      );
-    }
-    final value = result!;
-    if (value.failed) {
-      return InlineNotice(
-        tone: StatusTone.warning,
-        message: '课程同步未完成，请稍后重试。',
-        action: TextButton(onPressed: onClose, child: const Text('关闭')),
-      );
-    }
-    final message = value.accepted
-        ? '同步请求已提交，课程更新完成后会在这里显示。'
-        : '课程同步已处理${value.courseCount > 0 ? '，共 ${value.courseCount} 门课程' : ''}。';
-    return InlineNotice(
-      tone: StatusTone.success,
-      icon: Icons.cloud_done_outlined,
-      message: message,
-      action: TextButton(onPressed: onClose, child: const Text('知道了')),
     );
   }
 }

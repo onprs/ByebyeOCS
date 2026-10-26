@@ -13,6 +13,7 @@ import '../../core/models/task.dart';
 import '../../core/models/wallet.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
+import '../courses/course_sync_controller.dart';
 import '../courses/course_sync_notice.dart';
 import '../courses/courses_controller.dart';
 import '../plans/plans_controller.dart';
@@ -39,16 +40,13 @@ class HomePage extends ConsumerWidget {
     if (coursesAsync.hasValue) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (context.mounted) {
-          unawaited(
-              ref.read(coursesControllerProvider.notifier).autoSyncIfNeeded());
+          unawaited(ref
+              .read(courseSyncControllerProvider.notifier)
+              .autoSyncIfNeeded());
         }
       });
     }
-    final syncState = coursesAsync.valueOrNull;
-    final syncActive = syncState != null &&
-        (syncState.syncing ||
-            syncState.syncError != null ||
-            (syncState.syncResult?.needsAttention ?? false));
+    final sync = ref.watch(courseSyncControllerProvider);
     final pendingPoints = courses.fold<int>(
       0,
       (sum, course) => sum + course.incompleteTaskPointCount,
@@ -93,13 +91,14 @@ class HomePage extends ConsumerWidget {
                 dateText: dateText,
                 connected: user?.platformActive ?? false,
               ),
-              if (syncActive) ...[
+              if (sync.visible) ...[
                 const SizedBox(height: 16),
                 CourseSyncNotice(
-                  state: syncState,
-                  onRetry: () => ref
-                      .read(coursesControllerProvider.notifier)
-                      .syncCourses(),
+                  state: sync,
+                  onDismiss: () =>
+                      ref.read(courseSyncControllerProvider.notifier).dismiss(),
+                  onRetry: () =>
+                      ref.read(courseSyncControllerProvider.notifier).retry(),
                 ),
               ],
               const SizedBox(height: 22),
@@ -109,7 +108,7 @@ class HomePage extends ConsumerWidget {
                   courseCount: coursesAsync.hasValue ? courses.length : null,
                   pendingPoints: pendingPoints,
                   loading: coursesAsync.isLoading,
-                  syncing: syncState?.syncing ?? false,
+                  syncing: sync.busy,
                   error: coursesAsync.hasError,
                   onOpenCourse: courses.isEmpty
                       ? null

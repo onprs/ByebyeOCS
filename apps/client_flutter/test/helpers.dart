@@ -113,6 +113,7 @@ class TestServer {
           },
           status: 202,
         ),
+      '/api/v1/course-syncs/latest' => jsonResponse(_latestCourseSyncFixture()),
       '/api/v1/plans' => jsonResponse({
           'items': [planFixture],
           'next_cursor': '',
@@ -193,6 +194,21 @@ http.Response jsonResponse(
       ...headers,
     },
   );
+}
+
+/// 默认提供最近成功的同步，避免页面测试因课程样例时间而过期触发同步轮询。
+Map<String, Object?> _latestCourseSyncFixture() {
+  final finishedAt = DateTime.now().toUtc().subtract(
+        const Duration(minutes: 2),
+      );
+  return {
+    'id': 'sync-latest',
+    'status': 'succeeded',
+    'course_count': coursesFixture.length,
+    'requested_at':
+        finishedAt.subtract(const Duration(minutes: 1)).toIso8601String(),
+    'finished_at': finishedAt.toIso8601String(),
+  };
 }
 
 Future<void> pumpTestPage(

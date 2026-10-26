@@ -186,6 +186,8 @@ class CourseSyncResult {
     this.courseCount = 0,
     this.created = false,
     this.errorCode,
+    this.requestedAt,
+    this.finishedAt,
   });
 
   final String id;
@@ -193,12 +195,17 @@ class CourseSyncResult {
   final int courseCount;
   final bool created;
   final String? errorCode;
+  final DateTime? requestedAt;
+  final DateTime? finishedAt;
 
   bool get accepted => status == 'queued' || status == 'running';
   bool get running => accepted;
   bool get succeeded => status == 'succeeded';
   bool get failed => status == 'failed';
   bool get needsAttention => status == 'needs_attention' || status == 'failed';
+
+  /// 服务端完成时间；旧记录缺失时退回请求时间，供数据过期判断使用。
+  DateTime? get completedAt => finishedAt ?? requestedAt;
 
   static CourseSyncResult parse(Object? raw, {bool created = false}) {
     final root = asObject(raw) ?? const <String, dynamic>{};
@@ -209,6 +216,8 @@ class CourseSyncResult {
       courseCount: readInt(sync, 'course_count') ?? 0,
       created: readBool(root, 'created') ?? created,
       errorCode: readString(sync, 'error_code'),
+      requestedAt: readDateTime(sync, 'requested_at'),
+      finishedAt: readDateTime(sync, 'finished_at'),
     );
   }
 }
