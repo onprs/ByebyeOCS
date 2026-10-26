@@ -134,7 +134,8 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
         _CourseFilter.pending => course.incompleteTaskPointCount > 0,
         _CourseFilter.confirmed => course.allConfirmed,
       };
-    }).toList(growable: false);
+    }).toList()
+      ..sort(_compareCourses);
     final pending = data.courses
         .where((course) => course.incompleteTaskPointCount > 0)
         .length;
@@ -520,4 +521,17 @@ class _CourseCard extends StatelessWidget {
       ),
     );
   }
+}
+
+int _courseRank(CourseSummary course) {
+  if (course.detailsPending) return 2;
+  if (course.taskPointCount == 0) return 3;
+  if (course.incompleteTaskPointCount > 0) return 0;
+  return 1;
+}
+
+int _compareCourses(CourseSummary a, CourseSummary b) {
+  final rank = _courseRank(a).compareTo(_courseRank(b));
+  if (rank != 0) return rank;
+  return b.incompleteTaskPointCount.compareTo(a.incompleteTaskPointCount);
 }

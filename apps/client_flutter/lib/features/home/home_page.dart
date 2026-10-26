@@ -53,6 +53,7 @@ class HomePage extends ConsumerWidget {
       (sum, course) => sum + course.incompleteTaskPointCount,
     );
     final featured = _featuredCourse(courses);
+    final homeCourses = [...courses]..sort(_compareCourses);
     final enabledPlans = plans.where((plan) => plan.isActive).length;
     final confirmedTasks =
         tasks.where((task) => task.state == LearningTaskState.confirmed).length;
@@ -203,7 +204,7 @@ class HomePage extends ConsumerWidget {
                 )
               else
                 _CourseGrid(
-                  courses: courses.take(3).toList(growable: false),
+                  courses: homeCourses.take(3).toList(growable: false),
                   onOpen: (course) => context.go('/courses/${course.id}'),
                 ),
               const SizedBox(height: 30),
@@ -296,6 +297,20 @@ class HomePage extends ConsumerWidget {
 }
 
 // 首页优先继续有任务点的课程，避免空课程或待同步课程占据主位置。
+// 首页课程按未完成、已完成、待同步、空课程排序，避免空卡片占首位。
+int _courseRank(CourseSummary course) {
+  if (course.detailsPending) return 2;
+  if (course.taskPointCount == 0) return 3;
+  if (course.incompleteTaskPointCount > 0) return 0;
+  return 1;
+}
+
+int _compareCourses(CourseSummary a, CourseSummary b) {
+  final rank = _courseRank(a).compareTo(_courseRank(b));
+  if (rank != 0) return rank;
+  return b.incompleteTaskPointCount.compareTo(a.incompleteTaskPointCount);
+}
+
 CourseSummary? _featuredCourse(List<CourseSummary> courses) {
   CourseSummary? pending;
   CourseSummary? detailed;
@@ -952,10 +967,13 @@ class _CourseCard extends StatelessWidget {
                       Expanded(
                         child: Text(
                           [
-                            if (course.term != null) course.term!,
+                            if (course.term != null && course.term!.isNotEmpty)
+                              course.term!,
                             course.detailsPending
                                 ? '章节待同步'
-                                : '${course.chapterCount} 章节',
+                                : course.chapterCount == 0
+                                    ? '暂无章节'
+                                    : '${course.chapterCount} 章节',
                           ].join(' · '),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -1006,7 +1024,9 @@ class _CourseCard extends StatelessWidget {
                         child: Text(
                           course.detailsPending
                               ? '课程内容待同步'
-                              : '平台已确认 ${course.confirmedTaskPoints} / ${course.taskPointCount}',
+                              : course.taskPointCount == 0
+                                  ? '该课程暂无任务点'
+                                  : '平台已确认 ${course.confirmedTaskPoints} / ${course.taskPointCount}',
                           style: TextStyle(
                             color: colors.textSecondary,
                             fontSize: 12,
