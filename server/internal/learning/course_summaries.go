@@ -2,6 +2,8 @@ package learning
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -52,11 +54,26 @@ func (s *Service) saveCourseSummaries(ctx context.Context, job *courseSyncJob, a
 	})
 }
 
-// completedSyncCourses 只复用本次同步请求已经完整写入的课程，用于中断恢复。
+// completedSyncCourses 复用当前请求或最近失败请求中已完整写入的课程，用于中断恢复。
+// 只跳过失败请求之后写入的完整快照；更早的数据仍会在本次同步中刷新。
 func (s *Service) completedSyncCourses(ctx context.Context, job courseSyncJob) (map[string]int64, error) {
+	var requested time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT requested_at FROM public.learning_course_syncs WHERE id=$1`, job.ID).Scan(&requested); err != nil {
+		return nil, errServiceUnavailable
+	}
+	threshold := requested
+	var previous time.Time
+	err := s.pool.QueryRow(ctx, `SELECT requested_at FROM public.learning_course_syncs
+		WHERE user_id=$1 AND id<>$2 AND status IN ('needs_attention','failed') AND requested_at<$3
+		ORDER BY requested_at DESC LIMIT 1`, job.UserID, job.ID, requested).Scan(&previous)
+	if err == nil && requested.Sub(previous) <= 6*time.Hour {
+		threshold = previous
+	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, errServiceUnavailable
+	}
 	rows, err := s.pool.Query(ctx, `SELECT c.external_course_id,c.external_class_id,c.snapshot_version
-		FROM public.learning_courses c JOIN public.learning_course_syncs sync ON sync.user_id=c.user_id
-		WHERE sync.id=$1 AND c.cycle_key='current' AND c.synced_at>=sync.requested_at AND c.snapshot_version>0`, job.ID)
+		FROM public.learning_courses c
+		WHERE c.user_id=$1 AND c.cycle_key='current' AND c.snapshot_version>0 AND c.synced_at>=$2`, job.UserID, threshold)
 	if err != nil {
 		return nil, errServiceUnavailable
 	}

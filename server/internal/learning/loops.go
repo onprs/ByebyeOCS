@@ -756,18 +756,22 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 	}
 	if err := s.saveCourseSummaries(ctx, &job, account, courses); err != nil {
 		if !errors.Is(err, errLeaseLost) {
+			failure := failureOf(err)
+			s.opts.Logger.Warn("课程概要写入失败", "user_id", job.UserID, "class", string(failure.Class), "detail", failure.Detail)
 			s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 		}
 		return
 	}
 	completed, err := s.completedSyncCourses(ctx, job)
 	if err != nil {
+		s.opts.Logger.Warn("课程恢复进度读取失败", "user_id", job.UserID, "code", describe(err))
 		s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 		return
 	}
 	var snapshotVersion int64
 	processed := 0
 	partial := 0
+	transientPartial := 0
 	for _, course := range courses {
 		if version, ok := completed[course.ExternalCourseID+"/"+course.ExternalClassID]; ok {
 			processed++
@@ -786,6 +790,15 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		if err != nil {
 			failure := failureOf(err)
 			s.opts.Logger.Warn("课程结构读取失败", "user_id", job.UserID, "course_index", processed, "class", string(failure.Class), "detail", failure.Detail)
+			if failure.Class == FailureTransient {
+				// 单门课程的瞬态失败不能终止整次同步；保留旧快照，继续处理其他课程。
+				transientPartial++
+				processed++
+				if err := s.updateCourseSyncProgress(ctx, &job, processed); err != nil {
+					return
+				}
+				continue
+			}
 			if failure.Class != FailureCapabilityMissing {
 				s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 				return
@@ -809,6 +822,9 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 			if errors.Is(err, errLeaseLost) {
 				return
 			}
+			failure := failureOf(err)
+			s.opts.Logger.Warn("课程快照写入失败", "user_id", job.UserID, "course_index", processed,
+				"class", string(failure.Class), "detail", failure.Detail)
 			s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 			return
 		}
@@ -826,9 +842,14 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		}
 	}
 	status, errorCode := "succeeded", ""
-	if partial > 0 {
-		status, errorCode = "needs_attention", "course_structure_partial"
-		s.opts.Logger.Warn("课程同步部分完成", "user_id", job.UserID, "partial", partial, "total", len(courses))
+	if partial > 0 || transientPartial > 0 {
+		status = "needs_attention"
+		errorCode = "course_structure_partial"
+		if partial == 0 && transientPartial > 0 {
+			errorCode = "course_transient_partial"
+		}
+		s.opts.Logger.Warn("课程同步部分完成", "user_id", job.UserID, "partial", partial,
+			"transient", transientPartial, "total", len(courses))
 	}
 	if err := s.finishCourseSync(ctx, &job, status, errorCode, len(courses), snapshotVersion); err != nil {
 		s.opts.Logger.Warn("课程同步完成状态写入失败", "code", describe(err))

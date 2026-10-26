@@ -86,6 +86,8 @@ class CourseSyncState {
     switch (value.errorCode) {
       case 'course_structure_partial':
         return '部分课程结构待适配，已同步可用课程。';
+      case 'course_transient_partial':
+        return '部分课程暂时未读取，已同步可用课程。';
       case 'external_disabled':
         return '课程同步当前未开放，已有课程仍可查看。';
       case 'sync_batch_exceeded':
@@ -133,6 +135,7 @@ class CourseSyncController extends Notifier<CourseSyncState> {
   bool _disposed = false;
   bool _checkInFlight = false;
   bool _autoRequestFailed = false;
+  bool _autoRetryTried = false;
   DateTime? _lastCheckAt;
 
   @override
@@ -147,6 +150,7 @@ class CourseSyncController extends Notifier<CourseSyncState> {
     _disposed = false;
     _checkInFlight = false;
     _autoRequestFailed = false;
+    _autoRetryTried = false;
     _lastCheckAt = null;
     ref.watch(sessionEpochProvider);
     ref.watch(currentUserProvider);
@@ -213,6 +217,12 @@ class CourseSyncController extends Notifier<CourseSyncState> {
         return;
       }
       if (latest != null && latest.needsAttention) {
+        if (latest.errorCode == 'course_transient_partial' &&
+            !_autoRetryTried) {
+          _autoRetryTried = true;
+          await syncCourses(automatic: true);
+          return;
+        }
         _showResult(latest);
         return;
       }
