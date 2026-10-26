@@ -13,9 +13,9 @@ type courseListMetadata struct {
 }
 
 // parseCourseMetadata 以单门课程容器中的稳定入口关联封面，避免重复链接或缺图造成位置错配。
-func (p *Platform) parseCourseMetadata(payload []byte) map[string]courseListMetadata {
+func (p *Platform) parseCourseMetadata(root *htmlNode) map[string]courseListMetadata {
 	metadata := map[string]courseListMetadata{}
-	parseHTMLDocument(payload).walk(func(row *htmlNode) bool {
+	root.walk(func(row *htmlNode) bool {
 		if !row.hasClass("course") {
 			return true
 		}

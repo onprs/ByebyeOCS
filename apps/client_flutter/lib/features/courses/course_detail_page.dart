@@ -227,7 +227,7 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
               child: course.detailsPending
                   ? const InlineNotice(message: '课程内容待同步，同步完成后自动更新。')
                   : _tab == _CourseTab.chapters
-                      ? _buildChapters(context, detail.chapters, course)
+                      ? _buildChapters(context, detail.chapterTree, course)
                       : _buildResources(context, allResources),
             );
             if (!wide) return chapterCard;
@@ -269,7 +269,7 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
 
   Widget _buildChapters(
     BuildContext context,
-    List<CourseChapter> chapters,
+    List<CourseChapterNode> chapters,
     CourseSummary course,
   ) {
     if (chapters.isEmpty) {
@@ -285,7 +285,8 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
       children: [
         for (var index = 0; index < chapters.length; index++)
           _ChapterTile(
-            chapter: chapters[index],
+            key: ValueKey(chapters[index].chapter.id),
+            node: chapters[index],
             initiallyExpanded: index == 0,
             onOpenResource: _openResource,
             onOpenTaskPoint: _openTaskPoint,
@@ -402,9 +403,9 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
               _TaskPointFacts(attachment: attachment),
               const SizedBox(height: 16),
               Text(
-                attachment.hasPlaybackEvidence
-                    ? '已记录 ${formatDurationSeconds(attachment.playedSeconds)} 的播放信息。最终完成仍以平台确认结果为准。'
-                    : '当前没有可用的真实播放记录。执行观察不会替代平台确认。',
+                attachment.hasPlatformProgress
+                    ? '平台记录的学习时长为 ${formatDurationSeconds(attachment.playedSeconds)}，完成情况以平台核对结果为准。'
+                    : '平台暂未返回已学习时长，完成情况以平台核对结果为准。',
                 style: TextStyle(
                   color: sheetContext.colors.textSecondary,
                   height: 1.65,
@@ -429,13 +430,14 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
 
 class _ChapterTile extends StatefulWidget {
   const _ChapterTile({
-    required this.chapter,
+    super.key,
+    required this.node,
     required this.initiallyExpanded,
     required this.onOpenResource,
     required this.onOpenTaskPoint,
   });
 
-  final CourseChapter chapter;
+  final CourseChapterNode node;
   final bool initiallyExpanded;
   final ValueChanged<CourseAttachment> onOpenResource;
   final ValueChanged<CourseAttachment> onOpenTaskPoint;
@@ -450,7 +452,8 @@ class _ChapterTileState extends State<_ChapterTile> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final chapter = widget.chapter;
+    final node = widget.node;
+    final chapter = node.chapter;
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
@@ -475,7 +478,7 @@ class _ChapterTileState extends State<_ChapterTile> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      chapter.title,
+                      chapter.displayTitle,
                       style: TextStyle(
                         color: colors.text,
                         fontSize: 14,
@@ -485,13 +488,12 @@ class _ChapterTileState extends State<_ChapterTile> {
                   ),
                   const SizedBox(width: 10),
                   Text(
-                    chapter.taskPoints.isEmpty
+                    node.taskPointCount == 0
                         ? '无任务点'
-                        : '${chapter.confirmedCount} / ${chapter.taskPoints.length}',
+                        : '${node.confirmedCount} / ${node.taskPointCount}',
                     style: TextStyle(
-                      color: chapter.taskPoints.isNotEmpty &&
-                              chapter.confirmedCount ==
-                                  chapter.taskPoints.length
+                      color: node.taskPointCount > 0 &&
+                              node.confirmedCount == node.taskPointCount
                           ? colors.success
                           : colors.textSecondary,
                       fontSize: 12,
@@ -504,7 +506,7 @@ class _ChapterTileState extends State<_ChapterTile> {
           ),
           if (_expanded) ...[
             Divider(height: 1, color: colors.border),
-            if (chapter.attachments.isEmpty)
+            if (chapter.attachments.isEmpty && node.children.isEmpty)
               Padding(
                 padding: const EdgeInsets.all(14),
                 child: Align(
@@ -517,15 +519,35 @@ class _ChapterTileState extends State<_ChapterTile> {
                     ),
                   ),
                 ),
-              )
-            else
-              for (final attachment in chapter.attachments)
-                _AttachmentRow(
-                  attachment: attachment,
-                  onTap: attachment.isTaskPoint
-                      ? () => widget.onOpenTaskPoint(attachment)
-                      : () => widget.onOpenResource(attachment),
+              ),
+            for (final attachment in chapter.attachments)
+              _AttachmentRow(
+                attachment: attachment,
+                onTap: attachment.isTaskPoint
+                    ? () => widget.onOpenTaskPoint(attachment)
+                    : () => widget.onOpenResource(attachment),
+              ),
+            if (node.children.isNotEmpty)
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  node.depth < 4 ? 10 : 0,
+                  8,
+                  node.depth < 4 ? 6 : 0,
+                  0,
                 ),
+                child: Column(
+                  children: [
+                    for (var index = 0; index < node.children.length; index++)
+                      _ChapterTile(
+                        key: ValueKey(node.children[index].chapter.id),
+                        node: node.children[index],
+                        initiallyExpanded: index == 0,
+                        onOpenResource: widget.onOpenResource,
+                        onOpenTaskPoint: widget.onOpenTaskPoint,
+                      ),
+                  ],
+                ),
+              ),
           ],
         ],
       ),
@@ -651,11 +673,13 @@ class _TaskPointFacts extends StatelessWidget {
           const SizedBox(height: 8),
           _fact(
             context,
-            '实际播放记录',
-            attachment.hasPlaybackEvidence
+            '平台记录时长',
+            attachment.hasPlatformProgress
                 ? formatDurationSeconds(attachment.playedSeconds)
-                : '无播放记录',
+                : '未记录',
           ),
+          const SizedBox(height: 8),
+          _fact(context, '实际播放记录', '无播放记录'),
           if (attachment.progressCheckedAt != null) ...[
             const SizedBox(height: 8),
             _fact(

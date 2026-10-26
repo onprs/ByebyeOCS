@@ -111,6 +111,7 @@ class CourseAttachment {
   final String title;
   final String? kind;
   final double? durationSeconds;
+  /// 平台卡片返回的学习时长，不构成真实播放证据。
   final double? playedSeconds;
   final bool platformPassed;
   final bool passedKnown;
@@ -130,7 +131,7 @@ class CourseAttachment {
     };
   }
 
-  bool get hasPlaybackEvidence {
+  bool get hasPlatformProgress {
     final played = playedSeconds;
     return isTaskPoint && played != null && played > 0;
   }
@@ -158,13 +159,21 @@ class CourseChapter {
     required this.id,
     required this.title,
     this.externalId,
+    this.parentExternalId,
+    this.number = '',
+    this.isGroup = false,
     this.sortOrder = 0,
     this.attachments = const <CourseAttachment>[],
   });
 
   final String id;
   final String? externalId;
+  final String? parentExternalId;
+  final String number;
+  final bool isGroup;
   final String title;
+
+  String get displayTitle => number.isEmpty ? title : '$number $title';
   final int sortOrder;
   final List<CourseAttachment> attachments;
 
@@ -185,6 +194,9 @@ class CourseChapter {
     return CourseChapter(
       id: readString(map, 'id') ?? '',
       externalId: readString(map, 'external_id'),
+      parentExternalId: readString(map, 'parent_external_id'),
+      number: readString(map, 'number') ?? '',
+      isGroup: readBool(map, 'is_group') ?? false,
       title: readString(map, 'title') ?? '未命名章节',
       sortOrder: readInt(map, 'sort_order') ?? 0,
       attachments: asList(map['attachments'])
@@ -196,6 +208,73 @@ class CourseChapter {
   }
 }
 
+/// 目录构建和子树计数各遍历一次，折叠界面无需反复扫描全部章节与附件。
+class CourseChapterNode {
+  CourseChapterNode({
+    required this.chapter,
+    required this.depth,
+    required this.children,
+  })  : taskPointCount = chapter.attachments
+                .where((item) => item.isTaskPoint)
+                .length +
+            children.fold(0, (total, child) => total + child.taskPointCount),
+        confirmedCount = chapter.attachments
+                .where((item) =>
+                    item.isTaskPoint && item.passedKnown && item.platformPassed)
+                .length +
+            children.fold(0, (total, child) => total + child.confirmedCount);
+
+  final CourseChapter chapter;
+  final int depth;
+  final List<CourseChapterNode> children;
+  final int taskPointCount;
+  final int confirmedCount;
+
+  Iterable<CourseChapterNode> get subtree sync* {
+    yield this;
+    for (final child in children) {
+      yield* child.subtree;
+    }
+  }
+
+  Iterable<CourseChapter> get selectableChapters => subtree
+      .where((node) => !node.chapter.isGroup)
+      .map((node) => node.chapter);
+
+  static List<CourseChapterNode> build(List<CourseChapter> chapters) {
+    final externalIds = chapters.map((chapter) => chapter.externalId).toSet();
+    final children = <String, List<CourseChapter>>{};
+    final roots = <CourseChapter>[];
+    for (final chapter in chapters) {
+      final parent = chapter.parentExternalId;
+      if (parent == null || parent.isEmpty || !externalIds.contains(parent)) {
+        roots.add(chapter);
+      } else {
+        children.putIfAbsent(parent, () => []).add(chapter);
+      }
+    }
+    final visited = <CourseChapter>{};
+    CourseChapterNode buildNode(CourseChapter chapter, int depth) {
+      visited.add(chapter);
+      return CourseChapterNode(
+        chapter: chapter,
+        depth: depth,
+        children: [
+          for (final child in children[chapter.externalId] ?? <CourseChapter>[])
+            if (!visited.contains(child)) buildNode(child, depth + 1),
+        ],
+      );
+    }
+
+    final result = <CourseChapterNode>[];
+    for (final chapter in [...roots, ...chapters]) {
+      // 服务端拒绝环；这里兼容旧数据，确保异常节点也不会重复或消失。
+      if (!visited.contains(chapter)) result.add(buildNode(chapter, 0));
+    }
+    return result;
+  }
+}
+
 class CourseDetail {
   const CourseDetail({
     required this.summary,
@@ -204,6 +283,9 @@ class CourseDetail {
 
   final CourseSummary summary;
   final List<CourseChapter> chapters;
+
+  /// 保持 API 的平台目录顺序；旧数据缺少父节点时仍按根节点展示。
+  List<CourseChapterNode> get chapterTree => CourseChapterNode.build(chapters);
 
   static CourseDetail parse(Object? raw) {
     final map = asObject(raw) ?? const <String, dynamic>{};

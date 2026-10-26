@@ -149,6 +149,8 @@ type PlatformAttachment struct {
 type PlatformChapter struct {
 	ExternalID       string
 	ParentExternalID string
+	Number           string
+	IsGroup          bool
 	Title            string
 	SortOrder        int
 	Attachments      []PlatformAttachment

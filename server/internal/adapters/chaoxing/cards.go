@@ -143,61 +143,50 @@ func (p *Platform) readTaskAttachments(ctx context.Context, session Session, ref
 	return attachments, pending, nil
 }
 
-// chapterPendingCounts 限定在对应章节节点内查找计数，防止匹配到下一章节的0。
+// chapterPendingCounts 为独立卡片核对保留按章节隔离的读取入口。
 func chapterPendingCounts(payload []byte, order []string) map[string]int {
-	root, err := html.Parse(strings.NewReader(string(payload)))
-	if err != nil {
-		return map[string]int{}
-	}
-	wanted := map[string]bool{}
+	wanted := make(map[string]bool, len(order))
 	for _, id := range order {
 		wanted["cur"+id] = true
 	}
 	result, conflicted := map[string]int{}, map[string]bool{}
-	var walk func(*html.Node)
-	walk = func(node *html.Node) {
-		id := cardAttr(node, "id")
-		if wanted[id] {
-			var find func(*html.Node)
-			find = func(item *html.Node) {
-				if item != node && wanted[cardAttr(item, "id")] {
-					return
+	parseHTMLDocument(payload).walk(func(node *htmlNode) bool {
+		if wanted[node.attr("id")] {
+			id := strings.TrimPrefix(node.attr("id"), "cur")
+			if value, known := catalogPendingCount(node); known {
+				if previous, exists := result[id]; exists && previous != value {
+					conflicted[id] = true
 				}
-				if strings.Contains(" "+cardAttr(item, "class")+" ", " catalog_points_yi ") {
-					var content strings.Builder
-					var collect func(*html.Node)
-					collect = func(part *html.Node) {
-						if part.Type == html.TextNode {
-							content.WriteString(part.Data)
-						}
-						for child := part.FirstChild; child != nil; child = child.NextSibling {
-							collect(child)
-						}
-					}
-					collect(item)
-					if value, err := strconv.Atoi(strings.TrimSpace(content.String())); err == nil && value >= 0 {
-						key := strings.TrimPrefix(id, "cur")
-						if previous, exists := result[key]; exists && previous != value {
-							conflicted[key] = true
-						}
-						result[key] = value
-					}
-				}
-				for child := item.FirstChild; child != nil; child = child.NextSibling {
-					find(child)
-				}
+				result[id] = value
 			}
-			find(node)
 		}
-		for child := node.FirstChild; child != nil; child = child.NextSibling {
-			walk(child)
-		}
-	}
-	walk(root)
-	for key := range conflicted {
-		delete(result, key)
+		return true
+	})
+	for id := range conflicted {
+		delete(result, id)
 	}
 	return result
+}
+
+// catalogPendingCount 只读取当前行，子章节和冲突计数不能用作当前章节的完成事实。
+func catalogPendingCount(row *htmlNode) (int, bool) {
+	value, known, invalid := 0, false, false
+	row.walk(func(node *htmlNode) bool {
+		if node != row && strings.HasPrefix(node.attr("id"), "cur") && isDigits(strings.TrimPrefix(node.attr("id"), "cur")) {
+			return false
+		}
+		if node.hasClass("catalog_points_yi") {
+			count, err := strconv.Atoi(htmlNodeText(node))
+			if err != nil || count < 0 || known && value != count {
+				invalid = true
+			} else {
+				value, known = count, true
+			}
+			return false
+		}
+		return true
+	})
+	return value, known && !invalid
 }
 
 // attachmentKind 将平台文件类型和任务种类统一为可安排的公开分类。

@@ -173,19 +173,19 @@ func (s *Service) validatePlanOwnership(ctx context.Context, tx pgx.Tx, userID s
 		return validation("课程不存在或不属于当前用户")
 	}
 	if input.Scope.Kind == "selected" {
+		courseIDs, chapterIDs := make([]string, 0, len(input.Scope.Chapters)), make([]string, 0, len(input.Scope.Chapters))
 		for _, chapter := range input.Scope.Chapters {
-			if len(chapter.ChapterID) != 36 {
-				return validation("章节标识无效")
-			}
-			var exists bool
-			if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM public.learning_chapters
-				WHERE id = $1 AND course_id = $2 AND user_id = $3)`,
-				chapter.ChapterID, chapter.CourseID, userID).Scan(&exists); err != nil {
-				return errServiceUnavailable
-			}
-			if !exists {
-				return validation("章节不存在或不属于所选课程")
-			}
+			courseIDs = append(courseIDs, chapter.CourseID)
+			chapterIDs = append(chapterIDs, chapter.ChapterID)
+		}
+		var count int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM unnest($1::uuid[], $2::uuid[]) AS selected(course_id, chapter_id)
+			JOIN public.learning_chapters ch ON ch.id=selected.chapter_id AND ch.course_id=selected.course_id
+			WHERE ch.user_id=$3 AND NOT ch.is_group`, courseIDs, chapterIDs, userID).Scan(&count); err != nil {
+			return errServiceUnavailable
+		}
+		if count != len(chapterIDs) {
+			return validation("章节不存在、不属于所选课程或仅为目录分组")
 		}
 	}
 	return nil

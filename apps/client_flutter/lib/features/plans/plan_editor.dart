@@ -586,34 +586,47 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
           ),
         ),
       );
-      for (final chapter in detail.chapters) {
-        final key = '$courseId::${chapter.id}';
+      for (final node in detail.chapterTree.expand((root) => root.subtree)) {
+        final keys = node.selectableChapters
+            .map((chapter) => '$courseId::${chapter.id}')
+            .toSet();
+        final selectedCount = keys.where(_chapterKeys.contains).length;
         children.add(
           Material(
             color: Colors.transparent,
             child: CheckboxListTile(
-              value: _chapterKeys.contains(key),
+              value: selectedCount == 0
+                  ? false
+                  : selectedCount == keys.length
+                      ? true
+                      : null,
+              tristate: true,
               dense: true,
-              contentPadding: EdgeInsets.zero,
+              contentPadding: EdgeInsets.only(
+                left: node.depth.clamp(0, 4) * 12.0,
+              ),
               controlAffinity: ListTileControlAffinity.leading,
               title: Text(
-                chapter.title,
-                style: const TextStyle(fontSize: 13),
+                node.chapter.displayTitle,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: node.chapter.isGroup ? FontWeight.w600 : null,
+                ),
               ),
               subtitle: Text(
-                chapter.taskPoints.isEmpty
+                node.taskPointCount == 0
                     ? '本章暂无任务点'
-                    : '${chapter.taskPoints.length} 个任务点',
+                    : '${node.taskPointCount} 个任务点',
                 style: const TextStyle(fontSize: 12),
               ),
-              onChanged: _saving
+              onChanged: _saving || keys.isEmpty
                   ? null
-                  : (value) {
+                  : (_) {
                       setState(() {
-                        if (value == true) {
-                          _chapterKeys.add(key);
+                        if (selectedCount != keys.length) {
+                          _chapterKeys.addAll(keys);
                         } else {
-                          _chapterKeys.remove(key);
+                          _chapterKeys.removeAll(keys);
                         }
                         _dirty = true;
                         _saveError = null;

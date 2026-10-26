@@ -185,11 +185,11 @@ func TestDiscoveryBoundsConcurrencyAndKeepsOrder(t *testing.T) {
 func TestEmptyCatalogRequiresMatchingContext(t *testing.T) {
 	ref := learning.PlatformCourseRef{ExternalCourseID: "101", ExternalClassID: "202", CPI: "303"}
 	page := `<input id="courseId" value="101"><input id="clazzId" value="202"><input id="cpi" value="303"><div class="nodata"><p>暂无章节内容</p></div>`
-	if !isEmptyCourseCatalog([]byte(page), ref) {
+	if !emptyCourseCatalog(parseHTMLDocument([]byte(page)), ref) {
 		t.Fatal("已核对课程的空目录没有识别")
 	}
 	ref.CPI = "304"
-	if isEmptyCourseCatalog([]byte(page), ref) || isEmptyCourseCatalog([]byte(`<div class="nodata">暂无章节内容</div>`), ref) {
+	if emptyCourseCatalog(parseHTMLDocument([]byte(page)), ref) || emptyCourseCatalog(parseHTMLDocument([]byte(`<div class="nodata">暂无章节内容</div>`)), ref) {
 		t.Fatal("缺少或不匹配的课程上下文被当成空目录")
 	}
 	for _, payload := range []string{`mArg={broken}`, `mArg="";mArg={broken}`, `mArg=$mArg;`, `mArg="";mArg=$mArg;mArg={broken}`, `mArg={"unexpected":true};`, `<html>mArg 读取失败</html>`} {

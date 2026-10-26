@@ -2,7 +2,6 @@ package learning
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -131,6 +130,9 @@ func (s *Service) retryCourseSync(ctx context.Context, job *courseSyncJob, code 
 
 // applyCourseSnapshot 在事务内写一次完整快照和规范任务；调用方已在事务外完成网络读取。
 func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, account accountRecord, snapshot PlatformCourseSnapshot) (int64, error) {
+	if err := validateCourseChapters(snapshot.Chapters); err != nil {
+		return 0, err
+	}
 	now := s.now()
 	cycle := snapshot.Course.CycleKey
 	if cycle == "" {
@@ -186,113 +188,16 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 		if err != nil {
 			return errServiceUnavailable
 		}
-		chapterCount := len(snapshot.Chapters)
-		attachmentCount, taskPointCount, incompleteCount := 0, 0, 0
-		seenChapterExternal := make(map[string]bool, len(snapshot.Chapters))
-		for position, chapter := range snapshot.Chapters {
-			if chapter.ExternalID == "" || seenChapterExternal[chapter.ExternalID] {
-				return Fail(FailureInvalidTask, "课程快照章节标识缺失或重复")
-			}
-			seenChapterExternal[chapter.ExternalID] = true
-			// 同一章节可能重复返回同一媒体对象；数据库按对象唯一保存，合并而不是中止整门课程。
-			chapter.Attachments = dedupeSnapshotAttachments(chapter.Attachments)
-			// 章节行以账号内稳定外部章节标识复用，避免每次同步重生成 UUID
-			// 让“选定章节”安排和历史关联失效。快照版本只表示最近一次出现。
-			var chapterID string
-			err := tx.QueryRow(ctx, `SELECT id::text FROM public.learning_chapters
-				WHERE course_id = $1 AND user_id = $2 AND external_id = $3
-				ORDER BY snapshot_version DESC LIMIT 1 FOR UPDATE`,
-				courseID, account.UserID, chapter.ExternalID).Scan(&chapterID)
-			switch {
-			case err == nil:
-				_, err = tx.Exec(ctx, `UPDATE public.learning_chapters
-					SET snapshot_version = $3, parent_external_id = $4, title = $5, sort_order = $6
-					WHERE id = $1 AND user_id = $2`,
-					chapterID, account.UserID, version, truncate(chapter.ParentExternalID, 128),
-					truncate(chapter.Title, 200), position)
-			case errors.Is(err, pgx.ErrNoRows):
-				chapterID = newID()
-				_, err = tx.Exec(ctx, `INSERT INTO public.learning_chapters
-					(id, course_id, user_id, snapshot_version, external_id, parent_external_id, title, sort_order)
-					VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-					chapterID, courseID, account.UserID, version, chapter.ExternalID,
-					truncate(chapter.ParentExternalID, 128), truncate(chapter.Title, 200), position)
-			}
-			if err != nil {
-				return errServiceUnavailable
-			}
-			for index, attachment := range chapter.Attachments {
-				attachmentCount++
-				taskPoint := attachment.TaskPointID != ""
-				if taskPoint {
-					taskPointCount++
-					if !attachment.Passed {
-						incompleteCount++
-					}
-				}
-				attachmentID := newID()
-				played := attachment.PlayedSeconds
-				if played < 0 {
-					played = 0
-				}
-				if attachment.CardIndex < 0 || attachment.CardIndex > 31 {
-					return Fail(FailureInvalidTask, "课程快照附件卡片页码无效")
-				}
-				_, err := tx.Exec(ctx, `INSERT INTO public.learning_attachments
-					(id, course_id, chapter_id, user_id, snapshot_version, external_object_id, task_point_id,
-					 kind, title, duration_seconds, played_seconds, platform_passed, passed_known,
-					 is_task_point, counted_incomplete, sort_order, card_index, progress_checked_at)
-					VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`,
-					attachmentID, courseID, chapterID, account.UserID, version, attachment.ObjectID,
-					attachment.TaskPointID, truncate(attachment.Kind, 32), truncate(attachment.Title, 200),
-					nonNegative(attachment.DurationSeconds), played, attachment.Passed, attachment.PassedKnown,
-					taskPoint, taskPoint && !attachment.Passed, index, attachment.CardIndex,
-					checkedAt(attachment.PassedKnown, now))
-				if err != nil {
-					return errServiceUnavailable
-				}
-				if !taskPoint {
-					continue
-				}
-				check := map[string]any{
-					"status": CheckUnconfirmed, "passed": false, "source": "course_snapshot",
-					"checked_at": now, "play_time_seconds": played,
-				}
-				state, platformStatus, confirmedAt := StatePending, CheckUnconfirmed, any(nil)
-				if attachment.PassedKnown && attachment.Passed {
-					check["status"] = CheckConfirmed
-					check["passed"] = true
-					state, platformStatus, confirmedAt = StateConfirmed, CheckConfirmed, now
-				}
-				checkJSON, _ := json.Marshal(check)
-				taskTitle := firstNonEmpty(attachment.Title, attachment.ObjectID)
-				_, err = tx.Exec(ctx, `INSERT INTO public.learning_tasks
-					(id, user_id, course_id, chapter_id, attachment_id, provider, identity_namespace,
-					 identity_fingerprint, cycle_key, course_external_id, class_external_id, chapter_external_id,
-					 task_point_id, task_kind, title, state, platform_status, platform_checked_at,
-					 confirmed_at, platform_check, updated_at)
-					VALUES ($1, $2, $3, $4, $5, 'chaoxing', $6, $7, $8, $9, $10, $11, $12, $13, $14,
-					        $15, $16, $17, $18, $19, $17)
-					ON CONFLICT (provider, identity_namespace, identity_fingerprint, course_external_id,
-					             class_external_id, chapter_external_id, task_point_id, cycle_key)
-					DO UPDATE SET course_id = EXCLUDED.course_id, chapter_id = EXCLUDED.chapter_id,
-						attachment_id = EXCLUDED.attachment_id, title = EXCLUDED.title,
-						task_kind = EXCLUDED.task_kind, updated_at = EXCLUDED.updated_at`,
-					newID(), account.UserID, courseID, chapterID, attachmentID, account.Namespace,
-					account.Fingerprint, cycle, snapshot.Course.ExternalCourseID, snapshot.Course.ExternalClassID,
-					chapter.ExternalID, attachment.TaskPointID, truncate(attachment.Kind, 32), taskTitle,
-					state, platformStatus, now, confirmedAt, checkJSON)
-				if err != nil {
-					return errServiceUnavailable
-				}
-			}
+		counts, err := writeCourseSnapshotContent(ctx, tx, account, courseID, cycle, version, snapshot, now)
+		if err != nil {
+			return err
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO public.learning_course_snapshots
 			(id, course_id, user_id, version, captured_at, adapter, chapter_count, attachment_count,
 			 task_point_count, incomplete_task_point_count, skipped_attachment_count)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			newID(), courseID, account.UserID, version, now, truncate(snapshot.Adapter, 64),
-			chapterCount, attachmentCount, taskPointCount, incompleteCount, snapshot.SkippedAttachments)
+			counts.Chapters, counts.Attachments, counts.TaskPoints, counts.Incomplete, snapshot.SkippedAttachments)
 		if err != nil {
 			return errServiceUnavailable
 		}
@@ -329,8 +234,8 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 		return writeOutbox(ctx, tx, outboxEvent{
 			Topic: "course.snapshot_created", ResourceType: "course", ResourceID: courseID,
 			UserID: account.UserID, ResourceVersion: version,
-			Payload: map[string]any{"snapshot_version": version, "task_point_count": taskPointCount,
-				"incomplete_task_point_count": incompleteCount},
+			Payload: map[string]any{"snapshot_version": version, "task_point_count": counts.TaskPoints,
+				"incomplete_task_point_count": counts.Incomplete},
 		})
 	})
 	if err != nil {
@@ -486,48 +391,76 @@ func markStaleSnapshotTasks(ctx context.Context, tx pgx.Tx, userID, courseID str
 	return len(marked), nil
 }
 
-// dedupeSnapshotAttachments 合并同一章节中重复返回的媒体对象。
-// 平台偶发把同一 object_id 放进多张卡片；数据库按章节和对象唯一保存。
+// dedupeSnapshotAttachments 以媒体对象和任务点共同去重。不同任务点的进度不能合并。
 func dedupeSnapshotAttachments(items []PlatformAttachment) []PlatformAttachment {
 	if len(items) < 2 {
 		return items
 	}
-	positions := make(map[string]int, len(items))
+	type attachmentKey struct{ object, task string }
+	positions := make(map[attachmentKey]int, len(items))
 	unique := make([]PlatformAttachment, 0, len(items))
 	for _, item := range items {
-		if item.ObjectID == "" {
-			unique = append(unique, item)
-			continue
-		}
-		position, exists := positions[item.ObjectID]
-		if !exists {
-			positions[item.ObjectID] = len(unique)
+		key := attachmentKey{item.ObjectID, item.TaskPointID}
+		position, exists := positions[key]
+		if item.ObjectID == "" || !exists {
+			positions[key] = len(unique)
 			unique = append(unique, item)
 			continue
 		}
 		current := &unique[position]
-		if current.TaskPointID == "" && item.TaskPointID != "" {
-			current.TaskPointID = item.TaskPointID
-			current.CardIndex = item.CardIndex
-		}
-		if current.Kind == "" && item.Kind != "" {
-			current.Kind = item.Kind
-		}
-		if len(item.Title) > len(current.Title) {
-			current.Title = item.Title
-		}
-		if item.DurationSeconds > current.DurationSeconds {
-			current.DurationSeconds = item.DurationSeconds
-		}
+		mergeAttachmentMetadata(current, item)
 		if item.PlayedSeconds > current.PlayedSeconds {
 			current.PlayedSeconds = item.PlayedSeconds
 		}
 		if item.PassedKnown && (!current.PassedKnown || item.Passed) {
 			current.PassedKnown, current.Passed = true, item.Passed
 		}
-		if current.CardIndex < 0 || current.CardIndex > 31 {
-			current.CardIndex = item.CardIndex
+	}
+	// 同一对象只有一个任务点时，普通附件仅补充名称/类型/时长，不能提供任务完成事实。
+	taskPositions := make(map[string]int, len(unique))
+	for index, item := range unique {
+		if item.TaskPointID == "" {
+			continue
+		}
+		if _, exists := taskPositions[item.ObjectID]; exists {
+			taskPositions[item.ObjectID] = -1
+		} else {
+			taskPositions[item.ObjectID] = index
 		}
 	}
-	return unique
+	for _, item := range unique {
+		if taskIndex, exists := taskPositions[item.ObjectID]; item.TaskPointID == "" && exists && taskIndex >= 0 {
+			mergeAttachmentMetadata(&unique[taskIndex], item)
+		}
+	}
+	result := make([]PlatformAttachment, 0, len(unique))
+	emitted := make(map[int]bool, len(unique))
+	for index, item := range unique {
+		if emitted[index] {
+			continue
+		}
+		if taskIndex, exists := taskPositions[item.ObjectID]; item.TaskPointID == "" && exists && taskIndex >= 0 {
+			if emitted[taskIndex] {
+				continue
+			}
+			result = append(result, unique[taskIndex])
+			emitted[taskIndex] = true
+			continue
+		}
+		result = append(result, item)
+		emitted[index] = true
+	}
+	return result
+}
+
+func mergeAttachmentMetadata(current *PlatformAttachment, item PlatformAttachment) {
+	if current.Kind == "" {
+		current.Kind = item.Kind
+	}
+	if current.Title == "" {
+		current.Title = item.Title
+	}
+	if current.DurationSeconds == 0 {
+		current.DurationSeconds = item.DurationSeconds
+	}
 }

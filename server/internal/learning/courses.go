@@ -348,11 +348,14 @@ type AttachmentView struct {
 }
 
 type ChapterView struct {
-	ID          string           `json:"id"`
-	ExternalID  string           `json:"external_id"`
-	Title       string           `json:"title"`
-	SortOrder   int              `json:"sort_order"`
-	Attachments []AttachmentView `json:"attachments"`
+	ID               string           `json:"id"`
+	ExternalID       string           `json:"external_id"`
+	ParentExternalID string           `json:"parent_external_id"`
+	Number           string           `json:"number"`
+	IsGroup          bool             `json:"is_group"`
+	Title            string           `json:"title"`
+	SortOrder        int              `json:"sort_order"`
+	Attachments      []AttachmentView `json:"attachments"`
 }
 
 type CourseDetail struct {
@@ -360,19 +363,22 @@ type CourseDetail struct {
 	Chapters []ChapterView `json:"chapters"`
 }
 
-// GetCourse 读取当前快照；旧快照保留但不出现在正常界面。
+// GetCourse 在同一个只读快照中读取概要、章节和附件，避免同步原地复用章节行时混用版本。
 func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (CourseDetail, error) {
 	var detail CourseDetail
 	if !web.ValidID(courseID) {
 		return detail, errNotFound
 	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return detail, errServiceUnavailable
+	}
+	defer tx.Rollback(ctx)
 	var coverSource string
-	err := s.pool.QueryRow(ctx, `SELECT c.id::text, c.title, c.teacher, c.term, c.cover_source_url, c.external_course_id,
+	err = tx.QueryRow(ctx, `SELECT c.id::text, c.title, c.teacher, c.term, c.cover_source_url, c.external_course_id,
 		c.external_class_id, c.snapshot_version, c.synced_at,
 		COALESCE(s.chapter_count, 0), COALESCE(s.task_point_count, 0), COALESCE(s.incomplete_task_point_count, 0),
-		COALESCE((SELECT count(*) FROM public.learning_attachments a
-			WHERE a.course_id = c.id AND a.user_id = c.user_id AND a.snapshot_version = c.snapshot_version
-			  AND NOT a.is_task_point), 0)
+		COALESCE(s.attachment_count - s.task_point_count, 0)
 		FROM public.learning_courses c
 		LEFT JOIN public.learning_course_snapshots s ON s.course_id = c.id AND s.user_id = c.user_id AND s.version = c.snapshot_version
 		WHERE c.id = $1 AND c.user_id = $2`, courseID, actor.ID).Scan(
@@ -388,7 +394,7 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 	detail.CoverURL = courseCoverURL(detail.ID, coverSource)
 	now := s.now()
 	detail.Stale = detail.SyncedAt == nil || now.Sub(*detail.SyncedAt) > s.opts.CourseSnapshotTTL
-	rows, err := s.pool.Query(ctx, `SELECT id::text, external_id, title, sort_order
+	rows, err := tx.Query(ctx, `SELECT id::text, external_id, parent_external_id, chapter_number, is_group, title, sort_order
 		FROM public.learning_chapters
 		WHERE course_id = $1 AND user_id = $2 AND snapshot_version = $3
 		ORDER BY sort_order, external_id`, courseID, actor.ID, detail.SnapshotVersion)
@@ -400,7 +406,7 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 	index := map[string]int{}
 	for rows.Next() {
 		var item ChapterView
-		if err := rows.Scan(&item.ID, &item.ExternalID, &item.Title, &item.SortOrder); err != nil {
+		if err := rows.Scan(&item.ID, &item.ExternalID, &item.ParentExternalID, &item.Number, &item.IsGroup, &item.Title, &item.SortOrder); err != nil {
 			return detail, errServiceUnavailable
 		}
 		item.Attachments = []AttachmentView{}
@@ -410,7 +416,8 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 	if err := rows.Err(); err != nil {
 		return detail, errServiceUnavailable
 	}
-	attachmentRows, err := s.pool.Query(ctx, `SELECT chapter_id::text, id::text, external_object_id,
+	rows.Close()
+	attachmentRows, err := tx.Query(ctx, `SELECT chapter_id::text, id::text, external_object_id,
 		task_point_id, kind, title, duration_seconds, played_seconds, platform_passed, passed_known,
 		is_task_point, counted_incomplete, progress_checked_at
 		FROM public.learning_attachments
@@ -433,6 +440,10 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 		}
 	}
 	if err := attachmentRows.Err(); err != nil {
+		return detail, errServiceUnavailable
+	}
+	attachmentRows.Close()
+	if err := tx.Commit(ctx); err != nil {
 		return detail, errServiceUnavailable
 	}
 	detail.Chapters = chapters

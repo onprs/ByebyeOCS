@@ -272,6 +272,9 @@ class PlanDraft {
     if (scopeKind == 'selected' && chapters.isEmpty) {
       errors.add('选择章节范围时，请至少勾选一个章节');
     }
+    if (scopeKind == 'selected' && chapters.length > 200) {
+      errors.add('选定范围最多包含 200 个章节，可缩小范围或选择全部章节');
+    }
     if (priority < 0 || priority > 100) errors.add('优先级设置无效');
     if (questionPolicy.enabled && questionPolicy.modelOfferingId == null) {
       errors.add('开启题库策略时必须选择一个已发布模型');

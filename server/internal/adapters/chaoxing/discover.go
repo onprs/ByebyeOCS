@@ -20,7 +20,6 @@ import (
 
 var (
 	courseLinkPattern = regexp.MustCompile(`stucoursemiddle\?[^\s"'<>]+`)
-	knowledgePattern  = regexp.MustCompile(`toOld\(\s*'(\d+)'\s*,\s*'(\d+)'\s*,\s*'(\d+)'`)
 	cardsPattern      = regexp.MustCompile(`\bmArg\s*=\s*`)
 )
 
@@ -143,7 +142,8 @@ func (p *Platform) ListCourses(ctx context.Context, sessionBytes []byte) ([]lear
 		return nil, learning.Fail(learning.FailureCapabilityMissing, "课程列表结构未识别")
 	}
 	names := []string{}
-	parseHTMLDocument(payload).walk(func(node *htmlNode) bool {
+	root := parseHTMLDocument(payload)
+	root.walk(func(node *htmlNode) bool {
 		for _, class := range strings.Fields(node.attr("class")) {
 			if strings.HasPrefix(class, "course-name") {
 				name := strings.TrimSpace(node.attr("title"))
@@ -183,7 +183,7 @@ func (p *Platform) ListCourses(ctx context.Context, sessionBytes []byte) ([]lear
 			courses[index].Title = names[index]
 		}
 	}
-	metadata := p.parseCourseMetadata(payload)
+	metadata := p.parseCourseMetadata(root)
 	for index := range courses {
 		course := &courses[index]
 		if item, known := metadata[course.ExternalCourseID+"/"+course.ExternalClassID+"/"+course.CPI]; known {
@@ -197,71 +197,6 @@ func (p *Platform) ListCourses(ctx context.Context, sessionBytes []byte) ([]lear
 		}
 	}
 	return courses, nil
-}
-
-func (p *Platform) catalog(ctx context.Context, session Session, course learning.PlatformCourseRef) ([]string, map[string]int, error) {
-	order, pending, _, err := p.catalogDetails(ctx, session, course)
-	return order, pending, err
-}
-
-func (p *Platform) catalogDetails(ctx context.Context, session Session, course learning.PlatformCourseRef) ([]string, map[string]int, map[string]string, error) {
-	query := url.Values{"courseid": {course.ExternalCourseID}, "clazzid": {course.ExternalClassID},
-		"cpi": {course.CPI}, "ut": {"s"}}
-	payload, err := p.do(ctx, session, http.MethodGet, p.options.endpoints.Catalog, query, "catalog")
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	page := string(payload)
-	matches := knowledgePattern.FindAllStringSubmatch(page, -1)
-	if len(matches) == 0 {
-		if isEmptyCourseCatalog(payload, course) {
-			return []string{}, map[string]int{}, map[string]string{}, nil
-		}
-		return nil, nil, nil, learning.Fail(learning.FailureCapabilityMissing, "课程目录结构未识别")
-	}
-	seen := map[string]bool{}
-	order := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if match[1] != course.ExternalCourseID || match[3] != course.ExternalClassID {
-			return nil, nil, nil, learning.Fail(learning.FailureCapabilityMissing, "课程目录上下文与请求不一致")
-		}
-		knowledge := match[2]
-		if knowledge == "" || seen[knowledge] {
-			continue
-		}
-		seen[knowledge] = true
-		order = append(order, knowledge)
-	}
-	if len(order) > p.options.MaxChapters {
-		return nil, nil, nil, learning.Fail(learning.FailureCapabilityMissing, "课程章节数量超出同步上限，未保存不完整目录")
-	}
-	titles := map[string]string{}
-	parseHTMLDocument(payload).walk(func(node *htmlNode) bool {
-		knowledge := strings.TrimPrefix(node.attr("id"), "cur")
-		if seen[knowledge] && strings.HasPrefix(node.attr("id"), "cur") {
-			titles[knowledge] = strings.TrimSpace(node.attr("title"))
-		}
-		return true
-	})
-	return order, chapterPendingCounts(payload, order), titles, nil
-}
-
-func isEmptyCourseCatalog(payload []byte, course learning.PlatformCourseRef) bool {
-	expected := map[string]string{"courseId": course.ExternalCourseID, "clazzId": course.ExternalClassID, "cpi": course.CPI}
-	seen, empty, invalid := map[string]bool{}, false, false
-	parseHTMLDocument(payload).walk(func(node *htmlNode) bool {
-		if value, ok := expected[node.attr("id")]; ok && node.tag == "input" {
-			if value == "" || value != node.attr("value") || seen[node.attr("id")] {
-				invalid = true
-			}
-			seen[node.attr("id")] = true
-		}
-		if node.hasClass("nodata") && strings.TrimSpace(htmlNodeText(node)) == "暂无章节内容" {
-			empty = true
-		}
-		return true
-	})
-	return empty && !invalid && len(seen) == len(expected)
 }
 
 func (p *Platform) cardsURL(course learning.PlatformCourseRef, knowledge string) string {
@@ -470,18 +405,21 @@ func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, cour
 		return learning.PlatformCourseSnapshot{}, err
 	}
 	defer cleanup()
-	order, pending, titles, err := p.catalogDetails(ctx, session, course)
+	catalog, err := p.catalogDetails(ctx, session, course)
 	if err != nil {
 		return learning.PlatformCourseSnapshot{}, err
 	}
 	snapshot := learning.PlatformCourseSnapshot{Course: course, Adapter: adapterVersion,
-		Chapters: make([]learning.PlatformChapter, len(order))}
-	skippedCounts := make([]int, len(order))
+		Chapters: catalog.Chapters}
+	skippedCounts := make([]int, len(catalog.Chapters))
 	group, readCtx := errgroup.WithContext(ctx)
 	jobs := make(chan int)
 	group.Go(func() error {
 		defer close(jobs)
-		for index := range order {
+		for index, chapter := range catalog.Chapters {
+			if chapter.IsGroup {
+				continue
+			}
 			select {
 			case jobs <- index:
 			case <-readCtx.Done():
@@ -490,7 +428,7 @@ func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, cour
 		}
 		return nil
 	})
-	for range min(4, len(order)) {
+	for range min(4, len(catalog.Chapters)) {
 		group.Go(func() error {
 			for index := range jobs {
 				select {
@@ -498,7 +436,7 @@ func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, cour
 				case <-readCtx.Done():
 					return readCtx.Err()
 				}
-				knowledge := order[index]
+				knowledge := catalog.Chapters[index].ExternalID
 				attachments, skipped, err := p.readCards(readCtx, session, course, knowledge)
 				<-p.discoverSlots
 				if err != nil {
@@ -514,14 +452,13 @@ func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, cour
 					item := &attachments[itemIndex]
 					// 章节计数只能补足恰好一个任务点的状态，不能分摊到多个附件。
 					if !item.PassedKnown && taskPointCount == 1 {
-						if count, ok := pending[knowledge]; ok {
+						if count, ok := catalog.Pending[knowledge]; ok {
 							item.PassedKnown, item.Passed = true, count == 0
 						}
 					}
 				}
 				skippedCounts[index] = skipped
-				snapshot.Chapters[index] = learning.PlatformChapter{ExternalID: knowledge, Title: titles[knowledge],
-					SortOrder: index, Attachments: attachments}
+				snapshot.Chapters[index].Attachments = attachments
 			}
 			return nil
 		})

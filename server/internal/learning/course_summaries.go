@@ -76,7 +76,10 @@ func (s *Service) completedSyncCourses(ctx context.Context, job courseSyncJob) (
 	}
 	rows, err := s.pool.Query(ctx, `SELECT c.external_course_id,c.external_class_id,c.snapshot_version
 		FROM public.learning_courses c
-		WHERE c.user_id=$1 AND c.cycle_key='current' AND c.snapshot_version>0 AND c.synced_at>=$2`, job.UserID, threshold)
+		JOIN public.learning_course_snapshots snapshot ON snapshot.course_id=c.id AND snapshot.user_id=c.user_id
+			AND snapshot.version=c.snapshot_version
+		WHERE c.user_id=$1 AND c.cycle_key='current' AND c.snapshot_version>0 AND c.synced_at>=$2
+			AND ($3='' OR snapshot.adapter=$3)`, job.UserID, threshold, s.opts.Platform.Capabilities().Adapter)
 	if err != nil {
 		return nil, errServiceUnavailable
 	}

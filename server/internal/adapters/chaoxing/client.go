@@ -26,7 +26,7 @@ import (
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
 )
 
-const adapterVersion = "chaoxing-read-v1"
+const adapterVersion = "chaoxing-read-v2"
 
 const loginKey = "u2oh6Vu^HWe4_AES"
 
