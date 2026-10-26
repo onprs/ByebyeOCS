@@ -18,6 +18,7 @@ import (
 )
 
 const (
+	coverUserAgent      = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 	maxCoverSourceBytes = 2 << 20
 	maxCoverBytes       = 256 << 10
 	maxCoverPixels      = 4_000_000
@@ -76,7 +77,7 @@ func (p *Platform) FetchCourseCover(ctx context.Context, source string) (learnin
 		return unavailable()
 	}
 	// 封面是公开静态资源。独立的无Cookie客户端不接触学习会话或请求中的认证头。
-	request.Header.Set("User-Agent", "Mozilla/5.0 ByebyeOCS-Cover/1.0")
+	request.Header.Set("User-Agent", coverUserAgent)
 	request.Header.Set("Accept", "image/jpeg,image/png,image/webp,image/gif")
 	request.Header.Set("Referer", "https://mooc2-ans.chaoxing.com/")
 	response, err := p.coverClient.Do(request)

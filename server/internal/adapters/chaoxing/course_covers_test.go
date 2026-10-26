@@ -92,6 +92,9 @@ func TestCoverFetchDoesNotForwardSessionAndReturnsSmallJPEG(t *testing.T) {
 		if r.Header.Get("Cookie") != "" || r.Header.Get("Authorization") != "" {
 			t.Error("封面请求携带了学习或业务会话")
 		}
+		if !strings.Contains(r.Header.Get("User-Agent"), "Mozilla/5.0") || !strings.Contains(r.Header.Get("User-Agent"), "Chrome/") {
+			t.Error("图片CDN会拒绝非浏览器标识，封面请求必须使用标准浏览器的User-Agent")
+		}
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(payload)
 	}))
