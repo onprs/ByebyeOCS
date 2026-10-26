@@ -1131,7 +1131,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Error'
+                $ref: '#/components/schemas/ErrorResponse'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/course-syncs:
@@ -3857,6 +3857,7 @@ components:
           - conflict
           - content_expired
           - cost_confirmation_required
+          - cover_unavailable
           - csrf_invalid
           - enrollment_failed
           - export_expired

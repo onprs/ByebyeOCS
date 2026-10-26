@@ -27,8 +27,7 @@ final _coverBytes = Uint8List.fromList(
   ),
 );
 
-String _coverPathFor(String courseId) =>
-    'courses/$courseId/cover?v=$_digest';
+String _coverPathFor(String courseId) => 'courses/$courseId/cover?v=$_digest';
 
 String _uuidFor(int index) =>
     '33333333-3333-4333-8333-${index.toString().padLeft(12, '0')}';
@@ -169,6 +168,21 @@ void main() {
       expect(captured!.headers['Authorization'], 'Bearer access-cover');
       expect(captured!.url.toString(), isNot(contains('access-cover')));
       expect(captured!.url.toString(), isNot(contains('token')));
+    });
+
+    test('超出封面尺寸预算的响应不进入客户端缓存', () async {
+      final repository = _repository(MockClient((request) async {
+        return http.Response.bytes(
+          Uint8List(256 * 1024 + 1),
+          200,
+          headers: {'content-type': 'image/jpeg'},
+        );
+      }));
+      await expectLater(
+        repository.fetchCourseCover(_coverPath),
+        throwsA(isA<ApiException>()
+            .having((error) => error.code, 'code', 'invalid_cover_data')),
+      );
     });
 
     test('非法地址不发起请求，响应不是图片时不返回数据', () async {

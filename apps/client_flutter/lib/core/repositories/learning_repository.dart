@@ -47,6 +47,7 @@ class LearningRepository {
     final contentType = response.headers['content-type'] ?? '';
     if (bytes == null ||
         bytes.isEmpty ||
+        bytes.length > 256 * 1024 ||
         !contentType.toLowerCase().startsWith('image/')) {
       throw const ApiException(
         statusCode: 0,
