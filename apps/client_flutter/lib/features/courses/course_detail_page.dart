@@ -8,6 +8,7 @@ import '../../core/models/course.dart';
 import '../../core/platform/external_link.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
+import 'course_cover.dart';
 import 'courses_controller.dart';
 
 enum _CourseTab { chapters, resources }
@@ -93,7 +94,11 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
           clipBehavior: Clip.antiAlias,
           child: Column(
             children: [
-              CourseArt(seed: course.id, height: context.isNarrow ? 108 : 142),
+              CourseCover(
+                path: course.coverUrl,
+                seed: course.id,
+                height: context.isNarrow ? 108 : 142,
+              ),
               Padding(
                 padding: EdgeInsets.all(context.isNarrow ? 18 : 24),
                 child: LayoutBuilder(

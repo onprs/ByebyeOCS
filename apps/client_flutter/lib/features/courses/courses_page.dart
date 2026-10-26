@@ -10,6 +10,7 @@ import '../../core/models/course.dart';
 import '../../app/scroll_controllers.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
+import 'course_cover.dart';
 import 'course_sync_controller.dart';
 import 'course_sync_notice.dart';
 import 'courses_controller.dart';
@@ -384,7 +385,7 @@ class _CourseCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              CourseArt(seed: course.id),
+              CourseCover(path: course.coverUrl, seed: course.id),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
                 child: Column(

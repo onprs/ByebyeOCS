@@ -13,6 +13,7 @@ import '../../core/models/task.dart';
 import '../../core/models/wallet.dart';
 import '../../design/components.dart';
 import '../../design/theme.dart';
+import '../courses/course_cover.dart';
 import '../courses/course_sync_controller.dart';
 import '../courses/course_sync_notice.dart';
 import '../courses/courses_controller.dart';
@@ -543,14 +544,28 @@ class _LearningOverview extends StatelessWidget {
             ],
           ),
         );
-        if (!wide) return content;
+        if (!wide) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              CourseCover(
+                path: course?.coverUrl,
+                seed: course?.id ?? 'empty',
+                height: 132,
+                background: false,
+              ),
+              content,
+            ],
+          );
+        }
         return Row(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(child: content),
             SizedBox(
               width: 230,
-              child: CourseArt(
+              child: CourseCover(
+                path: course?.coverUrl,
                 seed: course?.id ?? 'empty',
                 height: 280,
                 background: false,
@@ -906,7 +921,7 @@ class _CourseCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            CourseArt(seed: course.id, height: 118),
+            CourseCover(path: course.coverUrl, seed: course.id, height: 118),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
               child: Column(

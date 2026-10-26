@@ -13,6 +13,7 @@ class CourseSummary {
     this.snapshotVersion,
     this.syncedAt,
     this.stale = false,
+    this.coverUrl,
   });
 
   final String id;
@@ -26,6 +27,9 @@ class CourseSummary {
   final int? snapshotVersion;
   final DateTime? syncedAt;
   final bool stale;
+
+  /// API 根目录相对的封面地址；缺失或为空表示没有可用来源。
+  final String? coverUrl;
 
   int get confirmedTaskPoints =>
       (taskPointCount - incompleteTaskPointCount).clamp(0, taskPointCount);
@@ -49,8 +53,40 @@ class CourseSummary {
       snapshotVersion: readInt(map, 'snapshot_version'),
       syncedAt: readDateTime(map, 'synced_at'),
       stale: readBool(map, 'stale') ?? false,
+      coverUrl: readString(map, 'cover_url'),
     );
   }
+}
+
+final _courseCoverUuid = RegExp(
+  r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+);
+
+final _courseCoverDigest = RegExp(r'^[0-9a-f]{64}$');
+
+/// 课程封面地址只接受 API 根目录相对的 `courses/<UUID>/cover?v=<摘要>`。
+///
+/// 绝对网址、根路径、路径穿越与其他接口都会让认证头或请求落到非预期位置，
+/// 因此这里重建规范化地址；无法确认时返回 null，由调用方使用占位图。
+String? normalizeCourseCoverPath(String? raw) {
+  final value = raw?.trim();
+  if (value == null || value.isEmpty || value.length > 256) return null;
+  final uri = Uri.tryParse(value);
+  if (uri == null) return null;
+  if (uri.hasScheme || uri.hasAuthority || uri.hasFragment) return null;
+  if (value.startsWith('/') || value.startsWith('\\')) return null;
+  final segments = uri.pathSegments;
+  if (segments.length != 3) return null;
+  if (segments[0] != 'courses' || segments[2] != 'cover') return null;
+  final courseId = segments[1];
+  if (!_courseCoverUuid.hasMatch(courseId)) return null;
+  final query = uri.queryParametersAll;
+  if (query.keys.any((key) => key != 'v')) return null;
+  final digests = query['v'] ?? const <String>[];
+  if (digests.length > 1) return null;
+  final digest = digests.isEmpty ? null : digests.first;
+  if (digest != null && !_courseCoverDigest.hasMatch(digest)) return null;
+  return 'courses/$courseId/cover${digest == null ? '' : '?v=$digest'}';
 }
 
 class CourseAttachment {

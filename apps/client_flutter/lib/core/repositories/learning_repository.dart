@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import '../api/api_client.dart';
 import '../api/api_error.dart';
 import '../api/api_response.dart';
@@ -28,6 +30,31 @@ class LearningRepository {
   Future<CourseDetail> fetchCourse(String id) async {
     final response = await _api.get('courses/$id');
     return CourseDetail.parse(response.data);
+  }
+
+  /// 读取课程封面二进制；地址必须是课程接口给出的根目录相对地址。
+  Future<Uint8List> fetchCourseCover(String path) async {
+    final normalized = normalizeCourseCoverPath(path);
+    if (normalized == null) {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'invalid_cover_path',
+        message: '封面地址无效',
+      );
+    }
+    final response = await _api.get(normalized, parseJson: false);
+    final bytes = response.bytes;
+    final contentType = response.headers['content-type'] ?? '';
+    if (bytes == null ||
+        bytes.isEmpty ||
+        !contentType.toLowerCase().startsWith('image/')) {
+      throw const ApiException(
+        statusCode: 0,
+        code: 'invalid_cover_data',
+        message: '封面数据无效',
+      );
+    }
+    return bytes;
   }
 
   Future<CourseSyncResult> requestCourseSync() async {
