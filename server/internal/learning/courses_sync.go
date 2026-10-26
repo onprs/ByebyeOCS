@@ -194,6 +194,8 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 				return Fail(FailureInvalidTask, "课程快照章节标识缺失或重复")
 			}
 			seenChapterExternal[chapter.ExternalID] = true
+			// 同一章节可能重复返回同一媒体对象；数据库按对象唯一保存，合并而不是中止整门课程。
+			chapter.Attachments = dedupeSnapshotAttachments(chapter.Attachments)
 			// 章节行以账号内稳定外部章节标识复用，避免每次同步重生成 UUID
 			// 让“选定章节”安排和历史关联失效。快照版本只表示最近一次出现。
 			var chapterID string
@@ -482,4 +484,50 @@ func markStaleSnapshotTasks(ctx context.Context, tx pgx.Tx, userID, courseID str
 		}
 	}
 	return len(marked), nil
+}
+
+// dedupeSnapshotAttachments 合并同一章节中重复返回的媒体对象。
+// 平台偶发把同一 object_id 放进多张卡片；数据库按章节和对象唯一保存。
+func dedupeSnapshotAttachments(items []PlatformAttachment) []PlatformAttachment {
+	if len(items) < 2 {
+		return items
+	}
+	positions := make(map[string]int, len(items))
+	unique := make([]PlatformAttachment, 0, len(items))
+	for _, item := range items {
+		if item.ObjectID == "" {
+			unique = append(unique, item)
+			continue
+		}
+		position, exists := positions[item.ObjectID]
+		if !exists {
+			positions[item.ObjectID] = len(unique)
+			unique = append(unique, item)
+			continue
+		}
+		current := &unique[position]
+		if current.TaskPointID == "" && item.TaskPointID != "" {
+			current.TaskPointID = item.TaskPointID
+			current.CardIndex = item.CardIndex
+		}
+		if current.Kind == "" && item.Kind != "" {
+			current.Kind = item.Kind
+		}
+		if len(item.Title) > len(current.Title) {
+			current.Title = item.Title
+		}
+		if item.DurationSeconds > current.DurationSeconds {
+			current.DurationSeconds = item.DurationSeconds
+		}
+		if item.PlayedSeconds > current.PlayedSeconds {
+			current.PlayedSeconds = item.PlayedSeconds
+		}
+		if item.PassedKnown && (!current.PassedKnown || item.Passed) {
+			current.PassedKnown, current.Passed = true, item.Passed
+		}
+		if current.CardIndex < 0 || current.CardIndex > 31 {
+			current.CardIndex = item.CardIndex
+		}
+	}
+	return unique
 }
