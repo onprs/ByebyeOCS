@@ -63,9 +63,12 @@ func (s *Service) completedSyncCourses(ctx context.Context, job courseSyncJob) (
 	}
 	threshold := requested
 	var previous time.Time
+	// 选择最近6小时内最早的一次失败请求，覆盖该次及后续失败请求中已完成的课程；
+	// 不能只取最新失败（它可能尚未完成任何课程），否则恢复会从第一门重跑。
 	err := s.pool.QueryRow(ctx, `SELECT requested_at FROM public.learning_course_syncs
-		WHERE user_id=$1 AND id<>$2 AND status IN ('needs_attention','failed') AND requested_at<$3
-		ORDER BY requested_at DESC LIMIT 1`, job.UserID, job.ID, requested).Scan(&previous)
+		WHERE user_id=$1 AND id<>$2 AND status IN ('needs_attention','failed')
+		  AND requested_at<$3 AND requested_at>=$4
+		ORDER BY requested_at ASC LIMIT 1`, job.UserID, job.ID, requested, requested.Add(-6*time.Hour)).Scan(&previous)
 	if err == nil && requested.Sub(previous) <= 6*time.Hour {
 		threshold = previous
 	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
