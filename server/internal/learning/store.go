@@ -356,7 +356,10 @@ func truncate(value string, max int) string {
 // safeReason 防止把换行、控制字符写入审计或错误码。
 func safeCode(value string) string {
 	value = strings.TrimSpace(value)
-	if value == "" || len(value) > 64 {
+	if value == "" {
+		return ""
+	}
+	if len(value) > 64 {
 		return "unknown"
 	}
 	for _, r := range value {

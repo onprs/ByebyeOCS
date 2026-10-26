@@ -107,7 +107,7 @@ func TestIdempotencyKeyAndSafeCode(t *testing.T) {
 		t.Fatal("幂等键长度校验错误")
 	}
 	if safeCode("rate_limited") != "rate_limited" || safeCode("bad code") != "unknown" ||
-		safeCode("") != "unknown" {
+		safeCode("") != "" {
 		t.Fatal("安全错误码清洗错误")
 	}
 }
