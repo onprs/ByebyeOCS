@@ -192,7 +192,7 @@ func TestEmptyCatalogRequiresMatchingContext(t *testing.T) {
 	if isEmptyCourseCatalog([]byte(page), ref) || isEmptyCourseCatalog([]byte(`<div class="nodata">暂无章节内容</div>`), ref) {
 		t.Fatal("缺少或不匹配的课程上下文被当成空目录")
 	}
-	for _, payload := range []string{`mArg={broken}`, `mArg="";mArg={broken}`, `mArg={"unexpected":true};`, `<html>mArg 读取失败</html>`} {
+	for _, payload := range []string{`mArg={broken}`, `mArg="";mArg={broken}`, `mArg=$mArg;`, `mArg="";mArg=$mArg;mArg={broken}`, `mArg={"unexpected":true};`, `<html>mArg 读取失败</html>`} {
 		if _, _, err := parseAttachments([]byte(payload)); err == nil {
 			t.Fatalf("损坏的配置被当成空章节：%s", payload)
 		}

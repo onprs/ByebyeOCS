@@ -401,9 +401,14 @@ func emptyCardConfig(payload []byte) bool {
 	if len(matches) == 0 {
 		return false
 	}
-	for _, match := range matches {
+	for index, match := range matches {
+		tail := bytes.TrimSpace(payload[match[1]:])
 		var value any
-		if json.NewDecoder(bytes.NewReader(payload[match[1]:])).Decode(&value) != nil {
+		if json.NewDecoder(bytes.NewReader(tail)).Decode(&value) != nil {
+			// 平台空卡片模板保留未展开的$mArg，try/catch后继续使用前面的空初始化。
+			if index > 0 && bytes.HasPrefix(tail, []byte("$mArg;")) {
+				continue
+			}
 			return false
 		}
 		switch typed := value.(type) {

@@ -115,9 +115,14 @@ func TestCatalogLimitDoesNotSilentlyDropChapters(t *testing.T) {
 }
 
 func TestEmptyChapterCardsAreNotCapabilityFailure(t *testing.T) {
-	attachments, skipped, err := parseAttachments([]byte(`<script>mArg = "";</script>`))
-	if err != nil || len(attachments) != 0 || skipped != 0 {
-		t.Fatalf("空章节卡片应视为无任务点: %v %d %d", err, len(attachments), skipped)
+	for _, page := range []string{
+		`<script>mArg = "";</script>`,
+		`<script>(function(){mArg="";try{mArg=$mArg;}catch(e){}uParse(".ans-cc",null,mArg);})();</script>`,
+	} {
+		attachments, skipped, err := parseAttachments([]byte(page))
+		if err != nil || len(attachments) != 0 || skipped != 0 {
+			t.Fatalf("空章节卡片应视为无任务点: %v %d %d", err, len(attachments), skipped)
+		}
 	}
 	if _, _, err := parseAttachments([]byte(`<html>登录已失效</html>`)); err == nil {
 		t.Fatal("没有卡片配置的页面仍应失败")
