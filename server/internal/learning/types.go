@@ -110,6 +110,18 @@ type PlatformCourse struct {
 	Title            string
 	Teacher          string
 	Term             string
+	CoverURL         string
+	CoverKnown       bool
+}
+
+// CourseCoverImage 是已校验、缩小并去除原始元数据的静态JPEG。
+type CourseCoverImage struct {
+	Bytes []byte
+}
+
+// CourseCoverPlatform 使用无平台Cookie的公开请求读取课程封面。
+type CourseCoverPlatform interface {
+	FetchCourseCover(context.Context, string) (CourseCoverImage, error)
 }
 
 // PlatformCourseRef 用于读取指定课程与任务卡片。

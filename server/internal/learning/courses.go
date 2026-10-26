@@ -254,6 +254,7 @@ type CourseSummary struct {
 	Title                    string     `json:"title"`
 	Teacher                  string     `json:"teacher"`
 	Term                     string     `json:"term"`
+	CoverURL                 string     `json:"cover_url,omitempty"`
 	ExternalCourseID         string     `json:"external_course_id"`
 	ExternalClassID          string     `json:"external_class_id"`
 	SnapshotVersion          int64      `json:"snapshot_version"`
@@ -279,7 +280,7 @@ func (s *Service) ListCourses(ctx context.Context, actor Actor, filter CourseFil
 		return Page[CourseSummary]{}, err
 	}
 	search := truncate(filter.Search, 80)
-	rows, err := s.pool.Query(ctx, `SELECT c.id::text, c.title, c.teacher, c.term, c.external_course_id,
+	rows, err := s.pool.Query(ctx, `SELECT c.id::text, c.title, c.teacher, c.term, c.cover_source_url, c.external_course_id,
 		c.external_class_id, c.snapshot_version, c.synced_at, c.updated_at,
 		COALESCE(s.chapter_count, 0), COALESCE(s.task_point_count, 0), COALESCE(s.incomplete_task_point_count, 0),
 		COALESCE(s.attachment_count - s.task_point_count, 0)
@@ -299,13 +300,15 @@ func (s *Service) ListCourses(ctx context.Context, actor Actor, filter CourseFil
 	now := s.now()
 	for rows.Next() {
 		var item CourseSummary
+		var coverSource string
 		var updated time.Time
-		if err := rows.Scan(&item.ID, &item.Title, &item.Teacher, &item.Term, &item.ExternalCourseID,
+		if err := rows.Scan(&item.ID, &item.Title, &item.Teacher, &item.Term, &coverSource, &item.ExternalCourseID,
 			&item.ExternalClassID, &item.SnapshotVersion, &item.SyncedAt, &updated,
 			&item.ChapterCount, &item.TaskPointCount, &item.IncompleteTaskPointCount,
 			&item.ResourceCount); err != nil {
 			return Page[CourseSummary]{}, errServiceUnavailable
 		}
+		item.CoverURL = courseCoverURL(item.ID, coverSource)
 		item.Stale = item.SyncedAt == nil || now.Sub(*item.SyncedAt) > s.opts.CourseSnapshotTTL
 		items = append(items, item)
 		times = append(times, updated)
@@ -363,7 +366,8 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 	if !web.ValidID(courseID) {
 		return detail, errNotFound
 	}
-	err := s.pool.QueryRow(ctx, `SELECT c.id::text, c.title, c.teacher, c.term, c.external_course_id,
+	var coverSource string
+	err := s.pool.QueryRow(ctx, `SELECT c.id::text, c.title, c.teacher, c.term, c.cover_source_url, c.external_course_id,
 		c.external_class_id, c.snapshot_version, c.synced_at,
 		COALESCE(s.chapter_count, 0), COALESCE(s.task_point_count, 0), COALESCE(s.incomplete_task_point_count, 0),
 		COALESCE((SELECT count(*) FROM public.learning_attachments a
@@ -372,7 +376,7 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 		FROM public.learning_courses c
 		LEFT JOIN public.learning_course_snapshots s ON s.course_id = c.id AND s.user_id = c.user_id AND s.version = c.snapshot_version
 		WHERE c.id = $1 AND c.user_id = $2`, courseID, actor.ID).Scan(
-		&detail.ID, &detail.Title, &detail.Teacher, &detail.Term, &detail.ExternalCourseID,
+		&detail.ID, &detail.Title, &detail.Teacher, &detail.Term, &coverSource, &detail.ExternalCourseID,
 		&detail.ExternalClassID, &detail.SnapshotVersion, &detail.SyncedAt,
 		&detail.ChapterCount, &detail.TaskPointCount, &detail.IncompleteTaskPointCount, &detail.ResourceCount)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -381,6 +385,7 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 	if err != nil {
 		return detail, errServiceUnavailable
 	}
+	detail.CoverURL = courseCoverURL(detail.ID, coverSource)
 	now := s.now()
 	detail.Stale = detail.SyncedAt == nil || now.Sub(*detail.SyncedAt) > s.opts.CourseSnapshotTTL
 	rows, err := s.pool.Query(ctx, `SELECT id::text, external_id, title, sort_order

@@ -1088,6 +1088,52 @@ paths:
         schema:
           type: string
           format: uuid
+  /api/v1/courses/{id}/cover:
+    get:
+      operationId: getCourseCover
+      tags:
+      - user-learning
+      summary: 读取当前用户课程的真实封面
+      description: 图片经过本站校验、缩图与共享缓存；每次读取仍检查课程归属。
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      - name: v
+        in: query
+        schema:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+      security:
+      - userCookie: []
+      - userBearer: []
+      responses:
+        '200':
+          description: 最长边768像素、最大256KiB的静态JPEG，支持私有缓存及ETag
+          content:
+            image/jpeg:
+              schema:
+                type: string
+                format: binary
+          headers:
+            ETag:
+              schema:
+                type: string
+        '304':
+          description: 已鉴权且封面内容未变化
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: 课程不属于当前用户、没有封面或封面暂不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/course-syncs:
     post:
       operationId: requestCourseSync
@@ -5263,6 +5309,11 @@ components:
     CourseSummary:
       type: object
       properties:
+        cover_url:
+          type: string
+          readOnly: true
+          description: API根目录相对封面路径，缺失表示没有可用来源；使用与课程接口相同的认证。
+          example: courses/550e8400-e29b-41d4-a716-446655440000/cover?v=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         id:
           type: string
           format: uuid
@@ -5314,6 +5365,10 @@ components:
     CourseDetail:
       type: object
       properties:
+        cover_url:
+          type: string
+          readOnly: true
+          description: API根目录相对封面路径，缺失表示没有可用来源；使用与课程接口相同的认证。
         id:
           type: string
           format: uuid

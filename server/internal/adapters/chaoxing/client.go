@@ -265,6 +265,8 @@ type Platform struct {
 	factory       clientFactory
 	resourceCache resourceCache
 	discoverSlots chan struct{}
+	coverSlots    chan struct{}
+	coverClient   *http.Client
 }
 
 type platformOptions struct {
@@ -310,9 +312,10 @@ func NewPlatform(options Options) (*Platform, error) {
 			return nil, errors.New("上游入口必须是 HTTPS 地址")
 		}
 	}
+	factory := clientFactory{options: options.httpOptions, limiter: &rateLimiter{}}
 	return &Platform{options: platformOptions{Options: options, endpoints: endpoints},
-		factory:       clientFactory{options: options.httpOptions, limiter: &rateLimiter{}},
-		discoverSlots: make(chan struct{}, 4)}, nil
+		factory: factory, discoverSlots: make(chan struct{}, 4), coverSlots: make(chan struct{}, 2),
+		coverClient: factory.client(nil)}, nil
 }
 
 func (p *Platform) Capabilities() learning.PlatformCapabilities {

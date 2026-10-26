@@ -32,16 +32,18 @@ func (s *Service) saveCourseSummaries(ctx context.Context, job *courseSyncJob, a
 		for _, course := range courses {
 			batch.Queue(`INSERT INTO public.learning_courses
 				(id,user_id,provider,identity_namespace,identity_fingerprint,external_course_id,
-				 external_class_id,external_cpi,cycle_key,title,teacher,term,updated_at)
-				VALUES ($1,$2,'chaoxing',$3,$4,$5,$6,$7,'current',COALESCE(NULLIF($8,''),$5),$9,$10,$11)
+				 external_class_id,external_cpi,cycle_key,title,teacher,term,updated_at,cover_source_url)
+				VALUES ($1,$2,'chaoxing',$3,$4,$5,$6,$7,'current',COALESCE(NULLIF($8,''),$5),$9,$10,$11,$12)
 				ON CONFLICT (user_id,provider,external_course_id,external_class_id,cycle_key)
 				DO UPDATE SET title=COALESCE(NULLIF($8,''),learning_courses.title),
 				 teacher=COALESCE(NULLIF($9,''),learning_courses.teacher),
 				 term=COALESCE(NULLIF($10,''),learning_courses.term), external_cpi=EXCLUDED.external_cpi,
+				 cover_source_url=CASE WHEN $13 THEN EXCLUDED.cover_source_url ELSE learning_courses.cover_source_url END,
 				 updated_at=EXCLUDED.updated_at, version=learning_courses.version+1`,
 				newID(), account.UserID, account.Namespace, account.Fingerprint,
 				course.ExternalCourseID, course.ExternalClassID, course.CPI,
-				truncate(course.Title, 200), truncate(course.Teacher, 128), truncate(course.Term, 64), now)
+				truncate(course.Title, 200), truncate(course.Teacher, 128), truncate(course.Term, 64), now,
+				truncate(course.CoverURL, 2048), course.CoverKnown)
 		}
 		if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 			return errServiceUnavailable

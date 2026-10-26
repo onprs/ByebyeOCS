@@ -29,6 +29,7 @@ func (s *Service) Register(mux *http.ServeMux) {
 	}
 	user("GET /api/v1/courses", s.handleListCourses)
 	user("GET /api/v1/courses/{id}", s.handleGetCourse)
+	user("GET /api/v1/courses/{id}/cover", s.handleCourseCover)
 	user("POST /api/v1/course-syncs", s.handleRequestCourseSync)
 	user("GET /api/v1/course-syncs/latest", s.handleLatestCourseSync)
 	user("GET /api/v1/course-syncs/{id}", s.handleGetCourseSync)

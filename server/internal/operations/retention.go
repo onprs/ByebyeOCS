@@ -19,6 +19,7 @@ func (s *Service) Cleanup(ctx context.Context) error {
 	}
 	statements := []string{
 		`DELETE FROM public.learning_resource_cache WHERE cache_key IN (SELECT cache_key FROM public.learning_resource_cache WHERE expires_at<now() LIMIT 500)`,
+		`DELETE FROM public.learning_course_cover_cache WHERE source_hash IN (SELECT source_hash FROM public.learning_course_cover_cache WHERE expires_at<now() LIMIT 500)`,
 		`UPDATE public.data_requests SET result_ciphertext=NULL,status='expired',updated_at=now() WHERE id IN (SELECT id FROM public.data_requests WHERE kind='export' AND expires_at<now() AND result_ciphertext IS NOT NULL LIMIT 500)`,
 		`UPDATE public.data_requests SET status='pending',updated_at=now() WHERE id IN (SELECT id FROM public.data_requests WHERE kind='export' AND status='processing' AND updated_at<now()-interval '5 minutes' LIMIT 500)`,
 		`DELETE FROM public.outbox_events WHERE id IN (SELECT id FROM public.outbox_events e WHERE published_at<now()-interval '7 days' AND NOT EXISTS (SELECT 1 FROM public.stream_entries s WHERE s.event_id=e.id) LIMIT 500)`,

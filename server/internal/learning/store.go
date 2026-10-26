@@ -15,6 +15,7 @@ import (
 	"github.com/onprs/ByebyeOCS/server/internal/platform/audit"
 	"github.com/onprs/ByebyeOCS/server/internal/platform/fault"
 	"github.com/onprs/ByebyeOCS/server/internal/web"
+	"golang.org/x/sync/singleflight"
 )
 
 // Service 是学习业务的唯一入口。构造后先迁移数据库，再调用 Register/Run。
@@ -22,12 +23,13 @@ type Service struct {
 	pool *pgxpool.Pool
 	opts Options
 
-	mu      sync.Mutex
-	running map[string]runningExecution
-	closed  bool
-	started bool
-	runCtx  context.Context
-	workers sync.WaitGroup
+	mu           sync.Mutex
+	running      map[string]runningExecution
+	closed       bool
+	started      bool
+	runCtx       context.Context
+	workers      sync.WaitGroup
+	coverFlights singleflight.Group
 }
 
 func New(pool *pgxpool.Pool, options *Options) (*Service, error) {

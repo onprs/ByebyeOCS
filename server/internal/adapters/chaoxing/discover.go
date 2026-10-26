@@ -183,6 +183,16 @@ func (p *Platform) ListCourses(ctx context.Context, sessionBytes []byte) ([]lear
 			courses[index].Title = names[index]
 		}
 	}
+	metadata := p.parseCourseMetadata(payload)
+	for index := range courses {
+		course := &courses[index]
+		if item, known := metadata[course.ExternalCourseID+"/"+course.ExternalClassID+"/"+course.CPI]; known {
+			if item.Title != "" {
+				course.Title = item.Title
+			}
+			course.CoverURL, course.CoverKnown = item.CoverURL, true
+		}
+	}
 	return courses, nil
 }
 
