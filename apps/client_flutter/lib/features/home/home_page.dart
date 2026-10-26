@@ -592,8 +592,9 @@ class _LearningOverview extends StatelessWidget {
               CourseCover(
                 path: course?.coverUrl,
                 seed: course?.id ?? 'empty',
-                height: 132,
+                height: 170,
                 background: false,
+                fit: BoxFit.contain,
               ),
               content,
             ],
@@ -604,7 +605,7 @@ class _LearningOverview extends StatelessWidget {
           children: [
             Expanded(child: content),
             SizedBox(
-              width: 230,
+              width: 300,
               child: CourseCover(
                 path: course?.coverUrl,
                 seed: course?.id ?? 'empty',
