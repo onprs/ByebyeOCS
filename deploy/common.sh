@@ -124,14 +124,28 @@ owner_and_group() {
   fi
 }
 
+
+# 逐级显式创建新目录，已有父目录的权限保持不变。
+# install -d 的 -m 只保证目标权限，不能依赖其隐式父目录绕过私有 umask。
+create_traversable_dir() {
+  local path=$1 parent
+  if [[ -e "$path" || -L "$path" ]]; then
+    [[ -d "$path" ]] || die "路径已存在且不是目录：$path"
+    return 0
+  fi
+  parent=${path%/*}
+  [[ -n "$parent" ]] || parent=/
+  create_traversable_dir "$parent"
+  install -d -m 0755 -- "$path"
+}
+
 create_owned_dir() {
   local path=$1 owner=$2 group=$3 mode=$4
   if [[ -e "$path" && ! -d "$path" ]]; then
     die "路径已存在且不是目录：$path"
   fi
-  # 缺失的父目录必须可遍历，否则自定义布局下服务用户无法进入 0700 的目标目录。
-  # 目标目录随后收紧到指定权限。
-  install -d -m 0755 "$path"
+  # 新建父目录可遍历，目标目录收紧到指定权限；已有私有目录不临时放宽。
+  create_traversable_dir "$path"
   chmod "$mode" "$path"
   if [[ "${NO_SERVICE_USER:-0}" != 1 ]]; then
     chown "$owner:$group" "$path"
@@ -159,7 +173,7 @@ lock_prefix() {
   local prefix=$1
   require_cmd flock
   if [[ ! -d "$prefix" ]]; then
-    install -d -m 0755 "$prefix" || die "无法创建程序目录：$prefix"
+    create_traversable_dir "$prefix" || die "无法创建程序目录：$prefix"
   fi
   exec 8>"$prefix/.deploy.lock" || die "无法创建部署锁：$prefix/.deploy.lock"
   chmod 0600 "$prefix/.deploy.lock" 2>/dev/null || true

@@ -87,6 +87,7 @@ for dir in "$DEEP" "$DEEP/etc" "$DEEP/var" "$DEEP/var/lib"; do
   (( (8#$mode & 1) != 0 )) || fail "自定义布局上级目录不可遍历：$dir $mode"
 done
 [[ "$(stat -c %a "$DEEP/etc/byebyeocs")" == 700 && "$(stat -c %a "$DEEP/var/lib/byebyeocs")" == 700 ]] || fail "自定义布局未收紧配置/数据目录"
+[[ "$(stat -c %a "$TMP")" == 700 ]] || fail "安装放宽了已有私有父目录"
 ok "自定义布局创建可遍历上级目录并收紧配置/数据目录"
 
 [[ -z "$(find "$PREFIX/releases/1.0.0" -type d ! -perm -005 -print -quit)" ]] || fail "专用服务用户无法遍历版本目录"
