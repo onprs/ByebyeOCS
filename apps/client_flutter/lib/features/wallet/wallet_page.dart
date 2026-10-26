@@ -97,7 +97,6 @@ class _WalletPageState extends ConsumerState<WalletPage> {
             : 0.0;
         final inset = baseInset + centering;
         // 原 SingleChildScrollView 底部 12/28 加 ResponsiveContent 底部 16/22。
-        final bottom = narrow ? 28.0 : 50.0;
         return RefreshIndicator(
           onRefresh: () =>
               ref.read(walletControllerProvider.notifier).refresh(silent: true),
@@ -121,8 +120,13 @@ class _WalletPageState extends ConsumerState<WalletPage> {
                 padding: EdgeInsets.symmetric(horizontal: inset),
                 sliver: _buildLedgerSection(context, data),
               ),
-              const SliverToBoxAdapter(child: SiteFooter()),
-              SliverPadding(padding: EdgeInsets.only(bottom: bottom)),
+              const SliverFillRemaining(
+                hasScrollBody: false,
+                child: Align(
+                  alignment: Alignment.bottomCenter,
+                  child: SiteFooter(),
+                ),
+              ),
             ],
           ),
         );
