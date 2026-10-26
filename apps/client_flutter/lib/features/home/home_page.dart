@@ -463,7 +463,9 @@ class _LearningOverview extends StatelessWidget {
                     : [
                         if (course!.term != null) course!.term!,
                         if (course!.teacher != null) course!.teacher!,
-                        '${course!.chapterCount} 章节',
+                        course!.detailsPending
+                            ? '章节待同步'
+                            : '${course!.chapterCount} 章节',
                       ].join(' · '),
                 style: TextStyle(
                   color: colors.textSecondary,
@@ -477,7 +479,9 @@ class _LearningOverview extends StatelessWidget {
                   children: [
                     Expanded(
                       child: Text(
-                        '平台已确认 ${course!.confirmedTaskPoints} / ${course!.taskPointCount} 个任务点',
+                        course!.detailsPending
+                            ? '课程内容待同步'
+                            : '平台已确认 ${course!.confirmedTaskPoints} / ${course!.taskPointCount} 个任务点',
                         style: TextStyle(
                           color: colors.text,
                           fontSize: 13,
@@ -914,7 +918,9 @@ class _CourseCard extends StatelessWidget {
                         child: Text(
                           [
                             if (course.term != null) course.term!,
-                            '${course.chapterCount} 章节',
+                            course.detailsPending
+                                ? '章节待同步'
+                                : '${course.chapterCount} 章节',
                           ].join(' · '),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
@@ -963,7 +969,9 @@ class _CourseCard extends StatelessWidget {
                     children: [
                       Expanded(
                         child: Text(
-                          '平台已确认 ${course.confirmedTaskPoints} / ${course.taskPointCount}',
+                          course.detailsPending
+                              ? '课程内容待同步'
+                              : '平台已确认 ${course.confirmedTaskPoints} / ${course.taskPointCount}',
                           style: TextStyle(
                             color: colors.textSecondary,
                             fontSize: 12,
@@ -971,7 +979,9 @@ class _CourseCard extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        '${(ratio * 100).round()}%',
+                        course.detailsPending || course.taskPointCount == 0
+                            ? '—'
+                            : '${(ratio * 100).round()}%',
                         style: TextStyle(
                           color: colors.textSecondary,
                           fontSize: 11.5,

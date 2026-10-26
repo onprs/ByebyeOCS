@@ -368,8 +368,9 @@ class _CourseCard extends StatelessWidget {
         : course.confirmedTaskPoints / course.taskPointCount;
     return Semantics(
       button: true,
-      label:
-          '${course.title}，平台已确认 ${course.confirmedTaskPoints} 个，待完成 ${course.incompleteTaskPointCount} 个',
+      label: course.detailsPending
+          ? '${course.title}，课程内容待同步'
+          : '${course.title}，平台已确认 ${course.confirmedTaskPoints} 个，待完成 ${course.incompleteTaskPointCount} 个',
       child: InkWell(
         onTap: onTap,
         borderRadius: colors.cardRadius,
@@ -395,7 +396,9 @@ class _CourseCard extends StatelessWidget {
                           child: Text(
                             [
                               course.term,
-                              '${course.chapterCount} 章节',
+                              course.detailsPending
+                                  ? '章节待同步'
+                                  : '${course.chapterCount} 章节',
                             ].whereType<String>().join(' · '),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -454,7 +457,9 @@ class _CourseCard extends StatelessWidget {
                         ),
                         const Spacer(),
                         Text(
-                          '${course.confirmedTaskPoints}',
+                          course.detailsPending
+                              ? '—'
+                              : '${course.confirmedTaskPoints}',
                           style: TextStyle(
                             color: colors.text,
                             fontSize: 16,
@@ -463,7 +468,9 @@ class _CourseCard extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          ' / ${course.taskPointCount}',
+                          course.detailsPending
+                              ? ''
+                              : ' / ${course.taskPointCount}',
                           style: TextStyle(
                             color: colors.muted,
                             fontSize: 13,
@@ -478,13 +485,16 @@ class _CourseCard extends StatelessWidget {
                       children: [
                         Expanded(
                           child: Text(
-                            course.taskPointCount == 0
-                                ? '课程暂无任务点'
-                                : course.incompleteTaskPointCount > 0
-                                    ? '${course.incompleteTaskPointCount} 个任务点待完成'
-                                    : '任务点已全部确认',
+                            course.detailsPending
+                                ? '课程内容待同步'
+                                : course.taskPointCount == 0
+                                    ? '课程暂无任务点'
+                                    : course.incompleteTaskPointCount > 0
+                                        ? '${course.incompleteTaskPointCount} 个任务点待完成'
+                                        : '任务点已全部确认',
                             style: TextStyle(
-                              color: course.incompleteTaskPointCount > 0
+                              color: course.detailsPending ||
+                                      course.incompleteTaskPointCount > 0
                                   ? colors.textSecondary
                                   : colors.success,
                               fontSize: 12,

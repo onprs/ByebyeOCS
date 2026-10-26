@@ -30,6 +30,9 @@ class CourseSummary {
   int get confirmedTaskPoints =>
       (taskPointCount - incompleteTaskPointCount).clamp(0, taskPointCount);
 
+  /// 课程概要已发布，但章节和个人进度尚未完整读取。
+  bool get detailsPending => snapshotVersion == 0;
+
   bool get allConfirmed => taskPointCount > 0 && incompleteTaskPointCount == 0;
 
   static CourseSummary parse(Map<String, dynamic> map) {

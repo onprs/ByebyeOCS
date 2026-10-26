@@ -115,7 +115,6 @@ class CourseSyncState {
     'course_structure_partial',
     'external_disabled',
     'sync_batch_exceeded',
-    'sync_attempts_exhausted',
     'identity_invalid',
     'verification_required',
     'identity_not_linked',
@@ -128,6 +127,7 @@ class CourseSyncController extends Notifier<CourseSyncState> {
   Timer? _pollTimer;
   String? _pollingId;
   int _pollGeneration = 0;
+  int _lifecycle = 0;
   int _pollAttempt = 0;
   int _pollReadFailures = 0;
   bool _disposed = false;
@@ -137,6 +137,7 @@ class CourseSyncController extends Notifier<CourseSyncState> {
 
   @override
   CourseSyncState build() {
+    _lifecycle++;
     _pollTimer?.cancel();
     _pollTimer = null;
     _pollingId = null;
@@ -152,6 +153,7 @@ class CourseSyncController extends Notifier<CourseSyncState> {
     ref.watch(authCapabilitiesProvider);
     ref.onDispose(() {
       _disposed = true;
+      _lifecycle++;
       _pollGeneration++;
       _pollTimer?.cancel();
       _pollTimer = null;
@@ -165,6 +167,8 @@ class CourseSyncController extends Notifier<CourseSyncState> {
       _now().difference(time.toUtc()) > courseSyncFreshWindow;
 
   bool _active(int generation) => !_disposed && generation == _pollGeneration;
+
+  bool _sameLifecycle(int lifecycle) => !_disposed && lifecycle == _lifecycle;
 
   /// 页面进入时接续运行中的同步；没有同步记录且课程为空或过期时自动开始。
   /// 自动流程失败后不会周期重试，失败提示保留手动重试入口。
@@ -192,12 +196,13 @@ class CourseSyncController extends Notifier<CourseSyncState> {
     // 上一次自动请求没有提交成功时保持失败提示，由用户决定是否重试。
     if (_autoRequestFailed) return;
 
+    final lifecycle = _lifecycle;
     _checkInFlight = true;
     _lastCheckAt = now;
     try {
       final latest =
           await ref.read(learningRepositoryProvider).fetchLatestCourseSync();
-      if (_disposed) return;
+      if (!_sameLifecycle(lifecycle) || state.busy) return;
       if (latest != null && latest.running) {
         if (latest.id.isEmpty) {
           _failWith('课程同步状态缺少编号，请重试', result: latest);
@@ -226,13 +231,13 @@ class CourseSyncController extends Notifier<CourseSyncState> {
       if (!_needsSync(coursesState.courses, latest)) return;
       await syncCourses(automatic: true);
     } catch (_) {
-      if (_disposed) return;
+      if (!_sameLifecycle(lifecycle)) return;
       // 状态接口不可用时不要无限补请求；只在本次会话还没有结果时尝试一次。
       if (state.phase != CourseSyncPhase.idle) return;
       if (!_needsSync(coursesState.courses, null)) return;
       await syncCourses(automatic: true);
     } finally {
-      _checkInFlight = false;
+      if (_sameLifecycle(lifecycle)) _checkInFlight = false;
     }
   }
 
@@ -254,6 +259,7 @@ class CourseSyncController extends Notifier<CourseSyncState> {
 
   Future<void> syncCourses({bool automatic = false}) async {
     if (_disposed || state.busy) return;
+    final lifecycle = _lifecycle;
     final now = _now();
     _lastCheckAt = now;
     if (!automatic) {
@@ -263,7 +269,7 @@ class CourseSyncController extends Notifier<CourseSyncState> {
     try {
       final result =
           await ref.read(learningRepositoryProvider).requestCourseSync();
-      if (_disposed) return;
+      if (!_sameLifecycle(lifecycle)) return;
       if (result.running && result.id.isEmpty) {
         _failWith('课程同步状态缺少编号，请重试', result: result);
         return;
@@ -275,11 +281,11 @@ class CourseSyncController extends Notifier<CourseSyncState> {
         await _refreshCourses();
       }
     } on ApiException catch (error) {
-      if (_disposed) return;
+      if (!_sameLifecycle(lifecycle)) return;
       _autoRequestFailed = true;
       _failWith(error.userMessage);
     } catch (_) {
-      if (_disposed) return;
+      if (!_sameLifecycle(lifecycle)) return;
       _autoRequestFailed = true;
       _failWith('课程同步请求未完成，请稍后重试');
     }
@@ -389,6 +395,7 @@ class CourseSyncController extends Notifier<CourseSyncState> {
     if (id == null) return;
     _pollAttempt++;
     try {
+      final previous = state.result;
       final result =
           await ref.read(learningRepositoryProvider).fetchCourseSync(id);
       if (!_active(generation)) return;
@@ -401,7 +408,10 @@ class CourseSyncController extends Notifier<CourseSyncState> {
           _failWith('课程同步时间较长，请稍后重试');
           return;
         }
-        if (_pollAttempt % 10 == 0) {
+        if (_pollAttempt == 1 ||
+            result.status != previous?.status ||
+            result.courseCount != previous?.courseCount ||
+            _pollAttempt % 10 == 0) {
           unawaited(ref
               .read(coursesControllerProvider.notifier)
               .refresh(silent: true));

@@ -105,8 +105,11 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
                         Text(
                           [
                             course.term,
-                            '${course.chapterCount} 章节',
-                            '${course.taskPointCount} 个任务点',
+                            course.detailsPending
+                                ? '章节待同步'
+                                : '${course.chapterCount} 章节',
+                            if (!course.detailsPending)
+                              '${course.taskPointCount} 个任务点',
                           ].whereType<String>().join(' · '),
                           style: TextStyle(
                             color: colors.textSecondary,
@@ -198,9 +201,11 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
                   setState(() => _tab = value.first);
                 },
               ),
-              child: _tab == _CourseTab.chapters
-                  ? _buildChapters(context, detail.chapters)
-                  : _buildResources(context, allResources),
+              child: course.detailsPending
+                  ? const InlineNotice(message: '课程内容待同步，同步完成后自动更新。')
+                  : _tab == _CourseTab.chapters
+                      ? _buildChapters(context, detail.chapters)
+                      : _buildResources(context, allResources),
             );
             if (!wide) return chapterCard;
             return Row(
@@ -688,7 +693,9 @@ class _CourseSummaryCard extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '${(progress * 100).round()}%',
+                      course.detailsPending || course.taskPointCount == 0
+                          ? '—'
+                          : '${(progress * 100).round()}%',
                       style: TextStyle(
                         color: colors.text,
                         fontSize: 26,
@@ -711,9 +718,20 @@ class _CourseSummaryCard extends StatelessWidget {
           const SizedBox(height: 16),
           Row(
             children: [
-              _stat(context, '已确认', '${course.confirmedTaskPoints}'),
-              _stat(context, '待完成', '${course.incompleteTaskPointCount}'),
-              _stat(context, '任务点', '${course.taskPointCount}'),
+              _stat(
+                  context,
+                  '已确认',
+                  course.detailsPending
+                      ? '—'
+                      : '${course.confirmedTaskPoints}'),
+              _stat(
+                  context,
+                  '待完成',
+                  course.detailsPending
+                      ? '—'
+                      : '${course.incompleteTaskPointCount}'),
+              _stat(context, '任务点',
+                  course.detailsPending ? '—' : '${course.taskPointCount}'),
             ],
           ),
           const SizedBox(height: 12),

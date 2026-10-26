@@ -59,6 +59,7 @@ class CoursesController extends AsyncNotifier<CourseListState> {
     final user = ref.watch(currentUserProvider);
     _events = ref.watch(realtimeServiceProvider).events.listen(_onEvent);
     ref.onDispose(() {
+      _requestSeq++;
       _events?.cancel();
       _events = null;
     });
@@ -232,6 +233,13 @@ final coursesControllerProvider =
 final courseDetailProvider =
     FutureProvider.autoDispose.family<CourseDetail, String>((ref, id) async {
   ref.watch(sessionEpochProvider);
+  ref.watch(coursesControllerProvider.select((value) {
+    for (final course
+        in value.valueOrNull?.courses ?? const <CourseSummary>[]) {
+      if (course.id == id) return course.snapshotVersion;
+    }
+    return null;
+  }));
   if (id.isEmpty) throw StateError('课程编号为空');
   return ref.watch(learningRepositoryProvider).fetchCourse(id);
 });

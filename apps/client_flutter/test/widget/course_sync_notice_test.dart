@@ -136,4 +136,32 @@ void main() {
     expect(find.byType(CourseSyncNotice), findsNothing);
     expect(find.text('课程同步未完成，请重试'), findsNothing);
   });
+
+  testWidgets('课程概要不把尚未读取的任务显示为空课程', (tester) async {
+    final server = TestServer(overrides: {
+      '/api/v1/courses': (_) async => jsonResponse({
+            'items': [
+              {
+                'id': 'pending-course',
+                'title': '内容待加载的课程',
+                'snapshot_version': 0,
+                'stale': true,
+                'chapter_count': 0,
+                'task_point_count': 0,
+              },
+            ],
+          }),
+      '/api/v1/course-syncs/latest': (_) async => jsonResponse({
+            'id': 'pending-sync',
+            'status': 'running',
+            'course_count': 0,
+          }),
+    });
+    await pumpTestPage(tester, const CoursesPage(), handler: server.call);
+    expect(find.text('内容待加载的课程'), findsOneWidget);
+    expect(find.text('章节待同步'), findsOneWidget);
+    expect(find.text('课程内容待同步'), findsOneWidget);
+    expect(find.text('课程暂无任务点'), findsNothing);
+    expect(tester.takeException(), isNull);
+  });
 }

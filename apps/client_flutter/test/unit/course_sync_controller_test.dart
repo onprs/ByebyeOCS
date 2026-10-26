@@ -76,6 +76,8 @@ class _SyncCourseRepository extends LearningRepository {
   List<CourseSyncResult> pollResults;
   Completer<CourseSyncResult?>? latestGate;
   Completer<CourseSyncResult>? pollGate;
+  Completer<CourseSyncResult>? requestGate;
+  int detailCalls = 0;
 
   int latestCalls = 0;
   int requestCalls = 0;
@@ -103,6 +105,7 @@ class _SyncCourseRepository extends LearningRepository {
   @override
   Future<CourseSyncResult> requestCourseSync() {
     requestCalls++;
+    if (requestGate != null) return requestGate!.future;
     final error = requestError;
     if (error != null) {
       return Future<CourseSyncResult>.error(error);
@@ -110,6 +113,13 @@ class _SyncCourseRepository extends LearningRepository {
     return Future<CourseSyncResult>.value(
       requestResult ?? _sync('sync-request', 'queued'),
     );
+  }
+
+  @override
+  Future<CourseDetail> fetchCourse(String id) async {
+    detailCalls++;
+    return CourseDetail(
+        summary: courses.firstWhere((course) => course.id == id));
   }
 
   @override
@@ -434,5 +444,78 @@ void main() {
       (value) => value.phase == CourseSyncPhase.succeeded,
       reason: '手动重试完成',
     );
+  });
+
+  test('账号切换后丢弃旧的最近同步响应', () async {
+    final now = DateTime.utc(2026, 10, 26);
+    final gate = Completer<CourseSyncResult?>();
+    final repository = _SyncCourseRepository(courses: [_course(syncedAt: now)])
+      ..latestGate = gate;
+    final container = _container(repository, clock: () => now);
+    addTearDown(container.dispose);
+    await _warm(container);
+    final pending = container
+        .read(courseSyncControllerProvider.notifier)
+        .autoSyncIfNeeded();
+    expect(repository.latestCalls, 1);
+    container.read(sessionEpochProvider.notifier).bump();
+    expect(container.read(courseSyncControllerProvider).phase,
+        CourseSyncPhase.idle);
+    gate.complete(
+        _sync('old-user-sync', 'needs_attention', errorCode: 'forbidden'));
+    await pending;
+    expect(container.read(courseSyncControllerProvider).phase,
+        CourseSyncPhase.idle);
+    expect(container.read(courseSyncControllerProvider).result, isNull);
+  });
+
+  test('账号切换后丢弃旧的同步提交响应', () async {
+    final now = DateTime.utc(2026, 10, 26);
+    final gate = Completer<CourseSyncResult>();
+    final repository = _SyncCourseRepository(courses: [_course(syncedAt: now)])
+      ..requestGate = gate;
+    final container = _container(repository, clock: () => now);
+    addTearDown(container.dispose);
+    await _warm(container);
+    final pending =
+        container.read(courseSyncControllerProvider.notifier).syncCourses();
+    expect(repository.requestCalls, 1);
+    container.read(sessionEpochProvider.notifier).bump();
+    expect(container.read(courseSyncControllerProvider).phase,
+        CourseSyncPhase.idle);
+    gate.complete(_sync('old-user-sync', 'queued'));
+    await pending;
+    await Future<void>.delayed(const Duration(milliseconds: 15));
+    expect(container.read(courseSyncControllerProvider).phase,
+        CourseSyncPhase.idle);
+    expect(repository.pollCalls, 0);
+  });
+
+  test('课程完整快照更新后自动刷新当前详情', () async {
+    final now = DateTime.utc(2026, 10, 26);
+    final repository = _SyncCourseRepository(courses: const [
+      CourseSummary(id: 'c1', title: '待加载课程', snapshotVersion: 0),
+    ]);
+    final container = _container(repository, clock: () => now);
+    addTearDown(container.dispose);
+    await _warm(container);
+    container.listen(courseDetailProvider('c1'), (_, __) {});
+    final initial = await container.read(courseDetailProvider('c1').future);
+    expect(initial.summary.detailsPending, isTrue);
+    repository.courses = [
+      CourseSummary(
+          id: 'c1',
+          title: '已加载课程',
+          snapshotVersion: 1,
+          syncedAt: now,
+          chapterCount: 2),
+    ];
+    await container
+        .read(coursesControllerProvider.notifier)
+        .refresh(silent: true);
+    final updated = await container.read(courseDetailProvider('c1').future);
+    expect(updated.summary.detailsPending, isFalse);
+    expect(updated.summary.chapterCount, 2);
+    expect(repository.detailCalls, 2);
   });
 }

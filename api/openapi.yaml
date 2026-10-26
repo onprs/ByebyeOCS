@@ -1130,6 +1130,57 @@ paths:
               properties: {}
               additionalProperties: false
         description: 可为空；未知字段会被拒绝
+  /api/v1/course-syncs/latest:
+    get:
+      operationId: latestCourseSync
+      tags:
+      - user-learning
+      summary: 读取当前用户最近一次课程同步状态
+      security:
+      - userCookie: []
+      - userBearer: []
+      responses:
+        '200':
+          description: 最近一次同步及已处理课程数
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseSync'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /api/v1/course-syncs/{id}:
+    get:
+      operationId: getCourseSync
+      tags:
+      - user-learning
+      summary: 读取当前用户指定课程同步状态
+      parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+      security:
+      - userCookie: []
+      - userBearer: []
+      responses:
+        '200':
+          description: 同步状态及已处理课程数
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CourseSync'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /api/v1/plans:
     get:
       operationId: listPlans
@@ -5340,7 +5391,7 @@ components:
           enum:
           - queued
           - running
-          - completed
+          - succeeded
           - failed
           - needs_attention
         attempt_count:
