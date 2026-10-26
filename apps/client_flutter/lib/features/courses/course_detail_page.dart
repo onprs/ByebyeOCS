@@ -92,14 +92,15 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
             border: Border.all(color: colors.border),
           ),
           clipBehavior: Clip.antiAlias,
-          child: Column(
-            children: [
-              CourseCover(
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final compact = constraints.maxWidth < 680;
+              final cover = CourseCover(
                 path: course.coverUrl,
                 seed: course.id,
-                height: context.isNarrow ? 108 : 142,
-              ),
-              Padding(
+                height: compact ? 108 : 140,
+              );
+              final summary = Padding(
                 padding: EdgeInsets.all(context.isNarrow ? 18 : 24),
                 child: LayoutBuilder(
                   builder: (context, constraints) {
@@ -174,8 +175,24 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
                     );
                   },
                 ),
-              ),
-            ],
+              );
+              if (compact) {
+                return Column(children: [cover, summary]);
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 24, 0, 24),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(width: 224, child: cover),
+                    ),
+                  ),
+                  Expanded(child: summary),
+                ],
+              );
+            },
           ),
         ),
         const SizedBox(height: 16),
