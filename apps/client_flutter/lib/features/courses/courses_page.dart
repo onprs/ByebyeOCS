@@ -284,6 +284,7 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
                   for (final course in filtered)
                     SizedBox(
                       width: width,
+                      height: AppMetrics.courseCardHeight,
                       child: _CourseCard(
                         course: course,
                         onTap: () => context.go('/courses/${course.id}'),

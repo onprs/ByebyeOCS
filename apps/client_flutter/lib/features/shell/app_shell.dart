@@ -118,6 +118,7 @@ class _AppShellState extends ConsumerState<AppShell>
                 ),
               ),
             ),
+            SiteFooter(compact: narrow),
             if (narrow)
               _BottomNavigation(
                 destinations: _destinations,

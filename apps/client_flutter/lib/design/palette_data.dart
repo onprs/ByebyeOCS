@@ -14,6 +14,7 @@ abstract final class AppMetrics {
   static const double tableWidth = 1440;
   static const double drawerWidth = 600;
   static const double pagePadding = 32;
+  static const double courseCardHeight = 330;
 }
 
 abstract final class AppTypography {

@@ -182,6 +182,9 @@ export function LoginPage() {
             </form>
           )}
         </div>
+        <footer className="auth-main-footer">
+          © {new Date().getFullYear()} ByebyeOCS · 版权所有 · Created by onprs
+        </footer>
       </main>
     </div>
   )

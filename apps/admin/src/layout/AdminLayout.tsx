@@ -255,6 +255,10 @@ export function AdminLayout() {
         <main className={`admin-content ${['/tasks', '/finance'].includes(location.pathname) ? 'table-workspace' : ''}`}>
           <div key={location.pathname} className="page-view"><Outlet /></div>
         </main>
+        <footer className="admin-footer">
+          <span>© {new Date().getFullYear()} ByebyeOCS · 版权所有</span>
+          <span>Created by onprs</span>
+        </footer>
       </div>
     </div>
   )

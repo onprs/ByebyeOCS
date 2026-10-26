@@ -1192,3 +1192,24 @@ a.admin-nav-item:hover {
     display: none;
   }
 }
+
+.admin-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 28px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: var(--font-caption);
+}
+
+@media (max-width: 720px) {
+  .admin-footer {
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 16px;
+    text-align: center;
+  }
+}

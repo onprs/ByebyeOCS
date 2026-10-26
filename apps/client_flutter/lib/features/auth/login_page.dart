@@ -55,6 +55,8 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
     return Scaffold(
       backgroundColor: colors.background,
+      bottomNavigationBar:
+          const SafeArea(top: false, child: SiteFooter(compact: true)),
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {

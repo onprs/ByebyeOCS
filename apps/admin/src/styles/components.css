@@ -848,6 +848,7 @@
 
 .metric {
   min-width: 0;
+  min-height: 112px;
   padding: 17px 19px;
   border-right: 1px solid var(--border);
 }

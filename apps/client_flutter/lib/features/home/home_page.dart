@@ -137,13 +137,16 @@ class HomePage extends ConsumerWidget {
                     ],
                   );
                 }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(child: overview),
-                    const SizedBox(width: 18),
-                    SizedBox(width: 320, child: walletCard),
-                  ],
+                return SizedBox(
+                  height: AppMetrics.courseCardHeight,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(child: overview),
+                      const SizedBox(width: 18),
+                      SizedBox(width: 320, child: walletCard),
+                    ],
+                  ),
                 );
               }),
               const SizedBox(height: 22),
@@ -230,13 +233,16 @@ class HomePage extends ConsumerWidget {
                     ],
                   );
                 }
-                return Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(flex: 11, child: plansCard),
-                    const SizedBox(width: 18),
-                    Expanded(flex: 9, child: recentCard),
-                  ],
+                return SizedBox(
+                  height: AppMetrics.courseCardHeight,
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Expanded(flex: 11, child: plansCard),
+                      const SizedBox(width: 18),
+                      Expanded(flex: 9, child: recentCard),
+                    ],
+                  ),
                 );
               }),
             ],
@@ -920,6 +926,7 @@ class _CourseGrid extends StatelessWidget {
           for (final course in courses)
             SizedBox(
               width: width,
+              height: AppMetrics.courseCardHeight,
               child: _CourseCard(
                 course: course,
                 onTap: () => onOpen(course),

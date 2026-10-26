@@ -1181,3 +1181,65 @@ class ResponsiveContent extends StatelessWidget {
     );
   }
 }
+
+/// 页面页脚：三端统一显示年份、版权和作者，不随内容高度漂移。
+class SiteFooter extends StatelessWidget {
+  const SiteFooter({super.key, this.compact = false});
+
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final year = DateTime.now().year;
+    final copyright = '© $year ByebyeOCS · 版权所有';
+    return Container(
+      height: compact ? 32 : 44,
+      decoration: BoxDecoration(
+        color: colors.surface,
+        border: Border(top: BorderSide(color: colors.border)),
+      ),
+      child: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: AppMetrics.contentWidth),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: compact ? 16 : AppMetrics.pagePadding,
+            ),
+            child: compact
+                ? FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      '$copyright · Created by onprs',
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: colors.muted,
+                        fontSize: 11,
+                      ),
+                    ),
+                  )
+                : Row(
+                    children: [
+                      Text(
+                        copyright,
+                        style: TextStyle(
+                          color: colors.muted,
+                          fontSize: 11.5,
+                        ),
+                      ),
+                      const Spacer(),
+                      Text(
+                        'Created by onprs',
+                        style: TextStyle(
+                          color: colors.muted,
+                          fontSize: 11.5,
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+}

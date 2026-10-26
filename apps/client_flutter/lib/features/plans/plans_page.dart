@@ -662,79 +662,84 @@ class _PlanList extends StatelessWidget {
           for (final plan in plans)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
-              child: Semantics(
-                button: true,
-                selected: plan.id == selectedId,
-                label: plan.name,
-                child: InkWell(
-                  onTap: () => onSelect(plan.id),
-                  borderRadius: BorderRadius.circular(colors.radius - 2),
-                  child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: plan.id == selectedId
-                          ? colors.accentSoft
-                          : colors.surfaceSubtle,
-                      borderRadius: BorderRadius.circular(colors.radius - 2),
-                      border: Border.all(
+              child: SizedBox(
+                height: 100,
+                child: Semantics(
+                  button: true,
+                  selected: plan.id == selectedId,
+                  label: plan.name,
+                  child: InkWell(
+                    onTap: () => onSelect(plan.id),
+                    borderRadius: BorderRadius.circular(colors.radius - 2),
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
                         color: plan.id == selectedId
-                            ? colors.accent.withValues(alpha: 0.3)
-                            : colors.border,
+                            ? colors.accentSoft
+                            : colors.surfaceSubtle,
+                        borderRadius: BorderRadius.circular(colors.radius - 2),
+                        border: Border.all(
+                          color: plan.id == selectedId
+                              ? colors.accent.withValues(alpha: 0.3)
+                              : colors.border,
+                        ),
                       ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Expanded(
-                              child: Text(
-                                plan.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  color: colors.text,
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w600,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  plan.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    color: colors.text,
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                  ),
                                 ),
                               ),
-                            ),
-                            const SizedBox(width: 6),
-                            StatusPill(
-                              label: plan.isActive ? '已开启' : '已暂停',
-                              tone: plan.isActive
-                                  ? StatusTone.success
-                                  : StatusTone.warning,
-                              compact: true,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 5),
-                        Text(
-                          '${plan.courseIds.length} 门课程 · ${plan.taskTypes.map((type) => switch (type) {
-                                'video' => '视频',
-                                'document' => '文档',
-                                'audio' => '音频',
-                                'quiz' => '测验',
-                                'other' => '其他',
-                                _ => type,
-                              }).join('、')}',
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            color: colors.textSecondary,
-                            fontSize: 12,
+                              const SizedBox(width: 6),
+                              StatusPill(
+                                label: plan.isActive ? '已开启' : '已暂停',
+                                tone: plan.isActive
+                                    ? StatusTone.success
+                                    : StatusTone.warning,
+                                compact: true,
+                              ),
+                            ],
                           ),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          '${plan.scopeLabel} · ${plan.priorityLabel}${plan.questionPolicy.enabled ? ' · 题库策略已开启' : ''}',
-                          style: TextStyle(
-                            color: colors.muted,
-                            fontSize: 12,
+                          const SizedBox(height: 5),
+                          Text(
+                            '${plan.courseIds.length} 门课程 · ${plan.taskTypes.map((type) => switch (type) {
+                                  'video' => '视频',
+                                  'document' => '文档',
+                                  'audio' => '音频',
+                                  'quiz' => '测验',
+                                  'other' => '其他',
+                                  _ => type,
+                                }).join('、')}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: colors.textSecondary,
+                              fontSize: 12,
+                            ),
                           ),
-                        ),
-                      ],
+                          const SizedBox(height: 3),
+                          Text(
+                            '${plan.scopeLabel} · ${plan.priorityLabel}${plan.questionPolicy.enabled ? ' · 题库策略已开启' : ''}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: colors.muted,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
