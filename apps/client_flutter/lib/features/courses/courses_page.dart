@@ -312,6 +312,8 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
           icon: Icons.fact_check_outlined,
           message: '完成数量来自学习通平台返回。普通附件标注为学习资料，不计入任务点。',
         ),
+        const SizedBox(height: 30),
+        const SiteFooter(),
       ],
     );
   }

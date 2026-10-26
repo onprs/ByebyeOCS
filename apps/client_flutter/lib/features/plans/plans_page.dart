@@ -49,17 +49,25 @@ class _PlansPageState extends ConsumerState<PlansPage> {
       primary: false,
       padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
       child: ResponsiveContent(
-        child: async.when(
-          loading: () => const LoadingList(rows: 3, height: 150),
-          error: (error, _) => ErrorPanel(
-            message: error is ApiException ? error.userMessage : '任务安排暂时无法加载',
-            requestId: error is ApiException ? error.requestId : null,
-            onRetry: () => ref.invalidate(plansControllerProvider),
-          ),
-          data: (data) {
-            _handleInitial(data);
-            return _buildData(context, data, courses);
-          },
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            async.when(
+              loading: () => const LoadingList(rows: 3, height: 150),
+              error: (error, _) => ErrorPanel(
+                message:
+                    error is ApiException ? error.userMessage : '任务安排暂时无法加载',
+                requestId: error is ApiException ? error.requestId : null,
+                onRetry: () => ref.invalidate(plansControllerProvider),
+              ),
+              data: (data) {
+                _handleInitial(data);
+                return _buildData(context, data, courses);
+              },
+            ),
+            const SizedBox(height: 30),
+            const SiteFooter(),
+          ],
         ),
       ),
     );

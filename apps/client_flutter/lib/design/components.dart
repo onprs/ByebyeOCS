@@ -1192,9 +1192,10 @@ class SiteFooter extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = context.colors;
     final year = DateTime.now().year;
+    final narrow = compact || MediaQuery.sizeOf(context).width < 600;
     final copyright = '© $year ByebyeOCS · 版权所有';
     return Container(
-      height: compact ? 32 : 44,
+      height: narrow ? 32 : 44,
       decoration: BoxDecoration(
         color: colors.surface,
         border: Border(top: BorderSide(color: colors.border)),
@@ -1204,9 +1205,9 @@ class SiteFooter extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: AppMetrics.contentWidth),
           child: Padding(
             padding: EdgeInsets.symmetric(
-              horizontal: compact ? 16 : AppMetrics.pagePadding,
+              horizontal: narrow ? 16 : AppMetrics.pagePadding,
             ),
-            child: compact
+            child: narrow
                 ? FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Text(

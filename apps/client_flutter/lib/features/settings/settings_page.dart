@@ -250,6 +250,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                               onPressed: _logout)),
                     ])),
               ])),
+          const SizedBox(height: 30),
+          const SiteFooter(),
         ]),
       ),
     );

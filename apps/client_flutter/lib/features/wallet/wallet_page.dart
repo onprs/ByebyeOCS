@@ -121,6 +121,7 @@ class _WalletPageState extends ConsumerState<WalletPage> {
                 padding: EdgeInsets.symmetric(horizontal: inset),
                 sliver: _buildLedgerSection(context, data),
               ),
+              const SliverToBoxAdapter(child: SiteFooter()),
               SliverPadding(padding: EdgeInsets.only(bottom: bottom)),
             ],
           ),
@@ -194,13 +195,15 @@ class _WalletPageState extends ConsumerState<WalletPage> {
                 ],
               );
             }
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(child: balance),
-                const SizedBox(width: 16),
-                Expanded(flex: 2, child: recharge),
-              ],
+            return IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: balance),
+                  const SizedBox(width: 16),
+                  Expanded(flex: 2, child: recharge),
+                ],
+              ),
             );
           },
         ),

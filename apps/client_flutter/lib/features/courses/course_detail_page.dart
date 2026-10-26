@@ -230,15 +230,28 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
                       : _buildResources(context, allResources),
             );
             if (!wide) return chapterCard;
+            final summaryCard = SizedBox(
+              width: 310,
+              child: _CourseSummaryCard(course: course, progress: progress),
+            );
+            if (detail.chapters.isEmpty) {
+              return IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(child: chapterCard),
+                    const SizedBox(width: 16),
+                    summaryCard,
+                  ],
+                ),
+              );
+            }
             return Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(child: chapterCard),
                 const SizedBox(width: 16),
-                SizedBox(
-                  width: 310,
-                  child: _CourseSummaryCard(course: course, progress: progress),
-                ),
+                summaryCard,
               ],
             );
           },
@@ -248,6 +261,8 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
           icon: Icons.link,
           message: '课程内容以学习通为准。普通附件不计入未完成任务，平台确认数量会在同步后更新。',
         ),
+        const SizedBox(height: 30),
+        const SiteFooter(),
       ],
     );
     return body;

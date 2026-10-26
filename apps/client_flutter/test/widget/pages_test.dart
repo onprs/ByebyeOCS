@@ -157,6 +157,31 @@ void main() {
     expect(find.text('有任务的课程'), findsWidgets);
   });
 
+  testWidgets('空课程详情的课程内容与进度卡片等高', (tester) async {
+    final emptyDetail = {
+      ...courseDetailFixture,
+      'chapter_count': 0,
+      'task_point_count': 0,
+      'incomplete_task_point_count': 0,
+      'resource_count': 0,
+      'chapters': <Map<String, dynamic>>[],
+    };
+    final server = TestServer(overrides: {
+      '/api/v1/courses/c1': (_) async => jsonResponse(emptyDetail),
+    });
+    await pumpTestPage(
+      tester,
+      const CourseDetailPage(courseId: 'c1'),
+      handler: server.call,
+      size: const Size(1200, 1200),
+    );
+    final cards = find.byType(SectionCard);
+    expect(cards, findsNWidgets(2));
+    final first = tester.getSize(cards.at(0));
+    final second = tester.getSize(cards.at(1));
+    expect(first.height, closeTo(second.height, 1));
+  });
+
   testWidgets('课程列表支持搜索与同步入口', (tester) async {
     await pumpTestPage(tester, const CoursesPage());
 
