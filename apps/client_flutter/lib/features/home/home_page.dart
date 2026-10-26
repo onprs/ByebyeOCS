@@ -52,6 +52,7 @@ class HomePage extends ConsumerWidget {
       0,
       (sum, course) => sum + course.incompleteTaskPointCount,
     );
+    final featured = _featuredCourse(courses);
     final enabledPlans = plans.where((plan) => plan.isActive).length;
     final confirmedTasks =
         tasks.where((task) => task.state == LearningTaskState.confirmed).length;
@@ -105,15 +106,15 @@ class HomePage extends ConsumerWidget {
               const SizedBox(height: 22),
               LayoutBuilder(builder: (context, constraints) {
                 final overview = _LearningOverview(
-                  course: courses.isEmpty ? null : courses.first,
+                  course: featured,
                   courseCount: coursesAsync.hasValue ? courses.length : null,
                   pendingPoints: pendingPoints,
                   loading: coursesAsync.isLoading,
                   syncing: sync.busy,
                   error: coursesAsync.hasError,
-                  onOpenCourse: courses.isEmpty
+                  onOpenCourse: featured == null
                       ? null
-                      : () => context.go('/courses/${courses.first.id}'),
+                      : () => context.go('/courses/${featured.id}'),
                   onOpenCourses: () => openTab(context, 1, '/courses'),
                   onRetry: () => ref.invalidate(coursesControllerProvider),
                 );
@@ -292,6 +293,23 @@ class HomePage extends ConsumerWidget {
   String _weekday(int value) {
     return const ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'][value - 1];
   }
+}
+
+// 首页优先继续有任务点的课程，避免空课程或待同步课程占据主位置。
+CourseSummary? _featuredCourse(List<CourseSummary> courses) {
+  CourseSummary? pending;
+  CourseSummary? detailed;
+  for (final course in courses) {
+    if (course.detailsPending) continue;
+    detailed ??= course;
+    if (course.incompleteTaskPointCount > 0 &&
+        (pending == null ||
+            course.incompleteTaskPointCount >
+                pending.incompleteTaskPointCount)) {
+      pending = course;
+    }
+  }
+  return pending ?? detailed ?? (courses.isEmpty ? null : courses.first);
 }
 
 class _Greeting extends StatelessWidget {
@@ -482,7 +500,9 @@ class _LearningOverview extends StatelessWidget {
                       child: Text(
                         course!.detailsPending
                             ? '课程内容待同步'
-                            : '平台已确认 ${course!.confirmedTaskPoints} / ${course!.taskPointCount} 个任务点',
+                            : course!.taskPointCount == 0
+                                ? '该课程暂无任务点'
+                                : '平台已确认 ${course!.confirmedTaskPoints} / ${course!.taskPointCount} 个任务点',
                         style: TextStyle(
                           color: colors.text,
                           fontSize: 13,

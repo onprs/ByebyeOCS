@@ -11,7 +11,7 @@ import (
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
 )
 
-const resourceCacheTTL = 30 * time.Minute
+const resourceCacheTTL = 24 * time.Hour
 const resourceCacheLimit = 4096
 
 type cardLayout struct {

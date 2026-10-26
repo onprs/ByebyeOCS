@@ -190,6 +190,9 @@ func (p *Platform) ListCourses(ctx context.Context, sessionBytes []byte) ([]lear
 			if item.Title != "" {
 				course.Title = item.Title
 			}
+			if item.Teacher != "" {
+				course.Teacher = item.Teacher
+			}
 			course.CoverURL, course.CoverKnown = item.CoverURL, true
 		}
 	}

@@ -399,7 +399,9 @@ class _CourseCard extends StatelessWidget {
                               course.term,
                               course.detailsPending
                                   ? '章节待同步'
-                                  : '${course.chapterCount} 章节',
+                                  : course.chapterCount == 0
+                                      ? '暂无章节'
+                                      : '${course.chapterCount} 章节',
                             ].whereType<String>().join(' · '),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -489,7 +491,7 @@ class _CourseCard extends StatelessWidget {
                             course.detailsPending
                                 ? '课程内容待同步'
                                 : course.taskPointCount == 0
-                                    ? '课程暂无任务点'
+                                    ? '该课程暂无任务点'
                                     : course.incompleteTaskPointCount > 0
                                         ? '${course.incompleteTaskPointCount} 个任务点待完成'
                                         : '任务点已全部确认',

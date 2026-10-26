@@ -12,7 +12,7 @@ import (
 	"github.com/onprs/ByebyeOCS/server/internal/web"
 )
 
-const courseCoverTTL = 24 * time.Hour
+const courseCoverTTL = 7 * 24 * time.Hour
 const courseCoverFailureTTL = 5 * time.Minute
 const courseCoverCacheLimit = 1024
 const courseCoverByteLimit = 256 << 10
@@ -147,7 +147,7 @@ func (s *Service) handleCourseCover(w http.ResponseWriter, r *http.Request, acto
 	}
 	etag := `"` + cover.Hash + `"`
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Header().Set("Cache-Control", "private, max-age=86400")
 	w.Header().Add("Vary", "Cookie, Authorization")
 	w.Header().Set("ETag", etag)
 	w.Header().Set("X-Content-Type-Options", "nosniff")

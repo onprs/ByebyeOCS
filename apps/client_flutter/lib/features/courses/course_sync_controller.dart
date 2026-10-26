@@ -11,7 +11,7 @@ import 'courses_controller.dart';
 const _maxPollAttempts = 2400;
 
 /// 课程数据超过该时间没有成功同步时，页面进入会补一次同步。
-const courseSyncFreshWindow = Duration(minutes: 30);
+const courseSyncFreshWindow = Duration(hours: 6);
 
 /// 自动检查的节流间隔；页面重建不会反复请求“最近同步”接口。
 const _autoCheckInterval = Duration(minutes: 5);

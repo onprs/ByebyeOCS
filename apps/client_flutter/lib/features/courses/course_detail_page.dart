@@ -226,7 +226,7 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
               child: course.detailsPending
                   ? const InlineNotice(message: '课程内容待同步，同步完成后自动更新。')
                   : _tab == _CourseTab.chapters
-                      ? _buildChapters(context, detail.chapters)
+                      ? _buildChapters(context, detail.chapters, course)
                       : _buildResources(context, allResources),
             );
             if (!wide) return chapterCard;
@@ -256,12 +256,14 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
   Widget _buildChapters(
     BuildContext context,
     List<CourseChapter> chapters,
+    CourseSummary course,
   ) {
     if (chapters.isEmpty) {
-      return const EmptyState(
+      return EmptyState(
         icon: Icons.menu_book_outlined,
-        title: '课程暂无章节',
-        message: '同步课程后，章节与附件会显示在这里。',
+        title: '该课程暂无章节',
+        message:
+            course.detailsPending ? '同步课程后，章节与附件会显示在这里。' : '学习通当前没有返回该课程的章节内容。',
         compact: true,
       );
     }
@@ -726,7 +728,11 @@ class _CourseSummaryCard extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      '平台已确认',
+                      course.detailsPending
+                          ? '待同步'
+                          : course.taskPointCount == 0
+                              ? '暂无任务点'
+                              : '平台已确认',
                       style: TextStyle(
                         color: colors.textSecondary,
                         fontSize: 12,

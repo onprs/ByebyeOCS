@@ -34,7 +34,7 @@ func TestCourseCoverMetadataUsesCourseContainer(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<div class="course-list">
 <div class="course"><div class="course-cover"><a href="/stucoursemiddle?courseid=101&amp;clazzid=201&amp;cpi=301"><img src="/covers/first.png"></a></div>
-<a href="/stucoursemiddle?courseid=101&amp;clazzid=201&amp;cpi=301"><span class="course-name" title="第一门课"></span></a></div>
+<a href="/stucoursemiddle?courseid=101&amp;clazzid=201&amp;cpi=301"><span class="course-name" title="第一门课"></span></a><p class="color3" title="测试教师"></p></div>
 <div class="course"><div class="course-cover"><a href="/stucoursemiddle?courseid=102&amp;clazzid=202&amp;cpi=302"></a></div>
 <a href="/stucoursemiddle?courseid=102&amp;clazzid=202&amp;cpi=302"><span class="course-name" title="第二门课"></span></a></div>
 <div class="course"><div class="course-cover"><a href="/stucoursemiddle?courseid=103&amp;clazzid=203&amp;cpi=303"><img src="/placeholder.png" data-original="/covers/third.png"></a></div>
@@ -52,8 +52,8 @@ func TestCourseCoverMetadataUsesCourseContainer(t *testing.T) {
 		}
 		switch course.ExternalCourseID {
 		case "101":
-			if course.CoverURL != server.URL+"/covers/first.png" || course.Title != "第一门课" {
-				t.Fatal("第一门课程封面关联错误")
+			if course.CoverURL != server.URL+"/covers/first.png" || course.Title != "第一门课" || course.Teacher != "测试教师" {
+				t.Fatal("第一门课程名称、教师或封面关联错误")
 			}
 		case "102":
 			if course.CoverURL != "" || course.Title != "第二门课" {

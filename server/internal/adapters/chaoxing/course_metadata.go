@@ -8,6 +8,7 @@ import (
 
 type courseListMetadata struct {
 	Title    string
+	Teacher  string
 	CoverURL string
 }
 
@@ -34,6 +35,12 @@ func (p *Platform) parseCourseMetadata(payload []byte) map[string]courseListMeta
 					item.Title = strings.TrimSpace(node.attr("title"))
 					if item.Title == "" {
 						item.Title = strings.TrimSpace(htmlNodeText(node))
+					}
+				}
+				if node.tag == "p" && class == "color3" && item.Teacher == "" {
+					item.Teacher = strings.TrimSpace(node.attr("title"))
+					if item.Teacher == "" {
+						item.Teacher = strings.TrimSpace(htmlNodeText(node))
 					}
 				}
 			}

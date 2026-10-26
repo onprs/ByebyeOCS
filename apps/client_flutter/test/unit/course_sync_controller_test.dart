@@ -199,11 +199,11 @@ void main() {
     expect(result.completedAt, DateTime.utc(2026, 10, 26, 2, 5));
   });
 
-  test('课程数据超过 30 分钟时自动同步并接续到完成状态', () async {
+  test('课程数据超过缓存窗口时自动同步并接续到完成状态', () async {
     final now = DateTime.utc(2026, 10, 26, 4);
     final repository = _SyncCourseRepository(
       courses: [
-        _course(syncedAt: now.subtract(const Duration(minutes: 31))),
+        _course(syncedAt: now.subtract(const Duration(hours: 7))),
       ],
       requestResult: _sync('sync-1', 'queued'),
       pollResults: [
@@ -229,7 +229,7 @@ void main() {
     expect(repository.courseCalls, greaterThanOrEqualTo(2));
   });
 
-  test('最近一次成功同步未超过 30 分钟时不重复同步', () async {
+  test('最近一次成功同步未超过缓存窗口时不重复同步', () async {
     final now = DateTime.utc(2026, 10, 26, 4);
     final repository = _SyncCourseRepository(
       courses: [
@@ -281,7 +281,7 @@ void main() {
     );
   });
 
-  test('最近一次成功同步超过 30 分钟时重新同步', () async {
+  test('最近一次成功同步超过缓存窗口时重新同步', () async {
     final now = DateTime.utc(2026, 10, 26, 4);
     final repository = _SyncCourseRepository(
       courses: [
@@ -291,7 +291,7 @@ void main() {
         'sync-old',
         'succeeded',
         courseCount: 1,
-        finishedAt: now.subtract(const Duration(minutes: 31)),
+        finishedAt: now.subtract(const Duration(hours: 7)),
       ),
       requestResult: _sync('sync-new', 'queued'),
       pollResults: [
@@ -320,7 +320,7 @@ void main() {
     final pollGate = Completer<CourseSyncResult>();
     final repository = _SyncCourseRepository(
       courses: [
-        _course(syncedAt: now.subtract(const Duration(minutes: 31))),
+        _course(syncedAt: now.subtract(const Duration(hours: 7))),
       ],
     )
       ..latestGate = latestGate
