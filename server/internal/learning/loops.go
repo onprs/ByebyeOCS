@@ -749,10 +749,31 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		s.finishSyncFailure(ctx, job, syncResult{status: "needs_attention", errorCode: "sync_batch_exceeded"})
 		return
 	}
+	account, err := s.accountForUser(ctx, job.UserID)
+	if err != nil {
+		s.finishSyncFailure(ctx, job, syncResult{status: "needs_attention", errorCode: "identity_not_linked"})
+		return
+	}
+	if err := s.saveCourseSummaries(ctx, &job, account, courses); err != nil {
+		if !errors.Is(err, errLeaseLost) {
+			s.finishSyncFailure(ctx, job, s.classifySyncError(err))
+		}
+		return
+	}
+	completed, err := s.completedSyncCourses(ctx, job)
+	if err != nil {
+		s.finishSyncFailure(ctx, job, s.classifySyncError(err))
+		return
+	}
 	var snapshotVersion int64
 	processed := 0
 	partial := 0
 	for _, course := range courses {
+		if version, ok := completed[course.ExternalCourseID+"/"+course.ExternalClassID]; ok {
+			processed++
+			snapshotVersion = max(snapshotVersion, version)
+			continue
+		}
 		if err := s.assertCourseSyncLease(ctx, &job); err != nil {
 			return
 		}
@@ -760,6 +781,7 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 			ExternalCourseID: course.ExternalCourseID, ExternalClassID: course.ExternalClassID,
 			CPI: course.CPI, CycleKey: "current",
 		}
+		started := s.now()
 		snapshot, err := s.opts.Platform.DiscoverCourse(ctx, session, ref)
 		if err != nil {
 			failure := failureOf(err)
@@ -768,20 +790,19 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 				s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 				return
 			}
-			// 结构暂不兼容的课程仍保留课程条目，避免整次同步被单门课程阻塞。
+			// 保留已有完整快照，不用空快照覆盖个人进度和任务引用。
 			partial++
-			snapshot = PlatformCourseSnapshot{
-				Course: ref, Title: course.Title, Teacher: course.Teacher, Term: course.Term,
-				Adapter: capabilities.Adapter,
+			processed++
+			if err := s.updateCourseSyncProgress(ctx, &job, processed); err != nil {
+				return
 			}
+			continue
 		}
+		snapshot.Title = firstNonEmpty(snapshot.Title, course.Title)
+		snapshot.Teacher = firstNonEmpty(snapshot.Teacher, course.Teacher)
+		snapshot.Term = firstNonEmpty(snapshot.Term, course.Term)
 		if snapshot.Adapter == "" {
 			snapshot.Adapter = capabilities.Adapter
-		}
-		account, err := s.accountForUser(ctx, job.UserID)
-		if err != nil {
-			s.finishSyncFailure(ctx, job, syncResult{status: "needs_attention", errorCode: "identity_not_linked"})
-			return
 		}
 		version, err := s.applyCourseSnapshot(ctx, &job, account, snapshot)
 		if err != nil {
@@ -795,6 +816,8 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 			snapshotVersion = version
 		}
 		processed++
+		s.opts.Logger.Info("课程结构同步完成", "course_index", processed, "course_total", len(courses),
+			"chapters", len(snapshot.Chapters), "elapsed_ms", s.now().Sub(started).Milliseconds())
 		if err := s.updateCourseSyncProgress(ctx, &job, processed); err != nil {
 			if errors.Is(err, errLeaseLost) {
 				return

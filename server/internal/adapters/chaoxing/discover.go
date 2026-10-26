@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
 )
 
@@ -185,22 +187,30 @@ func (p *Platform) ListCourses(ctx context.Context, sessionBytes []byte) ([]lear
 }
 
 func (p *Platform) catalog(ctx context.Context, session Session, course learning.PlatformCourseRef) ([]string, map[string]int, error) {
+	order, pending, _, err := p.catalogDetails(ctx, session, course)
+	return order, pending, err
+}
+
+func (p *Platform) catalogDetails(ctx context.Context, session Session, course learning.PlatformCourseRef) ([]string, map[string]int, map[string]string, error) {
 	query := url.Values{"courseid": {course.ExternalCourseID}, "clazzid": {course.ExternalClassID},
 		"cpi": {course.CPI}, "ut": {"s"}}
 	payload, err := p.do(ctx, session, http.MethodGet, p.options.endpoints.Catalog, query, "catalog")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	page := string(payload)
 	matches := knowledgePattern.FindAllStringSubmatch(page, -1)
 	if len(matches) == 0 {
-		return nil, nil, learning.Fail(learning.FailureCapabilityMissing, "课程目录结构未识别")
+		if isEmptyCourseCatalog(payload, course) {
+			return []string{}, map[string]int{}, map[string]string{}, nil
+		}
+		return nil, nil, nil, learning.Fail(learning.FailureCapabilityMissing, "课程目录结构未识别")
 	}
 	seen := map[string]bool{}
 	order := make([]string, 0, len(matches))
 	for _, match := range matches {
 		if match[1] != course.ExternalCourseID || match[3] != course.ExternalClassID {
-			return nil, nil, learning.Fail(learning.FailureCapabilityMissing, "课程目录上下文与请求不一致")
+			return nil, nil, nil, learning.Fail(learning.FailureCapabilityMissing, "课程目录上下文与请求不一致")
 		}
 		knowledge := match[2]
 		if knowledge == "" || seen[knowledge] {
@@ -210,10 +220,35 @@ func (p *Platform) catalog(ctx context.Context, session Session, course learning
 		order = append(order, knowledge)
 	}
 	if len(order) > p.options.MaxChapters {
-		return nil, nil, learning.Fail(learning.FailureCapabilityMissing, "课程章节数量超出同步上限，未保存不完整目录")
+		return nil, nil, nil, learning.Fail(learning.FailureCapabilityMissing, "课程章节数量超出同步上限，未保存不完整目录")
 	}
-	pending := chapterPendingCounts(payload, order)
-	return order, pending, nil
+	titles := map[string]string{}
+	parseHTMLDocument(payload).walk(func(node *htmlNode) bool {
+		knowledge := strings.TrimPrefix(node.attr("id"), "cur")
+		if seen[knowledge] && strings.HasPrefix(node.attr("id"), "cur") {
+			titles[knowledge] = strings.TrimSpace(node.attr("title"))
+		}
+		return true
+	})
+	return order, chapterPendingCounts(payload, order), titles, nil
+}
+
+func isEmptyCourseCatalog(payload []byte, course learning.PlatformCourseRef) bool {
+	expected := map[string]string{"courseId": course.ExternalCourseID, "clazzId": course.ExternalClassID, "cpi": course.CPI}
+	seen, empty, invalid := map[string]bool{}, false, false
+	parseHTMLDocument(payload).walk(func(node *htmlNode) bool {
+		if value, ok := expected[node.attr("id")]; ok && node.tag == "input" {
+			if value == "" || value != node.attr("value") || seen[node.attr("id")] {
+				invalid = true
+			}
+			seen[node.attr("id")] = true
+		}
+		if node.hasClass("nodata") && strings.TrimSpace(htmlNodeText(node)) == "暂无章节内容" {
+			empty = true
+		}
+		return true
+	})
+	return empty && !invalid && len(seen) == len(expected)
 }
 
 func (p *Platform) cardsURL(course learning.PlatformCourseRef, knowledge string) string {
@@ -272,7 +307,7 @@ func parseAttachments(payload []byte) ([]learning.PlatformAttachment, int, error
 	config, err := parseCards(payload)
 	if err != nil {
 		// 没有任务点的章节会返回空的 mArg 初始化；这是空章节而不是结构损坏。
-		if bytes.Contains(payload, []byte("mArg")) {
+		if emptyCardConfig(payload) {
 			return nil, 0, nil
 		}
 		return nil, 0, learning.Fail(learning.FailureCapabilityMissing, "任务卡片结构未识别")
@@ -361,6 +396,29 @@ func textValue(value any) string {
 	return text(value)
 }
 
+func emptyCardConfig(payload []byte) bool {
+	matches := cardsPattern.FindAllIndex(payload, -1)
+	if len(matches) == 0 {
+		return false
+	}
+	for _, match := range matches {
+		var value any
+		if json.NewDecoder(bytes.NewReader(payload[match[1]:])).Decode(&value) != nil {
+			return false
+		}
+		switch typed := value.(type) {
+		case nil:
+		case string:
+			if typed != "" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 func parseCards(payload []byte) (map[string]any, error) {
 	for _, index := range cardsPattern.FindAllIndex(payload, -1) {
 		decoder := json.NewDecoder(bytes.NewReader(payload[index[1]:]))
@@ -394,43 +452,68 @@ func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, cour
 		return learning.PlatformCourseSnapshot{}, err
 	}
 	defer cleanup()
-	order, pending, err := p.catalog(ctx, session, course)
+	order, pending, titles, err := p.catalogDetails(ctx, session, course)
 	if err != nil {
 		return learning.PlatformCourseSnapshot{}, err
 	}
-	snapshot := learning.PlatformCourseSnapshot{
-		Course: course, Adapter: adapterVersion,
-		Chapters: make([]learning.PlatformChapter, 0, len(order)),
-	}
-	skipped := 0
-	for index, knowledge := range order {
-		attachments, skippedCards, err := p.readCards(ctx, session, course, knowledge)
-		if err != nil {
-			return learning.PlatformCourseSnapshot{}, err
-		}
-		skipped += skippedCards
-		chapter := learning.PlatformChapter{ExternalID: knowledge, SortOrder: index,
-			Attachments: make([]learning.PlatformAttachment, 0, len(attachments))}
-		taskPointCount := 0
-		for _, attachment := range attachments {
-			if attachment.TaskPointID != "" {
-				taskPointCount++
+	snapshot := learning.PlatformCourseSnapshot{Course: course, Adapter: adapterVersion,
+		Chapters: make([]learning.PlatformChapter, len(order))}
+	skippedCounts := make([]int, len(order))
+	group, readCtx := errgroup.WithContext(ctx)
+	jobs := make(chan int)
+	group.Go(func() error {
+		defer close(jobs)
+		for index := range order {
+			select {
+			case jobs <- index:
+			case <-readCtx.Done():
+				return readCtx.Err()
 			}
 		}
-		for _, attachment := range attachments {
-			// 目录待完成计数只在这个章节恰好一个任务点时可用于补足单卡缺失字段，
-			// 多任务点章节不能把整章计数分摊给每个附件。
-			if !attachment.PassedKnown && taskPointCount == 1 {
-				if count, ok := pending[knowledge]; ok {
-					attachment.PassedKnown = true
-					attachment.Passed = count == 0
+		return nil
+	})
+	for range min(4, len(order)) {
+		group.Go(func() error {
+			for index := range jobs {
+				select {
+				case p.discoverSlots <- struct{}{}:
+				case <-readCtx.Done():
+					return readCtx.Err()
 				}
+				knowledge := order[index]
+				attachments, skipped, err := p.readCards(readCtx, session, course, knowledge)
+				<-p.discoverSlots
+				if err != nil {
+					return err
+				}
+				taskPointCount := 0
+				for _, attachment := range attachments {
+					if attachment.TaskPointID != "" {
+						taskPointCount++
+					}
+				}
+				for itemIndex := range attachments {
+					item := &attachments[itemIndex]
+					// 章节计数只能补足恰好一个任务点的状态，不能分摊到多个附件。
+					if !item.PassedKnown && taskPointCount == 1 {
+						if count, ok := pending[knowledge]; ok {
+							item.PassedKnown, item.Passed = true, count == 0
+						}
+					}
+				}
+				skippedCounts[index] = skipped
+				snapshot.Chapters[index] = learning.PlatformChapter{ExternalID: knowledge, Title: titles[knowledge],
+					SortOrder: index, Attachments: attachments}
 			}
-			chapter.Attachments = append(chapter.Attachments, attachment)
-		}
-		snapshot.Chapters = append(snapshot.Chapters, chapter)
+			return nil
+		})
 	}
-	snapshot.SkippedAttachments = skipped
+	if err := group.Wait(); err != nil {
+		return learning.PlatformCourseSnapshot{}, err
+	}
+	for _, skipped := range skippedCounts {
+		snapshot.SkippedAttachments += skipped
+	}
 	return snapshot, nil
 }
 

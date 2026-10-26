@@ -282,11 +282,7 @@ func (s *Service) ListCourses(ctx context.Context, actor Actor, filter CourseFil
 	rows, err := s.pool.Query(ctx, `SELECT c.id::text, c.title, c.teacher, c.term, c.external_course_id,
 		c.external_class_id, c.snapshot_version, c.synced_at, c.updated_at,
 		COALESCE(s.chapter_count, 0), COALESCE(s.task_point_count, 0), COALESCE(s.incomplete_task_point_count, 0),
-		COALESCE((SELECT count(*) FROM public.learning_attachments a
-			WHERE a.course_id = c.id AND a.user_id = c.user_id AND a.snapshot_version = c.snapshot_version
-			  AND NOT a.is_task_point), 0),
-		COALESCE((SELECT count(*) FROM public.learning_attachments a
-			WHERE a.course_id = c.id AND a.user_id = c.user_id AND a.snapshot_version = c.snapshot_version), 0)
+		COALESCE(s.attachment_count - s.task_point_count, 0)
 		FROM public.learning_courses c
 		LEFT JOIN public.learning_course_snapshots s ON s.course_id = c.id AND s.user_id = c.user_id AND s.version = c.snapshot_version
 		WHERE c.user_id = $1
@@ -304,11 +300,10 @@ func (s *Service) ListCourses(ctx context.Context, actor Actor, filter CourseFil
 	for rows.Next() {
 		var item CourseSummary
 		var updated time.Time
-		var attachmentCount int
 		if err := rows.Scan(&item.ID, &item.Title, &item.Teacher, &item.Term, &item.ExternalCourseID,
 			&item.ExternalClassID, &item.SnapshotVersion, &item.SyncedAt, &updated,
 			&item.ChapterCount, &item.TaskPointCount, &item.IncompleteTaskPointCount,
-			&item.ResourceCount, &attachmentCount); err != nil {
+			&item.ResourceCount); err != nil {
 			return Page[CourseSummary]{}, errServiceUnavailable
 		}
 		item.Stale = item.SyncedAt == nil || now.Sub(*item.SyncedAt) > s.opts.CourseSnapshotTTL

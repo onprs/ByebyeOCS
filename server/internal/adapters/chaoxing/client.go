@@ -261,8 +261,10 @@ func tlsConfig() *tls.Config {
 
 // Platform 实现 learning.Platform 与 learning.Verifier（只读核验）接口。
 type Platform struct {
-	options platformOptions
-	factory clientFactory
+	options       platformOptions
+	factory       clientFactory
+	resourceCache resourceCache
+	discoverSlots chan struct{}
 }
 
 type platformOptions struct {
@@ -309,7 +311,8 @@ func NewPlatform(options Options) (*Platform, error) {
 		}
 	}
 	return &Platform{options: platformOptions{Options: options, endpoints: endpoints},
-		factory: clientFactory{options: options.httpOptions, limiter: &rateLimiter{}}}, nil
+		factory:       clientFactory{options: options.httpOptions, limiter: &rateLimiter{}},
+		discoverSlots: make(chan struct{}, 4)}, nil
 }
 
 func (p *Platform) Capabilities() learning.PlatformCapabilities {

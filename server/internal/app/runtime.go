@@ -127,6 +127,9 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 			}
 		}
 	}
+	if cached, ok := deps.Platform.(learning.ResourceCachePlatform); ok {
+		cached.SetResourceCache(learning.NewCourseResourceCache(db.Pool()))
+	}
 	learn, err := learning.New(db.Pool(), &learning.Options{Sessions: identity, Platform: deps.Platform, Executor: executor, ExecutionEnabled: cfg.Learning.ExecutionEnabled, ShutdownTimeout: cfg.Server.ShutdownTimeout, RequestTimeout: cfg.Database.QueryTimeout, RecoveryRetry: true, Logger: logger, Billing: &taskBilling{book: book}, BillingConfirmationRecorder: &taskBilling{book: book}, BillingSettlementReporter: &taskBilling{book: book}, QuestionsPolicyValidator: learning.QuestionsPolicyValidatorFunc(func(ctx context.Context, modelID, mode string) error {
 		if runtime.Questions == nil {
 			return fault.New("service_unavailable", "题库模型服务尚未准备好")

@@ -62,10 +62,13 @@ func (s *Service) Run(ctx context.Context) error {
 	s.recoverOnce(runCtx)
 
 	var wait sync.WaitGroup
-	wait.Add(4)
+	wait.Add(5)
 	go func() { defer wait.Done(); s.dispatchLoop(runCtx) }()
 	go func() { defer wait.Done(); s.verificationLoop(runCtx) }()
-	go func() { defer wait.Done(); s.syncLoop(runCtx) }()
+	// 两个同步消费者避免单个大课程账号长时间阻塞其他用户；平台请求仍统一限速。
+	for range 2 {
+		go func() { defer wait.Done(); s.syncLoop(runCtx) }()
+	}
 	go func() { defer wait.Done(); s.heartbeatLoop(runCtx) }()
 	<-runCtx.Done()
 	s.mu.Lock()

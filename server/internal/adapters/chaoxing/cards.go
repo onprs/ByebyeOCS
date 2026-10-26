@@ -19,13 +19,15 @@ func (p *Platform) chapterCardIndexes(ctx context.Context, session Session, cour
 	if p.options.endpoints.Study == "" {
 		return []int{0}, nil
 	}
-	query := url.Values{"courseId": {course.ExternalCourseID}, "clazzid": {course.ExternalClassID},
-		"chapterId": {knowledge}, "cpi": {course.CPI}, "verificationcode": {""}, "mooc2": {"1"}}
-	payload, err := p.do(ctx, session, http.MethodGet, p.options.endpoints.Study, query, "chapter_study")
-	if err != nil {
-		return nil, err
-	}
-	return chapterCardIndexes(payload, course, knowledge)
+	return p.cachedCardIndexes(ctx, p.resourceKey(course, knowledge), func() ([]int, error) {
+		query := url.Values{"courseId": {course.ExternalCourseID}, "clazzid": {course.ExternalClassID},
+			"chapterId": {knowledge}, "cpi": {course.CPI}, "verificationcode": {""}, "mooc2": {"1"}}
+		payload, err := p.do(ctx, session, http.MethodGet, p.options.endpoints.Study, query, "chapter_study")
+		if err != nil {
+			return nil, err
+		}
+		return chapterCardIndexes(payload, course, knowledge)
+	})
 }
 
 func cardAttr(node *html.Node, name string) string {
