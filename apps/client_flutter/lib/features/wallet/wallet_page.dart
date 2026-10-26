@@ -120,13 +120,6 @@ class _WalletPageState extends ConsumerState<WalletPage> {
                 padding: EdgeInsets.symmetric(horizontal: inset),
                 sliver: _buildLedgerSection(context, data),
               ),
-              const SliverFillRemaining(
-                hasScrollBody: false,
-                child: Align(
-                  alignment: Alignment.bottomCenter,
-                  child: SiteFooter(),
-                ),
-              ),
             ],
           ),
         );

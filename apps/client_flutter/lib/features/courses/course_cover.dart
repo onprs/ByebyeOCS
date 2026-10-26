@@ -101,6 +101,7 @@ class CourseCover extends ConsumerStatefulWidget {
     required this.seed,
     this.height = 118,
     this.background = true,
+    this.fit = BoxFit.cover,
   });
 
   /// 服务端给出的 API 根目录相对地址；为空表示没有可用封面。
@@ -110,6 +111,7 @@ class CourseCover extends ConsumerStatefulWidget {
 
   /// 占位图是否绘制底色，与主视觉的渐变背景配合时关闭。
   final bool background;
+  final BoxFit fit;
 
   @override
   ConsumerState<CourseCover> createState() => _CourseCoverState();
@@ -168,7 +170,7 @@ class _CourseCoverState extends ConsumerState<CourseCover> {
                   key: ValueKey<String>('cover-$path'),
                   height: widget.height,
                   width: double.infinity,
-                  fit: BoxFit.cover,
+                  fit: widget.fit,
                   cacheWidth: _decodeWidth(context, constraints.maxWidth),
                   gaplessPlayback: true,
                   errorBuilder: (context, error, stackTrace) => _placeholder(),

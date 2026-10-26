@@ -245,8 +245,6 @@ class HomePage extends ConsumerWidget {
                   ),
                 );
               }),
-              const SizedBox(height: 30),
-              const SiteFooter(),
             ],
           ),
         ),

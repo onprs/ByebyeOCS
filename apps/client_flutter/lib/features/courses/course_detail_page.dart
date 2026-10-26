@@ -261,8 +261,6 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
           icon: Icons.link,
           message: '课程内容以学习通为准。普通附件不计入未完成任务，平台确认数量会在同步后更新。',
         ),
-        const SizedBox(height: 30),
-        const SiteFooter(),
       ],
     );
     return body;

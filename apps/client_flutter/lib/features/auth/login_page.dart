@@ -55,6 +55,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
     }
     return Scaffold(
       backgroundColor: colors.background,
+      bottomNavigationBar: const SiteFooter(compact: true),
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -107,8 +108,6 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                             _MobileIntro(colors: colors),
                             const SizedBox(height: 24),
                             _buildContent(context, auth, login),
-                            const SizedBox(height: 28),
-                            const SiteFooter(compact: true),
                           ],
                         ),
                       ),

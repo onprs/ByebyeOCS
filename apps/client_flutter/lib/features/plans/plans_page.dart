@@ -65,8 +65,6 @@ class _PlansPageState extends ConsumerState<PlansPage> {
                 return _buildData(context, data, courses);
               },
             ),
-            const SizedBox(height: 30),
-            const SiteFooter(),
           ],
         ),
       ),

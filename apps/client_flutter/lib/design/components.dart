@@ -1195,51 +1195,47 @@ class SiteFooter extends StatelessWidget {
     final narrow = compact || MediaQuery.sizeOf(context).width < 600;
     final copyright = '© $year ByebyeOCS · 版权所有';
     return Container(
+      width: double.infinity,
       height: narrow ? 32 : 44,
       decoration: BoxDecoration(
         color: colors.surface,
         border: Border(top: BorderSide(color: colors.border)),
       ),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: AppMetrics.contentWidth),
-          child: Padding(
-            padding: EdgeInsets.symmetric(
-              horizontal: narrow ? 16 : AppMetrics.pagePadding,
-            ),
-            child: narrow
-                ? FittedBox(
-                    fit: BoxFit.scaleDown,
-                    child: Text(
-                      '$copyright · Created by onprs',
-                      maxLines: 1,
-                      style: TextStyle(
-                        color: colors.muted,
-                        fontSize: 11,
-                      ),
-                    ),
-                  )
-                : Row(
-                    children: [
-                      Text(
-                        copyright,
-                        style: TextStyle(
-                          color: colors.muted,
-                          fontSize: 11.5,
-                        ),
-                      ),
-                      const Spacer(),
-                      Text(
-                        'Created by onprs',
-                        style: TextStyle(
-                          color: colors.muted,
-                          fontSize: 11.5,
-                        ),
-                      ),
-                    ],
-                  ),
-          ),
+      child: Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: narrow ? 16 : 28,
         ),
+        child: narrow
+            ? FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  '$copyright · Created by onprs',
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: colors.muted,
+                    fontSize: 11,
+                  ),
+                ),
+              )
+            : Row(
+                children: [
+                  Text(
+                    copyright,
+                    style: TextStyle(
+                      color: colors.muted,
+                      fontSize: 11.5,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    'Created by onprs',
+                    style: TextStyle(
+                      color: colors.muted,
+                      fontSize: 11.5,
+                    ),
+                  ),
+                ],
+              ),
       ),
     );
   }
