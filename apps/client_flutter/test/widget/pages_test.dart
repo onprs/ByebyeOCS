@@ -116,6 +116,47 @@ void main() {
     expect(find.text('最近确认'), findsOneWidget);
   });
 
+  testWidgets('首页跳过空课程，优先展示有任务点的课程', (tester) async {
+    final courses = [
+      {
+        'id': 'empty',
+        'title': '暂时没有内容的课程',
+        'teacher': '测试教师',
+        'term': '秋季学期',
+        'chapter_count': 0,
+        'task_point_count': 0,
+        'incomplete_task_point_count': 0,
+        'resource_count': 0,
+        'snapshot_version': 1,
+        'synced_at': '2026-10-20T06:28:00Z',
+        'stale': false,
+      },
+      {
+        'id': 'active',
+        'title': '有任务的课程',
+        'teacher': '测试教师',
+        'term': '秋季学期',
+        'chapter_count': 2,
+        'task_point_count': 4,
+        'incomplete_task_point_count': 2,
+        'resource_count': 0,
+        'snapshot_version': 1,
+        'synced_at': '2026-10-20T06:28:00Z',
+        'stale': false,
+      },
+    ];
+    final server = TestServer(overrides: {
+      '/api/v1/courses': (_) async => jsonResponse({
+            'items': courses,
+            'next_cursor': '',
+          }),
+    });
+    await pumpTestPage(tester, const HomePage(), handler: server.call);
+
+    expect(find.text('平台已确认 2 / 4 个任务点'), findsOneWidget);
+    expect(find.text('有任务的课程'), findsWidgets);
+  });
+
   testWidgets('课程列表支持搜索与同步入口', (tester) async {
     await pumpTestPage(tester, const CoursesPage());
 
