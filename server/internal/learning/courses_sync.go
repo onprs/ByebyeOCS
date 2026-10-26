@@ -149,10 +149,10 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 		if !allowed {
 			return errLeaseLost
 		}
-		// 写前确认租约。网络读取不持有此锁。
+		// 不在整个快照事务内锁住同步行，否则心跳无法续租，长课程会被误判为租约失效。
 		var fence int64
 		if err := tx.QueryRow(ctx, `SELECT fence_token FROM public.learning_course_syncs
-			WHERE id = $1 FOR UPDATE`, job.ID).Scan(&fence); err != nil {
+			WHERE id = $1`, job.ID).Scan(&fence); err != nil {
 			return errServiceUnavailable
 		}
 		if fence != job.FenceToken {
@@ -313,6 +313,16 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 		}
 		if err := bindMatchingTasks(ctx, tx, account.UserID); err != nil {
 			return err
+		}
+		// 长事务结束前用当前时间复核租约，防止心跳之外的并发接管写入旧快照。
+		current := s.now()
+		var aliveAfterWrite bool
+		if err := tx.QueryRow(ctx, `SELECT fence_token, lease_expires_at > $2 FROM public.learning_course_syncs
+			WHERE id = $1`, job.ID, current).Scan(&fence, &aliveAfterWrite); err != nil {
+			return errServiceUnavailable
+		}
+		if fence != job.FenceToken || !aliveAfterWrite {
+			return errLeaseLost
 		}
 		return writeOutbox(ctx, tx, outboxEvent{
 			Topic: "course.snapshot_created", ResourceType: "course", ResourceID: courseID,

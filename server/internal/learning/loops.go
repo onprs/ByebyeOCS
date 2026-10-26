@@ -825,6 +825,14 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 			failure := failureOf(err)
 			s.opts.Logger.Warn("课程快照写入失败", "user_id", job.UserID, "course_index", processed,
 				"class", string(failure.Class), "detail", failure.Detail)
+			if failure.Class == FailureTransient {
+				transientPartial++
+				processed++
+				if err := s.updateCourseSyncProgress(ctx, &job, processed); err != nil {
+					return
+				}
+				continue
+			}
 			s.finishSyncFailure(ctx, job, s.classifySyncError(err))
 			return
 		}
