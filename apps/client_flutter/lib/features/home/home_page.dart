@@ -12,6 +12,7 @@ import '../../core/models/plan.dart';
 import '../../core/models/task.dart';
 import '../../core/models/wallet.dart';
 import '../../design/components.dart';
+import '../../design/page_layout.dart';
 import '../../design/theme.dart';
 import '../courses/course_cover.dart';
 import '../courses/course_sync_controller.dart';
@@ -78,13 +79,12 @@ class HomePage extends ConsumerWidget {
 
     return RefreshIndicator(
       onRefresh: () => _refresh(ref),
-      child: SingleChildScrollView(
+      child: PageScrollView(
         key: const PageStorageKey('home-scroll'),
         controller: scroll,
         primary: false,
         physics: const AlwaysScrollableScrollPhysics(),
         child: ResponsiveContent(
-          footer: const SiteFooter(),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [

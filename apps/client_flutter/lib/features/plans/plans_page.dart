@@ -8,6 +8,7 @@ import '../../core/models/plan.dart';
 import '../../core/models/task.dart';
 import '../../app/scroll_controllers.dart';
 import '../../design/components.dart';
+import '../../design/page_layout.dart';
 import '../../design/theme.dart';
 import '../courses/courses_controller.dart';
 import 'plan_editor.dart';
@@ -43,13 +44,11 @@ class _PlansPageState extends ConsumerState<PlansPage> {
     final courses =
         coursesAsync.valueOrNull?.courses ?? const <CourseSummary>[];
     final scroll = ref.watch(tabScrollControllerProvider('plans'));
-    return SingleChildScrollView(
+    return PageScrollView(
       key: const PageStorageKey('plans-scroll'),
       controller: scroll,
       primary: false,
-      padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
       child: ResponsiveContent(
-        footer: const SiteFooter(),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [

@@ -7,6 +7,7 @@ import '../../core/format/formatters.dart';
 import '../../core/models/course.dart';
 import '../../core/platform/external_link.dart';
 import '../../design/components.dart';
+import '../../design/page_layout.dart';
 import '../../design/theme.dart';
 import 'course_cover.dart';
 import 'courses_controller.dart';
@@ -28,10 +29,8 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
   @override
   Widget build(BuildContext context) {
     final async = ref.watch(courseDetailProvider(widget.courseId));
-    return SingleChildScrollView(
-      padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
+    return PageScrollView(
       child: ResponsiveContent(
-        footer: const SiteFooter(),
         child: async.when(
           loading: () => const LoadingList(rows: 3, height: 180),
           error: (error, _) => Column(
@@ -256,11 +255,6 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
               ],
             );
           },
-        ),
-        const SizedBox(height: 16),
-        const InlineNotice(
-          icon: Icons.link,
-          message: '课程内容以学习通为准。普通附件不计入未完成任务，平台确认数量会在同步后更新。',
         ),
       ],
     );

@@ -11,6 +11,7 @@ import '../../core/models/wallet.dart';
 import '../../core/platform/external_link.dart';
 import '../../app/scroll_controllers.dart';
 import '../../design/components.dart';
+import '../../design/page_layout.dart';
 import '../../design/theme.dart';
 import 'wallet_controller.dart';
 
@@ -69,10 +70,9 @@ class _WalletPageState extends ConsumerState<WalletPage> {
       return RefreshIndicator(
         onRefresh: () =>
             ref.read(walletControllerProvider.notifier).refresh(silent: true),
-        child: SingleChildScrollView(
+        child: PageScrollView(
           controller: _scrollController,
           physics: const AlwaysScrollableScrollPhysics(),
-          padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
           child: ResponsiveContent(
             child: async.when(
               loading: () => const LoadingList(rows: 3, height: 160),
@@ -90,17 +90,16 @@ class _WalletPageState extends ConsumerState<WalletPage> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final narrow = context.isNarrow;
-        // 与 ResponsiveContent 保持一致：窄屏 18、宽屏 28，超过 1180 居中。
-        final baseInset = narrow ? 18.0 : 28.0;
-        final centering = constraints.maxWidth > 1180
-            ? (constraints.maxWidth - 1180) / 2
+        // 懒列表与普通页面使用相同的内容宽度及边距，页脚由滚动容器统一提供。
+        final baseInset = narrow ? 16.0 : AppMetrics.pagePadding;
+        final centering = constraints.maxWidth > AppMetrics.contentWidth
+            ? (constraints.maxWidth - AppMetrics.contentWidth) / 2
             : 0.0;
         final inset = baseInset + centering;
-        // 原 SingleChildScrollView 底部 12/28 加 ResponsiveContent 底部 16/22。
         return RefreshIndicator(
           onRefresh: () =>
               ref.read(walletControllerProvider.notifier).refresh(silent: true),
-          child: CustomScrollView(
+          child: PageScrollView.slivers(
             key: const PageStorageKey('wallet-scroll'),
             controller: _scrollController,
             physics: const AlwaysScrollableScrollPhysics(),
@@ -108,7 +107,7 @@ class _WalletPageState extends ConsumerState<WalletPage> {
               SliverPadding(
                 padding: EdgeInsets.fromLTRB(
                   inset,
-                  narrow ? 16 : 22,
+                  narrow ? 16 : 24,
                   inset,
                   0,
                 ),
@@ -117,10 +116,9 @@ class _WalletPageState extends ConsumerState<WalletPage> {
                 ),
               ),
               SliverPadding(
-                padding: EdgeInsets.symmetric(horizontal: inset),
+                padding: EdgeInsets.fromLTRB(inset, 0, inset, narrow ? 16 : 24),
                 sliver: _buildLedgerSection(context, data),
               ),
-              const SliverToBoxAdapter(child: SiteFooter()),
             ],
           ),
         );

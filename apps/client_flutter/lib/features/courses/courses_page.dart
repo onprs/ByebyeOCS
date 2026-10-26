@@ -9,6 +9,7 @@ import '../../core/api/api_error.dart';
 import '../../core/models/course.dart';
 import '../../app/scroll_controllers.dart';
 import '../../design/components.dart';
+import '../../design/page_layout.dart';
 import '../../design/theme.dart';
 import 'course_cover.dart';
 import 'course_sync_controller.dart';
@@ -59,13 +60,11 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
         }
       });
     }
-    return SingleChildScrollView(
+    return PageScrollView(
       key: const PageStorageKey('courses-scroll'),
       controller: scroll,
       primary: false,
-      padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
       child: ResponsiveContent(
-        footer: const SiteFooter(),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -308,11 +307,6 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
               ),
             ),
           ),
-        const SizedBox(height: 18),
-        const InlineNotice(
-          icon: Icons.fact_check_outlined,
-          message: '完成数量来自学习通平台返回。普通附件标注为学习资料，不计入任务点。',
-        ),
       ],
     );
   }

@@ -407,6 +407,7 @@ void main() {
     expect(find.widgetWithText(ListTile, '题库查询'), findsOneWidget);
     expect(find.text('为什么任务显示等待验证？'), findsNothing);
     await tester.ensureVisible(find.text('常见问题'));
+    await settle(tester);
     await tester.tap(find.text('常见问题'));
     await settle(tester);
     expect(find.text('为什么任务显示等待验证？'), findsOneWidget);

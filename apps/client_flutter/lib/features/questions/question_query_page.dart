@@ -8,6 +8,7 @@ import '../../core/models/plan.dart';
 import '../../core/models/question.dart';
 import '../../app/tab_navigation.dart';
 import '../../design/components.dart';
+import '../../design/page_layout.dart';
 import '../../design/theme.dart';
 import 'question_providers.dart';
 import 'question_widgets.dart';
@@ -214,8 +215,7 @@ class _QuestionQueryPageState extends ConsumerState<QuestionQueryPage> {
   Widget build(BuildContext context) {
     final capabilities = ref.watch(authCapabilitiesProvider);
     final offeringsAsync = ref.watch(questionOfferingsProvider);
-    return SingleChildScrollView(
-      padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
+    return PageScrollView(
       child: ResponsiveContent(
         maxWidth: 920,
         child: Column(

@@ -1157,93 +1157,74 @@ class ResponsiveContent extends StatelessWidget {
     required this.child,
     this.maxWidth = AppMetrics.contentWidth,
     this.padding,
-    this.footer,
   });
 
   final Widget child;
   final double maxWidth;
-  final EdgeInsets? padding;
-  final Widget? footer;
+  final EdgeInsetsGeometry? padding;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: BoxConstraints(maxWidth: maxWidth),
-            child: Padding(
-              padding: padding ??
-                  EdgeInsets.symmetric(
-                    horizontal: context.isNarrow ? 16 : AppMetrics.pagePadding,
-                    vertical: context.isNarrow ? 16 : 24,
-                  ),
-              child: child,
-            ),
-          ),
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: Padding(
+          padding: padding ??
+              EdgeInsets.fromLTRB(
+                context.isNarrow ? 16 : AppMetrics.pagePadding,
+                context.isNarrow ? 16 : 24,
+                context.isNarrow ? 16 : AppMetrics.pagePadding,
+                context.isNarrow ? 16 : 24,
+              ),
+          child: child,
         ),
-        if (footer != null) footer!,
-      ],
+      ),
     );
   }
 }
 
-/// 页面页脚：三端统一显示年份、版权和作者，不随内容高度漂移。
+/// 页脚在主页面滚动容器中统一定位，正文与作者信息可随字号和宽度换行。
 class SiteFooter extends StatelessWidget {
-  const SiteFooter({super.key, this.compact = false});
-
-  final bool compact;
+  const SiteFooter({super.key});
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final year = DateTime.now().year;
-    final narrow = compact || MediaQuery.sizeOf(context).width < 600;
     final copyright = '© $year ByebyeOCS · 版权所有';
+    final style = TextStyle(color: colors.muted, fontSize: 12, height: 1.5);
     return Container(
       width: double.infinity,
-      height: narrow ? 32 : 44,
+      constraints: BoxConstraints(minHeight: context.isNarrow ? 36 : 44),
       decoration: BoxDecoration(
         color: colors.surface,
         border: Border(top: BorderSide(color: colors.border)),
       ),
-      child: Padding(
-        padding: EdgeInsets.symmetric(
-          horizontal: narrow ? 16 : 28,
+      child: Center(
+        heightFactor: 1,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: AppMetrics.contentWidth),
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+              horizontal: context.isNarrow ? 16 : AppMetrics.pagePadding,
+              vertical: 8,
+            ),
+            child: context.isNarrow
+                ? Text(
+                    '$copyright · Created by onprs',
+                    style: style,
+                    textAlign: TextAlign.center,
+                  )
+                : Row(
+                    children: [
+                      Expanded(child: Text(copyright, style: style)),
+                      const SizedBox(width: 16),
+                      Text('Created by onprs', style: style),
+                    ],
+                  ),
+          ),
         ),
-        child: narrow
-            ? FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  '$copyright · Created by onprs',
-                  maxLines: 1,
-                  style: TextStyle(
-                    color: colors.muted,
-                    fontSize: 11,
-                  ),
-                ),
-              )
-            : Row(
-                children: [
-                  Text(
-                    copyright,
-                    style: TextStyle(
-                      color: colors.muted,
-                      fontSize: 11.5,
-                    ),
-                  ),
-                  const Spacer(),
-                  Text(
-                    'Created by onprs',
-                    style: TextStyle(
-                      color: colors.muted,
-                      fontSize: 11.5,
-                    ),
-                  ),
-                ],
-              ),
       ),
     );
   }
