@@ -1157,27 +1157,35 @@ class ResponsiveContent extends StatelessWidget {
     required this.child,
     this.maxWidth = AppMetrics.contentWidth,
     this.padding,
+    this.footer,
   });
 
   final Widget child;
   final double maxWidth;
   final EdgeInsets? padding;
+  final Widget? footer;
 
   @override
   Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.topCenter,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(maxWidth: maxWidth),
-        child: Padding(
-          padding: padding ??
-              EdgeInsets.symmetric(
-                horizontal: context.isNarrow ? 16 : AppMetrics.pagePadding,
-                vertical: context.isNarrow ? 16 : 24,
-              ),
-          child: child,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Align(
+          alignment: Alignment.topCenter,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: maxWidth),
+            child: Padding(
+              padding: padding ??
+                  EdgeInsets.symmetric(
+                    horizontal: context.isNarrow ? 16 : AppMetrics.pagePadding,
+                    vertical: context.isNarrow ? 16 : 24,
+                  ),
+              child: child,
+            ),
+          ),
         ),
-      ),
+        if (footer != null) footer!,
+      ],
     );
   }
 }

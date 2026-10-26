@@ -31,6 +31,7 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
     return SingleChildScrollView(
       padding: EdgeInsets.only(bottom: context.isNarrow ? 12 : 28),
       child: ResponsiveContent(
+        footer: const SiteFooter(),
         child: async.when(
           loading: () => const LoadingList(rows: 3, height: 180),
           error: (error, _) => Column(

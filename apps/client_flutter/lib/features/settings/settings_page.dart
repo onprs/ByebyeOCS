@@ -41,6 +41,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       controller: scroll,
       primary: false,
       child: ResponsiveContent(
+        footer: const SiteFooter(),
         maxWidth: 960,
         child:
             Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [

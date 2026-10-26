@@ -84,6 +84,7 @@ class HomePage extends ConsumerWidget {
         primary: false,
         physics: const AlwaysScrollableScrollPhysics(),
         child: ResponsiveContent(
+          footer: const SiteFooter(),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -594,7 +595,7 @@ class _LearningOverview extends StatelessWidget {
                 seed: course?.id ?? 'empty',
                 height: 170,
                 background: false,
-                fit: BoxFit.contain,
+                fit: BoxFit.cover,
               ),
               content,
             ],
@@ -609,8 +610,9 @@ class _LearningOverview extends StatelessWidget {
               child: CourseCover(
                 path: course?.coverUrl,
                 seed: course?.id ?? 'empty',
-                height: 280,
+                height: AppMetrics.courseCardHeight,
                 background: false,
+                fit: BoxFit.cover,
               ),
             ),
           ],
