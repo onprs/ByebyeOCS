@@ -38,6 +38,7 @@ type directForkFixture struct {
 	db        *postgres.Database
 	calls     atomic.Int64
 	missing   atomic.Bool
+	fail      atomic.Bool
 	quiz      atomic.Bool
 	mu        sync.Mutex
 	models    []string
@@ -77,6 +78,10 @@ func newDirectForkFixture(t *testing.T, shared bool) *directForkFixture {
 		}
 		if before != nil && !before() {
 			f.badHold.Add(1)
+		}
+		if f.fail.Load() {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
 		}
 		answer := "A"
 		if f.quiz.Load() {
@@ -424,6 +429,26 @@ func TestTikuForkDirectAdaptation(t *testing.T) {
 		query(t, user, csrf, idem, input)
 		if fork.calls.Load() != before+1 {
 			t.Fatal("用量待复核的重试再次请求了付费模型")
+		}
+		assertWallet(t, userID, "995")
+	})
+	t.Run("上游失败结果不明进入复核且不重复调用", func(t *testing.T) {
+		fork.fail.Store(true)
+		defer fork.fail.Store(false)
+		before := fork.calls.Load()
+		idem := web.NewID()
+		input := queryBody(modelIDs["primary"], "always_llm", "上游响应异常", options)
+		code, _, result := requestJSON(t, user, "POST", fixture.user.URL+"/api/v1/question-queries", csrf, input, map[string]string{"Idempotency-Key": idem})
+		if code != http.StatusConflict || result["error"].(map[string]any)["code"] != "request_unknown" {
+			t.Fatal("不明用量没有进入复核", code, result)
+		}
+		var status, reason string
+		if err := fixture.runtime.db.Pool().QueryRow(ctx, `SELECT status, COALESCE(error_code,'') FROM public.question_queries WHERE user_id=$1 AND idempotency_key=$2`, userID, idem).Scan(&status, &reason); err != nil || status != "needs_review" || reason != "request_unknown" {
+			t.Fatal("主平台没有保存待复核事实", status, reason, err)
+		}
+		_, _, _ = requestJSON(t, user, "POST", fixture.user.URL+"/api/v1/question-queries", csrf, input, map[string]string{"Idempotency-Key": idem})
+		if fork.calls.Load() != before+1 {
+			t.Fatal("结果未知后重复调用了上游")
 		}
 		assertWallet(t, userID, "995")
 	})

@@ -1,6 +1,6 @@
 # 主项目与题库 fork 适配与修复验收
 
-本文面向开发维护环境。公开用户的安装与配置分别见主项目和题库的 README。
+本文面向开发维护环境。公开用户的安装与配置分别见主项目和题库的 README。本记录保留上一轮适配验收；后续提供商、缓存与分页更新见[题库性能与维护面板复查](tiku-performance-panel-audit.md)。
 
 ## 当前结论
 
@@ -45,7 +45,7 @@
 新增迁移：
 
 - 主库：[000023_question_cache_policy.sql](../../server/internal/platform/postgres/migrations/000023_question_cache_policy.sql) 保留；公开目录迁移为 [000024_question_catalogue_mirror.sql](../../server/internal/platform/postgres/migrations/000024_question_catalogue_mirror.sql)，当前24个连续迁移。
-- 独立题库：[000004_panel_audit.sql](../../services/tiku/internal/platform/store/migrations/000004_panel_audit.sql) 保留；公开条目为 [000005_offerings.sql](../../services/tiku/internal/platform/store/migrations/000005_offerings.sql)，当前5个连续迁移。
+- 独立题库：[000004_panel_audit.sql](../../services/tiku/internal/platform/store/migrations/000004_panel_audit.sql) 保留；公开条目为 [000005_offerings.sql](../../services/tiku/internal/platform/store/migrations/000005_offerings.sql)，当时5个连续迁移。
 
 旧迁移保持不变。升级时停止相关服务，显式执行两库迁移并配套更新主服务与 fork，再先启动 fork、后启动主服务。启动仍不自动迁移。维护账号与准确来源配置后才启用面板，完整步骤见[题库 README](../../services/tiku/README.md#维护面板)。
 
