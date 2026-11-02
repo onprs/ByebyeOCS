@@ -58,8 +58,9 @@ func TestInitializeConfigWiresProxyAndBackupDefaults(t *testing.T) {
 	if !cfg.Operations.RequireFreshBackup {
 		t.Fatal("生产配置未要求新鲜恢复点")
 	}
-	if cfg.Questions.Timeout != 95*time.Second {
-		t.Fatalf("题库超时未覆盖 provider 边界：%s", cfg.Questions.Timeout)
+	// 主服务等待窗口必须大于题库自身截止时间（默认 300 秒），只作耐心而非判决。
+	if cfg.Questions.Timeout != 330*time.Second {
+		t.Fatalf("题库等待窗口未覆盖题库截止时间：%s", cfg.Questions.Timeout)
 	}
 }
 

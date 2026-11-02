@@ -78,9 +78,11 @@
 | GET/POST `/reconciliations` | 对账状态、复核与异步扫描 |
 | GET/PATCH `/settings/{group}` | 配置版本与校验；密钥只接受安全写入，不返回原值 |
 | GET `/question-models` | 只读题库公开目录与价格 | 发布、编辑、下架和测试只在题库维护面板；主管理端不写目录 |
-| GET `/question-usage` | 查询次数、缓存命中、输入/输出 token、估算微元成本 | 目录从题库同步；价格未发布时显示“未定价” |
+| GET `/question-usage` | 查询次数、缓存命中、普通输入/输出、缓存读取/创建 token、估算微元成本 | 目录从题库同步；价格未发布时显示“未定价” |
 | GET `/question-queries` | 跨用户查询与用量，权限受限 | 题目内容按权限和保留期脱敏 |
 | POST `/question-cache/invalidations` | 标记错误缓存失效 | 记录操作者、原因、影响条目 |
+| POST `/question-queries/{id}/releases` | 释放“结果未知”查询的幂等键，允许重新作答 | 只接受 `request_unknown`/`request_cancelled`/`upstream_timeout`/`pending_record_missing`/`pending_state_unknown`；释放预占、旧记录改名保留、写审计；已有用量事实的查询拒绝释放；响应附带受影响的作答任务编号，便于重新排队 |
+| GET `/question-recovery` | 在途查询回收器的运行观测 | 运行次数、处理条数、失败次数、最近运行时间与最近错误码 |
 | POST `/providers/{id}/tests` | 可达性/功能测试分开，功能测试需成本确认 |
 | GET `/audit-events` | 脱敏审计、分页和导出权限 |
 | POST `/backups`、POST `/maintenance/updates` | 提升验证、备份/签名/维护流程，不执行任意 shell |

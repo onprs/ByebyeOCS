@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
+	"github.com/onprs/ByebyeOCS/server/internal/platform/runtimeconfig"
 )
 
 func testSession() Session {
@@ -539,5 +540,20 @@ func TestHTTPStatusClassification(t *testing.T) {
 				t.Fatalf("HTTP %d 分类错误: %v", status, err)
 			}
 		})
+	}
+}
+
+func TestPlatformAppliesConfiguredRequestPacingAndChapterConcurrency(t *testing.T) {
+	settings := runtimeconfig.NewLearning(4, 3, 8, 150*time.Millisecond)
+	platform, err := NewPlatform(Options{ReadOnlyEnabled: true, RequestInterval: 150 * time.Millisecond, DiscoverConcurrency: 8, Runtime: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if platform.options.MinRequestInterval != 150*time.Millisecond || platform.chapterConcurrency() != 8 || platform.requestInterval() != 150*time.Millisecond {
+		t.Fatalf("平台请求节奏或章节并发未生效：interval=%s chapter=%d", platform.requestInterval(), platform.chapterConcurrency())
+	}
+	settings.Set(4, 3, 12, 100*time.Millisecond)
+	if platform.chapterConcurrency() != 12 || platform.requestInterval() != 100*time.Millisecond {
+		t.Fatal("平台运行参数没有实时更新")
 	}
 }

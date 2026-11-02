@@ -70,6 +70,7 @@ func initializeConfig(args []string, stdout io.Writer) error {
 	if *development {
 		cfg.Mode = "development"
 		cfg.Auth.CookieSecure = false
+		cfg.Auth.LocalAdminAutoLogin = true
 		cfg.Operations.RequireFreshBackup = false
 	}
 	if *userOrigin != "" {

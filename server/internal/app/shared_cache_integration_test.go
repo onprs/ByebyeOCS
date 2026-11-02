@@ -15,6 +15,10 @@ type sharedScopeFork struct {
 	scope atomic.Value
 }
 
+func (f *sharedScopeFork) RequestStatus(context.Context, string) (questions.ForkRequestStatus, error) {
+	return questions.ForkRequestStatus{State: "pending"}, nil
+}
+
 func (f *sharedScopeFork) Answer(ctx context.Context, input questions.ForkAnswerRequest, key string) (questions.ForkAnswerResponse, error) {
 	f.scope.Store(input.CacheScope)
 	return f.accountedFork.Answer(ctx, input, key)

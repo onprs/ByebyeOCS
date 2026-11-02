@@ -15,7 +15,7 @@ import {
   Wallet,
 } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { getBillingSettings, getHealth, getMaintenance, getRuntimeSettings, updateBillingSettings } from '../api/endpoints'
+import { getBillingSettings, getHealth, getMaintenance, getRuntimeSettings, updateBillingSettings, updateRuntimeSettings } from '../api/endpoints'
 import type { RuntimeSettings } from '../api/types'
 import { useAuth } from '../auth/AuthProvider'
 import { hasPermission } from '../auth/permissions'
@@ -481,6 +481,8 @@ function byteLabel(value: string | null): string {
 const runtimeKeyLabels: Record<string, string> = {
   global_concurrency: '全局执行名额',
   account_concurrency: '账号默认并发',
+  chapter_concurrency: '单课同步并发',
+  request_interval_ms: '请求最小间隔（毫秒）',
   execution_enabled: '任务执行启用',
   instance_id: '节点标识',
   session_ttl: '会话有效期',
@@ -534,6 +536,63 @@ function FactList({ items, empty }: { items: Array<{ key: string; value: string 
 
 function RuntimePanel() {
   const runtime = useAsync(() => getRuntimeSettings().then(response => response.data), [])
+  const { me } = useAuth()
+  const { notify } = useToast()
+  const canManage = hasPermission(me, 'admin.users.manage')
+  const [form, setForm] = useState({ global_concurrency: '4', account_concurrency: '3', chapter_concurrency: '8', request_interval_ms: '150' })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<unknown | null>(null)
+  const [savedRestartRequired, setSavedRestartRequired] = useState(false)
+
+  useEffect(() => {
+    if (!runtime.data) return
+    const effective = Object.fromEntries(runtime.data.runtime.map(item => [item.key, item.value]))
+    const configured = runtime.data.configured
+    setForm({
+      global_concurrency: String(configured?.global_concurrency ?? effective.global_concurrency ?? 4),
+      account_concurrency: String(configured?.account_concurrency ?? effective.account_concurrency ?? 3),
+      chapter_concurrency: String(configured?.chapter_concurrency ?? effective.chapter_concurrency ?? 8),
+      request_interval_ms: String(configured?.request_interval_ms ?? effective.request_interval_ms ?? 150),
+    })
+    setSavedRestartRequired(runtime.data.restart_required)
+  }, [runtime.data])
+
+  const update = (key: keyof typeof form, value: string) => setForm(current => ({ ...current, [key]: value }))
+  const save = async () => {
+    const input = {
+      global_concurrency: Number(form.global_concurrency),
+      account_concurrency: Number(form.account_concurrency),
+      chapter_concurrency: Number(form.chapter_concurrency),
+      request_interval_ms: Number(form.request_interval_ms),
+    }
+    if (![input.global_concurrency, input.account_concurrency, input.chapter_concurrency, input.request_interval_ms].every(Number.isInteger)) {
+      setError(new Error('请填写整数并发和毫秒值。'))
+      return
+    }
+    if (input.global_concurrency < 1 || input.global_concurrency > 64) { setError(new Error('全局执行名额必须在 1 到 64 之间。')); return }
+    if (input.account_concurrency < 1 || input.account_concurrency > input.global_concurrency) { setError(new Error('账号默认并发必须在 1 到全局名额之间。')); return }
+    if (input.chapter_concurrency < 1 || input.chapter_concurrency > 16) { setError(new Error('单课同步并发必须在 1 到 16 之间。')); return }
+    if (input.request_interval_ms < 50 || input.request_interval_ms > 2000) { setError(new Error('请求间隔必须在 50 到 2000 毫秒之间。')); return }
+    setSaving(true)
+    setError(null)
+    try {
+      const response = await updateRuntimeSettings(input)
+      setSavedRestartRequired(response.data.restart_required)
+      const configured = response.data.configured
+      if (configured) setForm({
+        global_concurrency: String(configured.global_concurrency ?? input.global_concurrency),
+        account_concurrency: String(configured.account_concurrency ?? input.account_concurrency),
+        chapter_concurrency: String(configured.chapter_concurrency ?? input.chapter_concurrency),
+        request_interval_ms: String(configured.request_interval_ms ?? input.request_interval_ms),
+      })
+      notify(response.data.restart_required ? '并发设置已保存，当前运行参数待重启同步' : '并发设置已实时生效')
+      runtime.reload()
+    } catch (failure) {
+      setError(failure)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <div className="settings-stack">
@@ -548,6 +607,44 @@ function RuntimePanel() {
           {runtime.error && !runtime.data ? <ErrorState error={runtime.error} onRetry={runtime.reload} /> : null}
           {runtime.data ? (
             <>
+              {canManage ? (
+                <div className="settings-block">
+                  <div className="settings-block-heading">
+                    <h3>并发与请求节奏</h3>
+                    <p>保存后立即更新运行中的执行与同步参数，并持久化到服务配置。</p>
+                  </div>
+                  <div className="field-row">
+                    <Field label="全局执行名额" hint="同一进程最多同时执行的任务数，1–64。">
+                      <input value={form.global_concurrency} onChange={event => update('global_concurrency', event.target.value)} inputMode="numeric" disabled={saving} />
+                    </Field>
+                    <Field label="账号默认并发" hint="同一账号最多同时执行的不同任务数，不能超过全局名额。">
+                      <input value={form.account_concurrency} onChange={event => update('account_concurrency', event.target.value)} inputMode="numeric" disabled={saving} />
+                    </Field>
+                  </div>
+                  <div className="field-row">
+                    <Field label="单课同步并发章节" hint="课程同步时单门课同时读取的章节数，1–16。">
+                      <input value={form.chapter_concurrency} onChange={event => update('chapter_concurrency', event.target.value)} inputMode="numeric" disabled={saving} />
+                    </Field>
+                    <Field label="请求最小间隔（毫秒）" hint="平台请求的最小间隔，50–2000；过低可能触发平台限流。">
+                      <input value={form.request_interval_ms} onChange={event => update('request_interval_ms', event.target.value)} inputMode="numeric" disabled={saving} />
+                    </Field>
+                  </div>
+                  {savedRestartRequired ? (
+                    <Callout tone="warning" icon={<CircleAlert size={16} />}>
+                      当前运行参数与配置文件不一致，重启主服务后会按配置重新加载。
+                    </Callout>
+                  ) : null}
+                  {error ? <div className="u-margin-top-14px"><ErrorState error={error} compact /></div> : null}
+                  <div className="settings-save-row">
+                    <span className="form-hint">保存后即时生效，并写入主服务配置。</span>
+                    <Button variant="primary" onClick={() => void save()} loading={saving}>
+                      <Save size={14} /> 保存并发设置
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <Callout>当前角色只有运行信息读取权限，无法修改并发设置。</Callout>
+              )}
               <div className="detail-section-title"><Server size={14} /> 运行时配置</div>
               <FactList items={friendlyFacts(runtime.data.runtime, 'runtime')} empty="暂无可展示的运行时配置。" />
               <div className="detail-section-title u-margin-top-20px" ><HardDrive size={14} /> 存储状态</div>

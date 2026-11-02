@@ -95,6 +95,10 @@ func (f *automaticWorkFork) Offerings(ctx context.Context) ([]questions.ForkOffe
 
 func (f *automaticWorkFork) seedOffering(item questions.ForkOffering) { f.catalog.add(item) }
 
+func (f *automaticWorkFork) RequestStatus(context.Context, string) (questions.ForkRequestStatus, error) {
+	return questions.ForkRequestStatus{State: "pending"}, nil
+}
+
 func (f *automaticWorkFork) Answer(ctx context.Context, request questions.ForkAnswerRequest, _ string) (questions.ForkAnswerResponse, error) {
 	f.calls.Add(1)
 	if check, ok := f.before.Load().(func(context.Context) bool); ok && !check(ctx) {

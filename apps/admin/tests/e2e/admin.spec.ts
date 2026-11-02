@@ -158,6 +158,22 @@ test.describe('管理员控制台', () => {
     await expect(page.getByRole('button', { name: /^深色/ })).toHaveAttribute('aria-pressed', 'true')
   })
 
+  test('桌面侧边栏收起与展开，账户头像已移除', async ({ page }) => {
+    const state = await installFakeApi(page)
+    await login(page, state)
+    await expect(page.locator('.profile-button .avatar')).toHaveCount(0)
+    await expect(page.locator('.sidebar-admin')).toHaveCount(0)
+    const sidebar = page.locator('.admin-sidebar')
+    await expect(sidebar).toHaveCSS('width', '224px')
+    await expect(page.getByRole('button', { name: '收起侧边栏' })).toBeVisible()
+    await page.getByRole('button', { name: '收起侧边栏' }).click()
+    await expect(sidebar).toHaveCSS('width', '76px')
+    await expect(page.locator('.admin-main')).toHaveCSS('margin-left', '76px')
+    await expect(page.getByRole('button', { name: '展开侧边栏' })).toBeVisible()
+    await page.getByRole('button', { name: '展开侧边栏' }).click()
+    await expect(sidebar).toHaveCSS('width', '224px')
+  })
+
   test('窄屏导航、表格与页面宽度', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 })
     const state = await installFakeApi(page)

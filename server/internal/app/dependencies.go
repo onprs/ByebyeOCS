@@ -10,11 +10,13 @@ import (
 	"github.com/onprs/ByebyeOCS/server/internal/payments"
 	"github.com/onprs/ByebyeOCS/server/internal/platform/config"
 	"github.com/onprs/ByebyeOCS/server/internal/platform/fault"
+	"github.com/onprs/ByebyeOCS/server/internal/platform/runtimeconfig"
 	"github.com/onprs/ByebyeOCS/server/internal/questions"
 )
 
 func defaultDependencies(cfg config.Config) (Dependencies, error) {
-	result := Dependencies{}
+	result := Dependencies{Settings: runtimeconfig.NewLearning(cfg.Learning.GlobalConcurrency,
+		cfg.Learning.AccountConcurrency, cfg.Learning.ChapterConcurrency, cfg.Learning.RequestInterval)}
 	if !cfg.Auth.Enabled {
 		return result, nil
 	}
@@ -32,20 +34,24 @@ func defaultDependencies(cfg config.Config) (Dependencies, error) {
 		}
 		result.Fork = fork
 	}
-	if cfg.Learning.Enabled {
+	if localVerifier, enabled, err := localDevLoginVerifier(cfg); err != nil {
+		return result, err
+	} else if enabled {
+		result.Verifier = localVerifier
+	} else if cfg.Learning.Enabled {
 		var probe chaoxing.SubjectProbe
 		if strings.EqualFold(strings.TrimSpace(cfg.Learning.SubjectProbeFormat), "profile") {
 			profile, err := chaoxing.NewProfileSubjectProbe(chaoxing.ProfileProbeOptions{
 				Enabled: true, AccountURL: cfg.Learning.SubjectProbeURL, SchoolURL: cfg.Learning.SchoolProbeURL,
 				Namespace: cfg.Learning.SubjectNamespace, EvidenceRef: cfg.Learning.AuthorizationReference,
-				TTL: time.Duration(cfg.Learning.SubjectTTLHours) * time.Hour,
+				TTL: time.Duration(cfg.Learning.SubjectTTLHours) * time.Hour, Runtime: result.Settings,
 			})
 			if err != nil {
 				return result, fault.New("config_invalid", "账户资料探针配置无效")
 			}
 			probe = profile
 		} else {
-			jsonProbe, err := chaoxing.NewJSONSubjectProbe(chaoxing.JSONProbeOptions{Enabled: true, Endpoint: cfg.Learning.SubjectProbeURL, Method: cfg.Learning.SubjectProbeMethod, Namespace: cfg.Learning.SubjectNamespace, EvidenceRef: cfg.Learning.AuthorizationReference, SubjectPath: cfg.Learning.SubjectPath, ExpiresAtPath: cfg.Learning.SessionExpiryPath, ExpiresAtFormat: cfg.Learning.SessionExpiryFormat, DisplayNamePath: cfg.Learning.DisplayNamePath, SchoolPath: cfg.Learning.SchoolPath})
+			jsonProbe, err := chaoxing.NewJSONSubjectProbe(chaoxing.JSONProbeOptions{Enabled: true, Endpoint: cfg.Learning.SubjectProbeURL, Method: cfg.Learning.SubjectProbeMethod, Namespace: cfg.Learning.SubjectNamespace, EvidenceRef: cfg.Learning.AuthorizationReference, SubjectPath: cfg.Learning.SubjectPath, ExpiresAtPath: cfg.Learning.SessionExpiryPath, ExpiresAtFormat: cfg.Learning.SessionExpiryFormat, DisplayNamePath: cfg.Learning.DisplayNamePath, SchoolPath: cfg.Learning.SchoolPath, Runtime: result.Settings})
 			if err != nil {
 				return result, fault.New("config_invalid", "可信平台会话探针配置无效")
 			}
@@ -56,24 +62,24 @@ func defaultDependencies(cfg config.Config) (Dependencies, error) {
 			return result, fault.New("config_invalid", "平台登录验证器配置无效")
 		}
 		result.Verifier = authbridge.AuthVerifier{Verifier: verifier}
-		platform, err := chaoxing.NewPlatform(chaoxing.Options{ReadOnlyEnabled: true})
+		platform, err := chaoxing.NewPlatform(chaoxing.Options{ReadOnlyEnabled: true, RequestInterval: cfg.Learning.RequestInterval, DiscoverConcurrency: cfg.Learning.ChapterConcurrency, Runtime: result.Settings})
 		if err != nil {
 			return result, fault.New("config_invalid", "原生课程读取适配配置无效")
 		}
 		result.Platform = platform
 	}
-	executor, err := buildExecutor(cfg)
+	executor, err := buildExecutor(cfg, result.Settings)
 	if err != nil {
 		return result, err
 	}
 	result.Executor = executor
 	return result, nil
 }
-func buildExecutor(cfg config.Config) (learning.Executor, error) {
+func buildExecutor(cfg config.Config, settings *runtimeconfig.Learning) (learning.Executor, error) {
 	if !cfg.Learning.ExecutionEnabled {
 		return nil, nil
 	}
-	executor, err := chaoxing.NewHTTPExecutor(chaoxing.HTTPExecutorOptions{Enabled: true, Authorized: cfg.Learning.ExecutionEvidenceReference != "", Concurrency: cfg.Learning.GlobalConcurrency})
+	executor, err := chaoxing.NewHTTPExecutor(chaoxing.HTTPExecutorOptions{Enabled: true, Authorized: cfg.Learning.ExecutionEvidenceReference != "", Concurrency: 64, RequestInterval: cfg.Learning.RequestInterval, Runtime: settings})
 	if err != nil {
 		return nil, fault.New("not_configured", "原生请求执行配置无效")
 	}

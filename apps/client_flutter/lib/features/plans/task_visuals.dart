@@ -37,7 +37,8 @@ String taskFailureLabel(LearningTask task) {
   final code = task.lastErrorCode;
   if (code == null) return '任务需要处理';
   return switch (code) {
-    'verification_required' || 'identity_invalid' => '学习通身份需要重新验证',
+    'verification_required' => '任务需要本人验证（人脸或交互）',
+    'identity_invalid' => '学习通身份需要重新验证',
     'forbidden' => '课程权限不足，任务已停止',
     'rate_limited' => '平台请求受限，任务已停止',
     'capability_missing' => '当前内容暂不支持自动处理',

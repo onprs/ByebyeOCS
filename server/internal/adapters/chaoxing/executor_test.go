@@ -162,6 +162,32 @@ func TestHTTPExecutorNormalProtocolAndEvidence(t *testing.T) {
 	}
 }
 
+func TestHTTPExecutorAcceptsFaceScheduledUnstartedTask(t *testing.T) {
+	// 真实卡片：未开始过的视频没有 playTime，且随课程开启抓拍时下发抓拍时间点。
+	f := newHTTPExecutionFixture(t)
+	f.mutate = func(d, a map[string]any) {
+		delete(a, "playTime")
+		a["randomFaceCaptureTimeList"] = []any{float64(38)}
+	}
+	result, err := f.executor.Execute(context.Background(), f.request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Completed || *result.Observation.PositionSeconds != 90 {
+		t.Fatalf("未开始的任务没有正常执行: %+v", result)
+	}
+	var positions []string
+	for _, query := range f.reports {
+		positions = append(positions, query.Get("playingTime"))
+		if query.Get("videoFaceCaptureEnc") != "" {
+			t.Fatal("缺少平台抓拍凭证时伪造了字段")
+		}
+	}
+	if !reflect.DeepEqual(positions, []string{"0", "30", "60", "90", "90"}) {
+		t.Fatalf("没有从零起步执行: %v", positions)
+	}
+}
+
 func TestHTTPExecutorUnconfirmedDoesNotSucceed(t *testing.T) {
 	f := newHTTPExecutionFixture(t)
 	f.neverPass = true
@@ -226,7 +252,7 @@ func TestHTTPExecutorRejectsUnsafeTaskContexts(t *testing.T) {
 		{"课程不符", func(d, a map[string]any) { d["courseid"] = "999" }},
 		{"任务不符", func(d, a map[string]any) { a["jobid"] = "wrong-job" }},
 		{"无任务点附件", func(d, a map[string]any) { delete(a, "jobid") }},
-		{"保存位置缺失", func(d, a map[string]any) { delete(a, "playTime") }},
+		{"保存位置类型错误（缺省按零起步）", func(d, a map[string]any) { a["playTime"] = "unknown" }},
 		{"保存位置类型错误", func(d, a map[string]any) { a["playTime"] = false }},
 		{"位置超长", func(d, a map[string]any) { a["playTime"] = 91000 }},
 		{"请求间隔过短", func(d, a map[string]any) { d["reportTimeInterval"] = 1 }},

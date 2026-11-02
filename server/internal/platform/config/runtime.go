@@ -22,9 +22,11 @@ type Auth struct {
 	EncryptionKeys       map[int][]byte `yaml:"-" json:"-"`
 	IdentityKey          []byte         `yaml:"-" json:"-"`
 	CookieSecure         bool           `yaml:"cookie_secure"`
-	UserOrigin           string         `yaml:"user_origin"`
-	AdminOrigin          string         `yaml:"admin_origin"`
-	SessionTTL           time.Duration  `yaml:"session_ttl"`
+	// LocalAdminAutoLogin 仅用于 development 模式的回环管理员入口，自动建立管理员会话；生产配置校验拒绝启用。
+	LocalAdminAutoLogin bool          `yaml:"local_admin_auto_login,omitempty"`
+	UserOrigin          string        `yaml:"user_origin"`
+	AdminOrigin         string        `yaml:"admin_origin"`
+	SessionTTL          time.Duration `yaml:"session_ttl"`
 }
 type Storage struct {
 	DataDir         string `yaml:"data_dir"`
@@ -47,8 +49,14 @@ type Learning struct {
 	DisplayNamePath            string `yaml:"display_name_path"`
 	SchoolPath                 string `yaml:"school_path"`
 	ExecutionEvidenceReference string `yaml:"execution_evidence_reference"`
-	GlobalConcurrency          int    `yaml:"global_concurrency"`
-	AccountConcurrency         int    `yaml:"account_concurrency"`
+	// DevelopmentExecutionAuthorized 只允许本地维护环境在 development 模式显式开启真实执行。
+	DevelopmentExecutionAuthorized bool `yaml:"development_execution_authorized,omitempty"`
+	GlobalConcurrency              int  `yaml:"global_concurrency"`
+	AccountConcurrency             int  `yaml:"account_concurrency"`
+	// RequestInterval 控制同一平台适配器相邻上游请求的最小间隔；默认 300ms。
+	RequestInterval time.Duration `yaml:"request_interval"`
+	// ChapterConcurrency 控制单门课程同步时并发读取章节的上限；默认 4。
+	ChapterConcurrency int `yaml:"chapter_concurrency"`
 }
 type Payments struct {
 	Enabled         bool   `yaml:"enabled"`
@@ -87,8 +95,8 @@ func runtimeDefaults(cfg *Config) {
 	// 回环代理，使登录限流与客户端标识读取真实客户端地址；不信任其他来源。
 	cfg.Server.TrustedProxies = []string{"127.0.0.1/32", "::1/128"}
 	cfg.Storage = Storage{DataDir: "data"}
-	cfg.Learning = Learning{GlobalConcurrency: 4, AccountConcurrency: 1}
-	cfg.Questions = Questions{Timeout: 95 * time.Second, Concurrency: 2}
+	cfg.Learning = Learning{GlobalConcurrency: 4, AccountConcurrency: 1, RequestInterval: 300 * time.Millisecond, ChapterConcurrency: 4}
+	cfg.Questions = Questions{Timeout: 330 * time.Second, Concurrency: 2}
 	cfg.Operations = Operations{DiskProtection: true, RetentionInterval: 24 * time.Hour, ExportMaxBytes: 8 << 20, MaxEventStreams: 64, RequireFreshBackup: true, BackupMaxAge: 15 * time.Minute}
 }
 func resolveRuntimeFiles(cfg *Config, path string) {
@@ -175,8 +183,26 @@ func validateRuntime(cfg *Config) error {
 	if cfg.Mode == "production" && (cfg.Payments.Enabled || cfg.Payments.ChargingEnabled) && !cfg.Operations.RequireFreshBackup {
 		return invalid("生产收费与支付必须启用备份新鲜度保护")
 	}
-	if cfg.Mode == "development" && (cfg.Payments.Enabled || cfg.Payments.ChargingEnabled || cfg.Learning.ExecutionEnabled) {
-		return invalid("开发模式禁止真实付款、自动扣费和学习执行")
+	if cfg.Mode == "development" && (cfg.Payments.Enabled || cfg.Payments.ChargingEnabled) {
+		return invalid("开发模式禁止真实付款和自动扣费")
+	}
+	if cfg.Mode == "development" && cfg.Learning.ExecutionEnabled {
+		if !cfg.Learning.DevelopmentExecutionAuthorized {
+			return invalid("开发模式真实学习执行需要显式本地授权")
+		}
+		for _, origin := range []string{cfg.Auth.UserOrigin, cfg.Auth.AdminOrigin} {
+			parsed, err := url.Parse(origin)
+			if err != nil || parsed.Scheme != "http" {
+				return invalid("开发模式真实学习执行只允许回环 HTTP 入口")
+			}
+			host := parsed.Hostname()
+			if !strings.EqualFold(host, "localhost") {
+				address, parseErr := netip.ParseAddr(host)
+				if parseErr != nil || !address.IsLoopback() {
+					return invalid("开发模式真实学习执行只允许回环 HTTP 入口")
+				}
+			}
+		}
 	}
 	if cfg.Operations.BackupMaxAge < time.Minute || cfg.Operations.BackupMaxAge > 15*time.Minute {
 		return invalid("备份可恢复点上限必须在 1 到 15 分钟")
@@ -211,6 +237,16 @@ func validateRuntime(cfg *Config) error {
 		if cfg.Auth.UserOrigin == cfg.Auth.AdminOrigin {
 			return invalid("用户和管理员 Origin 必须不同")
 		}
+		if cfg.Auth.LocalAdminAutoLogin {
+			if cfg.Mode != "development" {
+				return invalid("管理员本地自动登录只允许 development 模式")
+			}
+			parsed, err := url.Parse(cfg.Auth.AdminOrigin)
+			address, parseErr := netip.ParseAddr(parsed.Hostname())
+			if err != nil || parsed.Scheme != "http" || parseErr != nil || !address.IsLoopback() {
+				return invalid("管理员本地自动登录只允许回环 HTTP 入口")
+			}
+		}
 		if cfg.Auth.SessionTTL < time.Minute || cfg.Auth.SessionTTL > 30*24*time.Hour {
 			return invalid("会话期限必须为 1 分钟到 30 天")
 		}
@@ -220,6 +256,18 @@ func validateRuntime(cfg *Config) error {
 	}
 	if cfg.Learning.GlobalConcurrency < 1 || cfg.Learning.GlobalConcurrency > 64 || cfg.Learning.AccountConcurrency < 1 || cfg.Learning.AccountConcurrency > cfg.Learning.GlobalConcurrency {
 		return invalid("学习并发限额无效")
+	}
+	if cfg.Learning.RequestInterval <= 0 {
+		cfg.Learning.RequestInterval = 300 * time.Millisecond
+	}
+	if cfg.Learning.RequestInterval < 50*time.Millisecond || cfg.Learning.RequestInterval > 2*time.Second {
+		return invalid("学习上游请求间隔必须在 50ms 到 2s 之间")
+	}
+	if cfg.Learning.ChapterConcurrency <= 0 {
+		cfg.Learning.ChapterConcurrency = 4
+	}
+	if cfg.Learning.ChapterConcurrency > 16 {
+		return invalid("单门课程并发章节上限不能超过 16")
 	}
 	if cfg.Learning.Enabled && (!cfg.Auth.Enabled || cfg.Learning.AuthorizationReference == "" || cfg.Learning.SubjectNamespace == "") {
 		return invalid("启用平台连接前须配置认证、授权依据和已验证主体命名空间")
@@ -278,7 +326,7 @@ func validateRuntime(cfg *Config) error {
 			return invalid("题库服务要求启用认证并配置至少 16 字节的服务令牌")
 		}
 	}
-	if cfg.Questions.Timeout < time.Second || cfg.Questions.Timeout > 2*time.Minute || cfg.Questions.Concurrency < 1 || cfg.Questions.Concurrency > 16 {
+	if cfg.Questions.Timeout < time.Second || cfg.Questions.Timeout > 15*time.Minute || cfg.Questions.Concurrency < 1 || cfg.Questions.Concurrency > 16 {
 		return invalid("题库超时或并发设置无效")
 	}
 	if cfg.Operations.RetentionInterval < time.Minute || cfg.Operations.RetentionInterval > 7*24*time.Hour || cfg.Operations.ExportMaxBytes < 1024 || cfg.Operations.ExportMaxBytes > 32<<20 || cfg.Operations.MaxEventStreams < 1 || cfg.Operations.MaxEventStreams > 1000 {

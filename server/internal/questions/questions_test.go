@@ -32,6 +32,9 @@ type fakeFork struct {
 	testResult       ForkTestResult
 	catalog          *testCatalog
 	catalogueErr     error
+	status           ForkRequestStatus
+	statusByKey      map[string]ForkRequestStatus
+	statusErr        error
 }
 
 // testCatalog 是题库公开条目的内存夹具；目录内容由题库面板维护。
@@ -113,6 +116,24 @@ func (f *fakeFork) Answer(_ context.Context, request ForkAnswerRequest, _ string
 			Calls: []Call{{Slot: "answer", InputTokens: &input, OutputTokens: &output, TotalTokens: &total, Status: "ok"}}},
 		LatencyMS: 10,
 	}, nil
+}
+
+// RequestStatus 默认返回「仍在处理」；需要时由用例替换 status 字段。
+func (f *fakeFork) RequestStatus(_ context.Context, idempotencyKey string) (ForkRequestStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.statusErr != nil {
+		return ForkRequestStatus{}, f.statusErr
+	}
+	if f.statusByKey != nil {
+		if value, found := f.statusByKey[idempotencyKey]; found {
+			return value, nil
+		}
+	}
+	if f.status.State == "" {
+		return ForkRequestStatus{State: "pending", CreatedAt: time.Now().UTC()}, nil
+	}
+	return f.status, nil
 }
 
 func (f *fakeFork) TestModel(_ context.Context, providerRef, kind string, _ bool) (ForkTestResult, error) {

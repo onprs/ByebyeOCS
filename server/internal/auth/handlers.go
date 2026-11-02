@@ -134,6 +134,9 @@ func (s *Service) handleSessionStatus(w http.ResponseWriter, r *http.Request) {
 		Capabilities:  s.capabilities(),
 	}
 	state, ok := sessionFrom(r.Context())
+	if !ok && kind == KindAdmin && s.localAdminAutoLogin(w, r) {
+		return
+	}
 	if ok {
 		actor, authorized := web.Require(w, r, kind, permissionFor(kind))
 		if !authorized {

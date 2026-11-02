@@ -21,6 +21,7 @@ import (
 	"github.com/onprs/ByebyeOCS/server/internal/platform/config"
 	"github.com/onprs/ByebyeOCS/server/internal/platform/fault"
 	"github.com/onprs/ByebyeOCS/server/internal/platform/postgres"
+	"github.com/onprs/ByebyeOCS/server/internal/platform/runtimeconfig"
 	"github.com/onprs/ByebyeOCS/server/internal/questions"
 	"github.com/onprs/ByebyeOCS/server/internal/transport/httpapi"
 	"github.com/onprs/ByebyeOCS/server/internal/web"
@@ -28,6 +29,7 @@ import (
 
 // Dependencies 是受信任的进程内扩展点，HTTP 和配置不能注入任意实现。
 type Dependencies struct {
+	Settings        *runtimeconfig.Learning
 	Verifier        auth.Verifier
 	Platform        learning.Platform
 	Executor        learning.Executor
@@ -56,6 +58,11 @@ func NewRuntime(cfg config.Config, db *postgres.Database, logger *slog.Logger) (
 	return Assemble(cfg, db, logger, deps)
 }
 func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, deps Dependencies) (*Runtime, error) {
+	settings := deps.Settings
+	if settings == nil {
+		settings = runtimeconfig.NewLearning(cfg.Learning.GlobalConcurrency, cfg.Learning.AccountConcurrency,
+			cfg.Learning.ChapterConcurrency, cfg.Learning.RequestInterval)
+	}
 	runtime := &Runtime{cfg: cfg, db: db, logger: logger, userLoginAvailable: deps.Verifier != nil}
 	runtime.HTTP.User.AssetsDir = cfg.Storage.ClientAssetsDir
 	runtime.HTTP.Admin.AssetsDir = cfg.Storage.AdminAssetsDir
@@ -80,7 +87,7 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 		}
 		_, err := runtime.Questions.RunCleanup(ctx)
 		return err
-	}, DataDir: cfg.Storage.DataDir, Key: deriveKey(cfg.Auth.EncryptionKey, "privacy-export"), DecryptionKeys: exportKeys, ExportMaxBytes: cfg.Operations.ExportMaxBytes, RetentionInterval: cfg.Operations.RetentionInterval, DiskProtection: cfg.Operations.DiskProtection, RequireFreshBackup: cfg.Operations.RequireFreshBackup, BackupStatusFile: cfg.Operations.BackupStatusFile, BackupMaxAge: cfg.Operations.BackupMaxAge, QuestionConcurrency: cfg.Questions.Concurrency, Runtime: map[string]any{"mode": cfg.Mode, "global_concurrency": cfg.Learning.GlobalConcurrency, "account_concurrency": cfg.Learning.AccountConcurrency, "source_configured": deps.Platform != nil, "executor_configured": deps.Executor != nil, "payments_configured": cfg.Payments.Enabled, "question_service_configured": cfg.Questions.Enabled}})
+	}, DataDir: cfg.Storage.DataDir, Key: deriveKey(cfg.Auth.EncryptionKey, "privacy-export"), DecryptionKeys: exportKeys, ExportMaxBytes: cfg.Operations.ExportMaxBytes, RetentionInterval: cfg.Operations.RetentionInterval, DiskProtection: cfg.Operations.DiskProtection, RequireFreshBackup: cfg.Operations.RequireFreshBackup, BackupStatusFile: cfg.Operations.BackupStatusFile, BackupMaxAge: cfg.Operations.BackupMaxAge, QuestionConcurrency: cfg.Questions.Concurrency, ConfigPath: cfg.SourcePath, LearningRuntime: settings, Runtime: map[string]any{"mode": cfg.Mode, "global_concurrency": cfg.Learning.GlobalConcurrency, "account_concurrency": cfg.Learning.AccountConcurrency, "chapter_concurrency": cfg.Learning.ChapterConcurrency, "request_interval_ms": cfg.Learning.RequestInterval.Milliseconds(), "source_configured": deps.Platform != nil, "executor_configured": deps.Executor != nil, "payments_configured": cfg.Payments.Enabled, "question_service_configured": cfg.Questions.Enabled}})
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +110,7 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 		trusted = append(trusted, value)
 	}
 	subjectKey := deriveKey(identityKey, "learning-subject-index")
-	identity, err := auth.New(db.Pool(), auth.Options{CookieSecure: cfg.Auth.CookieSecure, UserOrigin: cfg.Auth.UserOrigin, AdminOrigin: cfg.Auth.AdminOrigin, EncryptionKey: cfg.Auth.EncryptionKey, IdentityKey: cfg.Auth.IdentityKey, EncryptionKeys: cfg.Auth.EncryptionKeys, EncryptionKeyVersion: cfg.Auth.EncryptionKeyVersion, Verifier: deps.Verifier, SessionTTL: cfg.Auth.SessionTTL, ClientKey: func(r *http.Request) string { return web.ClientKey(r, trusted) }, OnIdentityBound: func(ctx context.Context, tx pgx.Tx, userID string, subject auth.VerifiedSubject) error {
+	identity, err := auth.New(db.Pool(), auth.Options{CookieSecure: cfg.Auth.CookieSecure, UserOrigin: cfg.Auth.UserOrigin, AdminOrigin: cfg.Auth.AdminOrigin, EncryptionKey: cfg.Auth.EncryptionKey, IdentityKey: cfg.Auth.IdentityKey, EncryptionKeys: cfg.Auth.EncryptionKeys, EncryptionKeyVersion: cfg.Auth.EncryptionKeyVersion, Verifier: deps.Verifier, SessionTTL: cfg.Auth.SessionTTL, LocalAdminAutoLogin: func(r *http.Request) bool { return cfg.Auth.LocalAdminAutoLogin && localAdminRequest(r) }, ClientKey: func(r *http.Request) string { return web.ClientKey(r, trusted) }, OnIdentityBound: func(ctx context.Context, tx pgx.Tx, userID string, subject auth.VerifiedSubject) error {
 		if runtime.Learning == nil {
 			return fault.New("service_unavailable", "课程身份服务尚未准备好")
 		}
@@ -130,7 +137,7 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 	if cached, ok := deps.Platform.(learning.ResourceCachePlatform); ok {
 		cached.SetResourceCache(learning.NewCourseResourceCache(db.Pool()))
 	}
-	learn, err := learning.New(db.Pool(), &learning.Options{Sessions: identity, Platform: deps.Platform, Executor: executor, ExecutionEnabled: cfg.Learning.ExecutionEnabled, ShutdownTimeout: cfg.Server.ShutdownTimeout, RequestTimeout: cfg.Database.QueryTimeout, RecoveryRetry: true, Logger: logger, Billing: &taskBilling{book: book}, BillingConfirmationRecorder: &taskBilling{book: book}, BillingSettlementReporter: &taskBilling{book: book}, QuestionsPolicyValidator: learning.QuestionsPolicyValidatorFunc(func(ctx context.Context, modelID, mode string) error {
+	learn, err := learning.New(db.Pool(), &learning.Options{Sessions: identity, Platform: deps.Platform, Executor: executor, ExecutionEnabled: cfg.Learning.ExecutionEnabled, Runtime: settings, ShutdownTimeout: cfg.Server.ShutdownTimeout, RequestTimeout: cfg.Database.QueryTimeout, RecoveryRetry: true, Logger: logger, Billing: &taskBilling{book: book}, BillingConfirmationRecorder: &taskBilling{book: book}, BillingSettlementReporter: &taskBilling{book: book}, QuestionsPolicyValidator: learning.QuestionsPolicyValidatorFunc(func(ctx context.Context, modelID, mode string) error {
 		if runtime.Questions == nil {
 			return fault.New("service_unavailable", "题库模型服务尚未准备好")
 		}
@@ -257,7 +264,7 @@ func (r *Runtime) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wait sync.WaitGroup
-	errors := make(chan error, 3)
+	errors := make(chan error, 4)
 	for _, run := range []func(context.Context) error{func(ctx context.Context) error {
 		if r.Learning == nil {
 			return nil
@@ -273,6 +280,11 @@ func (r *Runtime) Run(ctx context.Context) error {
 			return nil
 		}
 		return r.Operations.Run(ctx)
+	}, func(ctx context.Context) error {
+		if r.Questions == nil {
+			return nil
+		}
+		return r.Questions.Run(ctx)
 	}} {
 		wait.Add(1)
 		go func() {

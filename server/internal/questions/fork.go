@@ -57,19 +57,23 @@ type ForkCache struct {
 }
 
 type Call struct {
-	Slot         string `json:"slot"`
-	InputTokens  *int64 `json:"input_tokens"`
-	OutputTokens *int64 `json:"output_tokens"`
-	TotalTokens  *int64 `json:"total_tokens"`
-	Status       string `json:"status"`
+	Slot             string `json:"slot"`
+	InputTokens      *int64 `json:"input_tokens"`
+	OutputTokens     *int64 `json:"output_tokens"`
+	TotalTokens      *int64 `json:"total_tokens"`
+	CacheReadTokens  *int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
+	Status           string `json:"status"`
 }
 
 type Usage struct {
-	InputTokens  *int64 `json:"input_tokens"`
-	OutputTokens *int64 `json:"output_tokens"`
-	TotalTokens  *int64 `json:"total_tokens"`
-	Complete     bool   `json:"complete"`
-	Calls        []Call `json:"calls"`
+	InputTokens      *int64 `json:"input_tokens"`
+	OutputTokens     *int64 `json:"output_tokens"`
+	TotalTokens      *int64 `json:"total_tokens"`
+	CacheReadTokens  *int64 `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens *int64 `json:"cache_write_tokens,omitempty"`
+	Complete         bool   `json:"complete"`
+	Calls            []Call `json:"calls"`
 }
 
 type ForkAnswerResponse struct {
@@ -144,6 +148,16 @@ type ForkClient interface {
 	TestModel(ctx context.Context, providerRef, kind string, confirmCost bool) (ForkTestResult, error)
 	// InvalidateCache 返回 fork 是否真的标记了条目失效；已失效或已过期条目返回 false。
 	InvalidateCache(ctx context.Context, entryID, reason string) (bool, error)
+	// RequestStatus 读取幂等键对应的请求状态，不等待、不触发模型调用。
+	RequestStatus(ctx context.Context, idempotencyKey string) (ForkRequestStatus, error)
+}
+
+// ForkRequestStatus 是题库返回的请求状态快照。
+type ForkRequestStatus struct {
+	State     string              `json:"state"`
+	ErrorCode string              `json:"error_code"`
+	CreatedAt time.Time           `json:"created_at"`
+	Response  *ForkAnswerResponse `json:"response,omitempty"`
 }
 
 type httpFork struct {
@@ -196,7 +210,9 @@ func (c *httpFork) doJSON(ctx context.Context, method, path, idempotencyKey stri
 	response, err := c.http.Do(request)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return &ForkError{Code: "upstream_timeout", Message: "题库服务超时，结果未知", Status: 504, Retryable: true}
+			// 本地等待窗口到点不等于题库失败：fork 可能仍在推理。保留可重试状态，
+			// 由同幂等键的后续请求读取已落库结果。
+			return &ForkError{Code: "fork_pending", Message: "题库仍在处理，稍后读取结果", Status: 504, Retryable: true}
 		}
 		// 调用方取消表示上游可能已受理请求，不能当作可重试的确定失败。
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -235,6 +251,12 @@ func (c *httpFork) Answer(ctx context.Context, request ForkAnswerRequest, idempo
 	var response ForkAnswerResponse
 	err := c.doJSON(ctx, http.MethodPost, "/api/v2/answers", idempotencyKey, request, &response)
 	return response, err
+}
+
+func (c *httpFork) RequestStatus(ctx context.Context, idempotencyKey string) (ForkRequestStatus, error) {
+	var status ForkRequestStatus
+	err := c.doJSON(ctx, http.MethodGet, "/internal/v1/requests/"+url.PathEscape(idempotencyKey), "", nil, &status)
+	return status, err
 }
 
 func (c *httpFork) Offerings(ctx context.Context) ([]ForkOffering, error) {
@@ -340,13 +362,31 @@ func validUsage(usage Usage, cacheHit bool, maxCalls int) bool {
 	if input < 0 || output < 0 || total < 0 || output > math.MaxInt64-input || total != input+output {
 		return false
 	}
-	var callInput, callOutput, callTotal int64
+	var callInput, callOutput, callTotal, callCacheRead, callCacheWrite int64
+	cacheReadKnown, cacheWriteKnown := true, true
 	for _, call := range usage.Calls {
 		if call.InputTokens == nil || call.OutputTokens == nil || call.TotalTokens == nil || call.Status != "ok" {
 			return false
 		}
 		if *call.InputTokens < 0 || *call.OutputTokens < 0 || *call.OutputTokens > math.MaxInt64-*call.InputTokens ||
 			*call.TotalTokens != *call.InputTokens+*call.OutputTokens {
+			return false
+		}
+		if call.CacheReadTokens == nil {
+			cacheReadKnown = false
+		} else if *call.CacheReadTokens < 0 || *call.CacheReadTokens > *call.InputTokens || *call.CacheReadTokens > math.MaxInt64-callCacheRead {
+			return false
+		} else if cacheReadKnown {
+			callCacheRead += *call.CacheReadTokens
+		}
+		if call.CacheWriteTokens == nil {
+			cacheWriteKnown = false
+		} else if *call.CacheWriteTokens < 0 || *call.CacheWriteTokens > *call.InputTokens || *call.CacheWriteTokens > math.MaxInt64-callCacheWrite {
+			return false
+		} else if cacheWriteKnown {
+			callCacheWrite += *call.CacheWriteTokens
+		}
+		if call.CacheReadTokens != nil && call.CacheWriteTokens != nil && *call.CacheReadTokens > *call.InputTokens-*call.CacheWriteTokens {
 			return false
 		}
 		if *call.InputTokens > math.MaxInt64-callInput || *call.OutputTokens > math.MaxInt64-callOutput ||
@@ -356,6 +396,15 @@ func validUsage(usage Usage, cacheHit bool, maxCalls int) bool {
 		callInput += *call.InputTokens
 		callOutput += *call.OutputTokens
 		callTotal += *call.TotalTokens
+	}
+	if usage.CacheReadTokens != nil && (*usage.CacheReadTokens < 0 || *usage.CacheReadTokens > input || !cacheReadKnown || *usage.CacheReadTokens != callCacheRead) {
+		return false
+	}
+	if usage.CacheWriteTokens != nil && (*usage.CacheWriteTokens < 0 || *usage.CacheWriteTokens > input || !cacheWriteKnown || *usage.CacheWriteTokens != callCacheWrite) {
+		return false
+	}
+	if usage.CacheReadTokens != nil && usage.CacheWriteTokens != nil && *usage.CacheReadTokens > input-*usage.CacheWriteTokens {
+		return false
 	}
 	return callInput == input && callOutput == output && callTotal == total
 }

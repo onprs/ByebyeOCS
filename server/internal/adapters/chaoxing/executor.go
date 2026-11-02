@@ -13,18 +13,21 @@ import (
 	"time"
 
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
+	"github.com/onprs/ByebyeOCS/server/internal/platform/runtimeconfig"
 )
 
 // HTTPExecutorOptions 控制原生请求执行；真实平台连接与执行授权分别确认。
 // 不提供倍速、跳过交互、覆盖时长或任意上报地址的生产配置。
 type HTTPExecutorOptions struct {
 	httpOptions
-	Enabled      bool
-	Authorized   bool
-	Concurrency  int
-	MaxDuration  time.Duration
-	ConfirmGrace time.Duration
-	Endpoints    Endpoints
+	Enabled         bool
+	Authorized      bool
+	Concurrency     int
+	RequestInterval time.Duration
+	Runtime         *runtimeconfig.Learning
+	MaxDuration     time.Duration
+	ConfirmGrace    time.Duration
+	Endpoints       Endpoints
 	// 时钟和等待函数只供包内协议测试使用，不能从配置或请求注入。
 	now  func() time.Time
 	wait func(context.Context, time.Duration) error
@@ -39,6 +42,9 @@ type HTTPExecutor struct {
 }
 
 func NewHTTPExecutor(options HTTPExecutorOptions) (*HTTPExecutor, error) {
+	if options.RequestInterval > 0 {
+		options.httpOptions.MinRequestInterval = options.RequestInterval
+	}
 	if options.Concurrency == 0 {
 		options.Concurrency = 4
 	}
@@ -57,7 +63,7 @@ func NewHTTPExecutor(options HTTPExecutorOptions) (*HTTPExecutor, error) {
 	if options.wait == nil {
 		options.wait = waitHTTPExecution
 	}
-	platform, err := NewPlatform(Options{httpOptions: options.httpOptions, ReadOnlyEnabled: true, Endpoints: options.Endpoints})
+	platform, err := NewPlatform(Options{httpOptions: options.httpOptions, ReadOnlyEnabled: true, RequestInterval: options.RequestInterval, Runtime: options.Runtime, Endpoints: options.Endpoints})
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +182,7 @@ func (r *httpExecution) get(ctx context.Context, address, role string) ([]byte, 
 	if err != nil || !factory.allowedURL(target) || target.Fragment != "" {
 		return nil, learning.Fail(learning.FailureCapabilityMissing, "原生请求地址未通过平台范围校验")
 	}
-	if err := factory.limiter.wait(ctx, factory.options.MinRequestInterval); err != nil {
+	if err := factory.limiter.wait(ctx, r.executor.platform.requestInterval()); err != nil {
 		return nil, learning.Fail(learning.FailureStopped, "原生请求等待已停止")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
@@ -191,6 +197,10 @@ func (r *httpExecution) get(ctx context.Context, address, role string) ([]byte, 
 		referer = r.cardsURL
 	}
 	request.Header.Set("Referer", referer)
+	if role == "progress" {
+		// 播放进度接口按 AJAX 请求处理；缺少该标识会被平台当作普通页面请求。
+		request.Header.Set("X-Requested-With", "XMLHttpRequest")
+	}
 	response, err := r.client.Do(request)
 	if err != nil {
 		return nil, learning.Fail(learning.FailureTransient, "原生请求未完成")

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
+	"github.com/onprs/ByebyeOCS/server/internal/platform/runtimeconfig"
 )
 
 // JSONProbeOptions 配置可信会话查询探针。所有字段由维护配置提供，
@@ -34,6 +35,7 @@ type JSONProbeOptions struct {
 
 	AllowedHosts       []string
 	MinRequestInterval time.Duration
+	Runtime            *runtimeconfig.Learning
 	Timeout            time.Duration
 	MaxResponseBytes   int64
 
@@ -94,6 +96,15 @@ func NewJSONSubjectProbe(options JSONProbeOptions) (*JSONSubjectProbe, error) {
 	return &JSONSubjectProbe{options: options, endpoint: endpoint, factory: factory}, nil
 }
 
+func (p *JSONSubjectProbe) requestInterval() time.Duration {
+	if p.options.Runtime != nil {
+		if value := p.options.Runtime.RequestInterval(); value > 0 {
+			return value
+		}
+	}
+	return p.options.MinRequestInterval
+}
+
 func (p *JSONSubjectProbe) Probe(ctx context.Context, session Session) (SubjectEvidence, error) {
 	if !p.options.Enabled {
 		return SubjectEvidence{}, learning.Fail(learning.FailureCapabilityMissing, "可信会话探针未启用")
@@ -117,7 +128,7 @@ func (p *JSONSubjectProbe) Probe(ctx context.Context, session Session) (SubjectE
 		}
 		return nil
 	}
-	if err := p.factory.limiter.wait(ctx, p.options.MinRequestInterval); err != nil {
+	if err := p.factory.limiter.wait(ctx, p.requestInterval()); err != nil {
 		return SubjectEvidence{}, learning.Fail(learning.FailureTransient, "可信会话查询等待被取消")
 	}
 	request, err := http.NewRequestWithContext(ctx, p.options.Method, p.endpoint.String(), nil)

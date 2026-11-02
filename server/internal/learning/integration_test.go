@@ -458,7 +458,8 @@ func TestVerificationCodesStopOperations(t *testing.T) {
 		wantBlock string
 		max       int
 	}{
-		{"验证码", FailureVerificationNeeded, StateNeedsAttention, "verification_required", 3},
+		{"人脸或交互验证", FailureVerificationNeeded, StateNeedsAttention, "", 3},
+		{"身份失效", FailureIdentityInvalid, StateNeedsAttention, "identity_invalid", 3},
 		{"403", FailureForbidden, StateNeedsAttention, "forbidden", 3},
 		{"429", FailureRateLimited, StateNeedsAttention, "", 1},
 	}

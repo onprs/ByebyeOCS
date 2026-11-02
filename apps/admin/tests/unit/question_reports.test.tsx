@@ -5,9 +5,9 @@ import { ApiError } from '../../src/api/client'
 import type { CacheReport } from '../../src/api/questionReports'
 import { ToastProvider } from '../../src/components/toast'
 
-const api = vi.hoisted(() => ({ list: vi.fn(), review: vi.fn(), invalidate: vi.fn() }))
+const api = vi.hoisted(() => ({ list: vi.fn(), review: vi.fn(), invalidate: vi.fn(), recovery: vi.fn() }))
 vi.mock('../../src/api/questionReports', () => ({ listCacheReports: api.list, reviewCacheReport: api.review }))
-vi.mock('../../src/api/endpoints', () => ({ invalidateQuestionCache: api.invalidate }))
+vi.mock('../../src/api/endpoints', () => ({ invalidateQuestionCache: api.invalidate, getQuestionRecovery: api.recovery }))
 
 import { QuestionReportsPanel } from '../../src/pages/QuestionReportsPanel'
 
@@ -21,6 +21,10 @@ const report: CacheReport = {
 function show(canManage = true) {
   return render(<ToastProvider><QuestionReportsPanel canManage={canManage} /></ToastProvider>)
 }
+
+beforeEach(() => {
+  api.recovery.mockResolvedValue({ runs: 3, handled: 2, failed: 0, last_run_at: '2026-11-02T10:00:00Z' })
+})
 
 describe('用户答案报告处理入口', () => {
   beforeEach(() => {

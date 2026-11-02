@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -52,13 +53,25 @@ func (m *Micros) UnmarshalJSON(data []byte) error {
 
 // OfferingPricing 是管理员为单个公开模型发布的不可变价格快照。
 // 费率单位为微元/百万 token；显式 0 表示免费，nil 表示未定价。
+type PricingReference struct {
+	Source       string `json:"source"`
+	SourceURL    string `json:"source_url"`
+	Exchange     string `json:"exchange_source"`
+	ExchangeURL  string `json:"exchange_url"`
+	ExchangeDate string `json:"exchange_date"`
+	ExchangeRate string `json:"exchange_rate"`
+}
+
 type OfferingPricing struct {
-	Version                      string `json:"version"`
-	InputMicrosPerMillionTokens  Micros `json:"input_micros_per_million_tokens"`
-	OutputMicrosPerMillionTokens Micros `json:"output_micros_per_million_tokens"`
-	MicrosPerMinor               Micros `json:"micros_per_minor"`
-	Rounding                     string `json:"rounding"`
-	Rule                         string `json:"rule"`
+	Version                          string            `json:"version"`
+	InputMicrosPerMillionTokens      Micros            `json:"input_micros_per_million_tokens"`
+	OutputMicrosPerMillionTokens     Micros            `json:"output_micros_per_million_tokens"`
+	CacheReadMicrosPerMillionTokens  *Micros           `json:"cache_read_micros_per_million_tokens,omitempty"`
+	CacheWriteMicrosPerMillionTokens *Micros           `json:"cache_write_micros_per_million_tokens,omitempty"`
+	Reference                        *PricingReference `json:"reference,omitempty"`
+	MicrosPerMinor                   Micros            `json:"micros_per_minor"`
+	Rounding                         string            `json:"rounding"`
+	Rule                             string            `json:"rule"`
 }
 
 func (p *OfferingPricing) Validate() error {
@@ -77,23 +90,41 @@ func (p *OfferingPricing) Validate() error {
 	if p.MicrosPerMinor != 10000 {
 		return fault.New("validation_failed", "人民币每分固定为10000微元")
 	}
-	if p.InputMicrosPerMillionTokens < 0 || p.OutputMicrosPerMillionTokens < 0 {
+	if p.InputMicrosPerMillionTokens < 0 || p.OutputMicrosPerMillionTokens < 0 ||
+		p.CacheReadMicrosPerMillionTokens != nil && *p.CacheReadMicrosPerMillionTokens < 0 ||
+		p.CacheWriteMicrosPerMillionTokens != nil && *p.CacheWriteMicrosPerMillionTokens < 0 {
 		return fault.New("validation_failed", "token 费率不能为负")
+	}
+	if ref := p.Reference; ref != nil {
+		rate, ok := new(big.Rat).SetString(ref.ExchangeRate)
+		if ref.Source != "models.dev" || ref.SourceURL != "https://models.dev/api.json" ||
+			ref.Exchange != "Frankfurter" || ref.ExchangeURL != "https://api.frankfurter.dev/v2/rate/usd/cny" ||
+			!ok || rate.Sign() <= 0 {
+			return fault.New("validation_failed", "价格参考来源或汇率无效")
+		}
+		if _, err := time.Parse("2006-01-02", ref.ExchangeDate); err != nil {
+			return fault.New("validation_failed", "价格参考汇率日期无效")
+		}
 	}
 	return nil
 }
 
 func (p *OfferingPricing) Free() bool {
-	return p != nil && p.InputMicrosPerMillionTokens == 0 && p.OutputMicrosPerMillionTokens == 0
+	return p != nil && p.InputMicrosPerMillionTokens == 0 && p.OutputMicrosPerMillionTokens == 0 &&
+		(p.CacheReadMicrosPerMillionTokens == nil || *p.CacheReadMicrosPerMillionTokens == 0) &&
+		(p.CacheWriteMicrosPerMillionTokens == nil || *p.CacheWriteMicrosPerMillionTokens == 0)
 }
 
 type PublicPricing struct {
-	Version                      string `json:"version"`
-	Rule                         string `json:"rule"`
-	Rounding                     string `json:"rounding"`
-	Unit                         string `json:"unit"`
-	InputMicrosPerMillionTokens  Micros `json:"input_micros_per_million_tokens"`
-	OutputMicrosPerMillionTokens Micros `json:"output_micros_per_million_tokens"`
+	Version                          string            `json:"version"`
+	Rule                             string            `json:"rule"`
+	Rounding                         string            `json:"rounding"`
+	Unit                             string            `json:"unit"`
+	InputMicrosPerMillionTokens      Micros            `json:"input_micros_per_million_tokens"`
+	OutputMicrosPerMillionTokens     Micros            `json:"output_micros_per_million_tokens"`
+	CacheReadMicrosPerMillionTokens  *Micros           `json:"cache_read_micros_per_million_tokens,omitempty"`
+	CacheWriteMicrosPerMillionTokens *Micros           `json:"cache_write_micros_per_million_tokens,omitempty"`
+	Reference                        *PricingReference `json:"reference,omitempty"`
 }
 
 func (p *OfferingPricing) Public() *PublicPricing {
@@ -102,7 +133,10 @@ func (p *OfferingPricing) Public() *PublicPricing {
 	}
 	return &PublicPricing{Version: p.Version, Rule: p.Rule, Rounding: p.Rounding,
 		Unit: "micros_per_million_tokens", InputMicrosPerMillionTokens: p.InputMicrosPerMillionTokens,
-		OutputMicrosPerMillionTokens: p.OutputMicrosPerMillionTokens}
+		OutputMicrosPerMillionTokens:     p.OutputMicrosPerMillionTokens,
+		CacheReadMicrosPerMillionTokens:  p.CacheReadMicrosPerMillionTokens,
+		CacheWriteMicrosPerMillionTokens: p.CacheWriteMicrosPerMillionTokens,
+		Reference:                        p.Reference}
 }
 
 type Options struct {
@@ -153,6 +187,9 @@ type Service struct {
 	maxBody       int64
 	timeout       time.Duration
 	now           func() time.Time
+
+	recoveryMu sync.Mutex
+	recovery   RecoveryStats
 }
 
 func New(pool *pgxpool.Pool, options Options) (*Service, error) {
@@ -260,6 +297,8 @@ func (s *Service) RegisterAdmin(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/api/v1/question-cache-reports", s.adminListCacheReports)
 	mux.HandleFunc("POST /admin/api/v1/question-cache-reports/{id}/review", s.adminReviewCacheReport)
 	mux.HandleFunc("POST /admin/api/v1/question-cache/invalidations", s.adminInvalidateCache)
+	mux.HandleFunc("POST /admin/api/v1/question-queries/{id}/releases", s.handleReleaseQuery)
+	mux.HandleFunc("GET /admin/api/v1/question-recovery", s.handleRecoveryStats)
 }
 
 type QueryInput struct {
@@ -456,13 +495,15 @@ func (s *Service) validateQuery(input *QueryInput) (imageValidation, error) {
 
 // Quote 是价格计算事实；状态区分未定价、明确免费和已报价。
 type Quote struct {
-	State        string
-	Pricing      *OfferingPricing
-	InputTokens  int64
-	OutputTokens int64
-	CostMicros   int64
-	AmountMinor  int64
-	Estimated    bool
+	State            string
+	Pricing          *OfferingPricing
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	CostMicros       int64
+	AmountMinor      int64
+	Estimated        bool
 	// ChargingAllowed 是预占前冻结的运营开关决策；finalize 不再重新读取。
 	ChargingAllowed   bool
 	ChargingCheckedAt time.Time
@@ -485,21 +526,47 @@ func divRound(value *big.Int, divisor int64, rounding string) (*big.Int, error) 
 
 // priceUsage 用微元/百万 token 整数费率计算；乘除使用 big.Int，避免精度和溢出。
 func priceUsage(pricing *OfferingPricing, inputTokens, outputTokens int64, overrideRounding string) (Quote, error) {
-	quote := Quote{State: "unpriced", Pricing: pricing, InputTokens: inputTokens, OutputTokens: outputTokens}
+	return priceUsageDetailed(pricing, inputTokens, outputTokens, 0, 0, overrideRounding, false)
+}
+
+func priceUsageDetailed(pricing *OfferingPricing, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int64, overrideRounding string, estimate bool) (Quote, error) {
+	quote := Quote{State: "unpriced", Pricing: pricing, InputTokens: inputTokens, OutputTokens: outputTokens,
+		CacheReadTokens: cacheReadTokens, CacheWriteTokens: cacheWriteTokens}
 	if pricing == nil {
 		return quote, nil
 	}
 	if err := pricing.Validate(); err != nil {
 		return quote, err
 	}
-	if inputTokens < 0 || outputTokens < 0 {
+	if inputTokens < 0 || outputTokens < 0 || cacheReadTokens < 0 || cacheWriteTokens < 0 ||
+		cacheReadTokens > inputTokens || cacheWriteTokens > inputTokens-cacheReadTokens {
 		return quote, errors.New("token 数无效")
 	}
 	rounding := pricing.Rounding
 	if overrideRounding != "" {
 		rounding = overrideRounding
 	}
-	numerator := new(big.Int).Mul(big.NewInt(inputTokens), big.NewInt(int64(pricing.InputMicrosPerMillionTokens)))
+	inputRate := pricing.InputMicrosPerMillionTokens
+	cacheReadRate, cacheWriteRate := inputRate, inputRate
+	if pricing.CacheReadMicrosPerMillionTokens != nil {
+		cacheReadRate = *pricing.CacheReadMicrosPerMillionTokens
+	}
+	if pricing.CacheWriteMicrosPerMillionTokens != nil {
+		cacheWriteRate = *pricing.CacheWriteMicrosPerMillionTokens
+	}
+	if estimate {
+		if cacheReadRate > inputRate {
+			inputRate = cacheReadRate
+		}
+		if cacheWriteRate > inputRate {
+			inputRate = cacheWriteRate
+		}
+		cacheReadRate, cacheWriteRate = inputRate, inputRate
+	}
+	uncachedTokens := inputTokens - cacheReadTokens - cacheWriteTokens
+	numerator := new(big.Int).Mul(big.NewInt(uncachedTokens), big.NewInt(int64(inputRate)))
+	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(cacheReadTokens), big.NewInt(int64(cacheReadRate))))
+	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(cacheWriteTokens), big.NewInt(int64(cacheWriteRate))))
 	numerator.Add(numerator, new(big.Int).Mul(big.NewInt(outputTokens), big.NewInt(int64(pricing.OutputMicrosPerMillionTokens))))
 	micros, err := divRound(numerator, 1_000_000, rounding)
 	if err != nil || !micros.IsInt64() {
@@ -520,11 +587,10 @@ func priceUsage(pricing *OfferingPricing, inputTokens, outputTokens int64, overr
 }
 
 func (s *Service) estimateQuote(offering *Offering, outputBudget, imageCount int) (Quote, error) {
-	// 预留按服务端文本输入上限、图片上界和用户预算内的输出上限计算，且向上取整。
-	// 实际结算按服务端 token 事实与发布条目的 rounding 重新计算。
+	// 预留按输入侧最高费率覆盖整个输入上界，避免缓存创建价高于普通输入价时预占不足。
 	inputBound := int64(s.maxInput) + int64(imageCount)*int64(s.imageInput)
 	outputBound := int64(outputBudget) + int64(imageCount)*int64(s.captionOutput)
-	return priceUsage(offering.Pricing, inputBound, outputBound, "ceil")
+	return priceUsageDetailed(offering.Pricing, inputBound, outputBound, 0, 0, "ceil", true)
 }
 
 func (s *Service) resolveChargingAllowed(ctx context.Context) (bool, error) {
@@ -558,7 +624,21 @@ func (s *Service) actualQuote(offering *Offering, usage Usage) (Quote, error) {
 	if usage.InputTokens == nil || usage.OutputTokens == nil {
 		return Quote{State: "usage_incomplete", Pricing: offering.Pricing}, nil
 	}
-	return priceUsage(offering.Pricing, *usage.InputTokens, *usage.OutputTokens, "")
+	// 零费率不需要用量分项：上游未返回该分项按 0 处理，不能因此判定计价失败。
+	var cacheRead, cacheWrite int64
+	if offering.Pricing != nil {
+		if usage.CacheReadTokens != nil {
+			cacheRead = *usage.CacheReadTokens
+		} else if rate := offering.Pricing.CacheReadMicrosPerMillionTokens; rate != nil && *rate != 0 {
+			return Quote{}, errors.New("上游未返回缓存读取 token 用量")
+		}
+		if usage.CacheWriteTokens != nil {
+			cacheWrite = *usage.CacheWriteTokens
+		} else if rate := offering.Pricing.CacheWriteMicrosPerMillionTokens; rate != nil && *rate != 0 {
+			return Quote{}, errors.New("上游未返回缓存创建 token 用量")
+		}
+	}
+	return priceUsageDetailed(offering.Pricing, *usage.InputTokens, *usage.OutputTokens, cacheRead, cacheWrite, "", false)
 }
 
 func (s *Service) requireFork() error {

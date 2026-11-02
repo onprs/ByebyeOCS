@@ -121,6 +121,38 @@ func (p *Platform) SubmitWork(ctx context.Context, sessionBytes []byte, task lea
 	return submission, nil
 }
 
+// checkWorkSubmitted 用工作页判断测验是否已提交；测验卡片本身没有完成字段。
+func (p *Platform) checkWorkSubmitted(ctx context.Context, session Session, task learning.PlatformTaskRef) (bool, error) {
+	job, err := p.readWorkJob(ctx, session, task)
+	if err != nil {
+		return false, err
+	}
+	payload, err := p.do(ctx, session, http.MethodGet, p.options.endpoints.Work, workReadQuery(job), "work_read")
+	if err != nil {
+		return false, err
+	}
+	// 核验只判断“是否已提交”，不要求页面仍是可作答表单；已提交页面通常没有提交字段。
+	visible := htmlNodeText(parseHTMLDocument(payload))
+	if already, failure := classifyWorkPageMessage(visible, payload); failure != nil {
+		return false, failure
+	} else if already {
+		return true, nil
+	}
+	return workPageConfirmedSubmitted(visible), nil
+}
+
+// workPageConfirmedSubmitted 只认明确的已提交/已批阅标志。
+// 未作答页面也会出现“重做”“作业详情”等模板文字，不能作为完成依据。
+func workPageConfirmedSubmitted(visible string) bool {
+	visible = cleanWorkText(visible)
+	for _, marker := range []string{"已批阅", "本次成绩", "我的答案", "正确答案", "无需重复提交", "已提交过"} {
+		if strings.Contains(visible, marker) {
+			return true
+		}
+	}
+	return strings.Contains(visible, "已完成") && !strings.Contains(visible, "未完成")
+}
+
 func (p *Platform) readWorkPage(ctx context.Context, session Session, task learning.PlatformTaskRef) (*workPage, error) {
 	job, err := p.readWorkJob(ctx, session, task)
 	if err != nil {
@@ -271,6 +303,16 @@ func workReadQuery(job workJob) url.Values {
 
 func parseWorkPage(payload []byte, baseURL string, job workJob) (*workPage, error) {
 	root := parseHTMLDocument(payload)
+	// 未作答测验的题干以随机码点渲染；先按字形签名还原，再按正常流程解析。
+	if workPageHasEncryptedFont(payload) {
+		decoder, err := newSecretFontDecoder(payload)
+		if err != nil {
+			return nil, learning.Fail(learning.FailureCapabilityMissing, "测验题目使用字体加密，无法可信解码")
+		}
+		if err := rewriteSecretText(root, decoder); err != nil {
+			return nil, learning.Fail(learning.FailureCapabilityMissing, "测验题目使用字体加密，无法可信解码")
+		}
+	}
 	visible := htmlNodeText(root)
 	// 验证控件与错误通知在题目区域之外，必须优先于题目和表单判定识别。
 	if failure := workControlFailure(root); failure != nil {
@@ -309,9 +351,6 @@ func parseWorkPage(payload []byte, baseURL string, job workJob) (*workPage, erro
 			return nil, learning.Fail(learning.FailureCapabilityMissing, "测验页面没有可作答题目")
 		}
 		return nil, learning.Fail(learning.FailureCapabilityMissing, "测验页面不是可作答表单")
-	}
-	if workPageHasEncryptedFont(payload) {
-		return nil, learning.Fail(learning.FailureCapabilityMissing, "测验题目使用字体加密，无法可信解码")
 	}
 	if len(questionNodes) == 0 {
 		return nil, learning.Fail(learning.FailureCapabilityMissing, "测验页面没有可作答题目")
@@ -735,7 +774,7 @@ func (p *Platform) postWorkSubmission(ctx context.Context, session Session, page
 	// 最终提交不跟随重定向，避免 POST 被改写成 GET 或转向未确认地址。
 	// 该 client 只在本次任务的上下文内使用，提交之后不再发出请求。
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	if err := p.factory.limiter.wait(ctx, p.options.MinRequestInterval); err != nil {
+	if err := p.factory.limiter.wait(ctx, p.requestInterval()); err != nil {
 		return learning.WorkSubmission{}, learning.Fail(learning.FailureStopped, "测验提交等待被停止")
 	}
 	if err := ctx.Err(); err != nil {

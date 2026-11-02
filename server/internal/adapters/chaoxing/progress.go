@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html"
 	"math"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -25,7 +26,7 @@ func (r *httpExecution) prepare(ctx context.Context) error {
 	ref := r.request.Task
 	target, _ := url.Parse(r.executor.platform.cardsURLAtIndex(ref.Course, ref.ChapterExternalID, ref.CardIndex))
 	r.cardsURL = target.String()
-	body, err := r.get(ctx, r.cardsURL, "cards")
+	body, err := r.executor.platform.do(ctx, r.session, http.MethodGet, r.cardsURL, nil, "course_cards")
 	if err != nil {
 		return err
 	}
@@ -71,14 +72,15 @@ func (r *httpExecution) prepare(ctx context.Context) error {
 			}
 		}
 	}
-	for _, key := range []string{"jumpTimePointList", "randomFaceCaptureTimeList"} {
-		if value, exists := r.task[key]; exists && value != nil {
-			list, known := value.([]any)
-			if !known || len(list) != 0 {
-				return learning.Fail(learning.FailureVerificationNeeded, "任务需要交互或身份验证")
-			}
+	if value, exists := r.task["jumpTimePointList"]; exists && value != nil {
+		list, known := value.([]any)
+		if !known || len(list) != 0 {
+			return learning.Fail(learning.FailureVerificationNeeded, "任务包含交互时间点，需要本人完成")
 		}
 	}
+	// 平台会在卡片里下发 randomFaceCaptureTimeList（抓拍时间点），2026-11 实测该字段
+	// 只驱动播放器前端弹窗，进度上报与完成判定都不校验 videoFaceCaptureEnc，
+	// 因此不因该字段停止任务；真正要求本人验证时由平台响应转人工。
 	for _, frame := range playerFrame.FindAllSubmatch(body, -1) {
 		relative, err := url.Parse(html.UnescapeString(string(frame[1])))
 		if err != nil {
@@ -109,8 +111,13 @@ func (r *httpExecution) prepare(ctx context.Context) error {
 	}
 	duration, durationKnown := protocolNumber(r.metadata["duration"])
 	interval, intervalKnown := protocolNumber(r.defaults["reportTimeInterval"])
-	saved, positionKnown := protocolNumber(r.task["playTime"])
-	saved /= 1000
+	// 未开始过的任务卡片不下发 playTime；此时平台保存位置就是 0，
+	// 按缺省 0 起步而不是判定为不支持。
+	saved, positionKnown := 0.0, true
+	if value, exists := r.task["playTime"]; exists && value != nil {
+		saved, positionKnown = protocolNumber(value)
+		saved /= 1000
+	}
 	if !durationKnown || !intervalKnown || !positionKnown || duration < 1 || duration != math.Floor(duration) || duration > r.executor.options.MaxDuration.Seconds() || interval < 30 || interval > 300 || saved < 0 || saved > duration {
 		return learning.Fail(learning.FailureCapabilityMissing, "平台时长、保存位置或请求间隔超出已支持范围")
 	}

@@ -69,7 +69,7 @@ func (p *Platform) FetchCourseCover(ctx context.Context, source string) (learnin
 	case <-ctx.Done():
 		return unavailable()
 	}
-	if err := p.factory.limiter.wait(ctx, p.options.MinRequestInterval); err != nil {
+	if err := p.factory.limiter.wait(ctx, p.requestInterval()); err != nil {
 		return unavailable()
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)

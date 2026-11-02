@@ -570,6 +570,21 @@ export async function invalidateQuestionCache(input: {
 }
 
 
+// —— 题库在途回收 ——
+
+export type QuestionRecoveryStats = {
+  runs: number
+  handled: number
+  failed: number
+  last_run_at?: string
+  last_error?: string
+}
+
+export async function getQuestionRecovery(): Promise<QuestionRecoveryStats> {
+  const response = await apiGet<{ recovery: QuestionRecoveryStats }>('/question-recovery')
+  return response.data.recovery
+}
+
 // —— 管理员账号与角色（owner） ——
 
 export async function listAdminUsers(): Promise<ApiResponse<AdminUsersDirectory>> {
@@ -651,6 +666,16 @@ export async function updateBillingSettings(
 
 export async function getRuntimeSettings(): Promise<ApiResponse<RuntimeSettings>> {
   const response = await apiGet<unknown>('/settings/runtime')
+  return { data: normalizeRuntimeSettings(response.data), etag: response.etag }
+}
+
+export async function updateRuntimeSettings(input: {
+  global_concurrency: number
+  account_concurrency: number
+  chapter_concurrency: number
+  request_interval_ms: number
+}): Promise<ApiResponse<RuntimeSettings>> {
+  const response = await apiRequest<unknown>('/settings/runtime', { method: 'PATCH', body: input })
   return { data: normalizeRuntimeSettings(response.data), etag: response.etag }
 }
 

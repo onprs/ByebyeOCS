@@ -3,6 +3,8 @@ package learning
 import (
 	"log/slog"
 	"time"
+
+	"github.com/onprs/ByebyeOCS/server/internal/platform/runtimeconfig"
 )
 
 // Options 是学习服务运行参数。外部能力和执行均默认关闭。
@@ -26,9 +28,11 @@ type Options struct {
 
 	// ExecutionEnabled 必须显式打开；仅提供 Executor 不视为授权真实执行。
 	ExecutionEnabled bool
-	// GlobalConcurrency 与 AccountConcurrency 是平台请求/尝试上限，不是平台承诺。
-	GlobalConcurrency    int
-	AccountConcurrency   int
+	// GlobalConcurrency 与 AccountConcurrency 是启动默认值；Runtime 存在时优先读取实时值。
+	GlobalConcurrency  int
+	AccountConcurrency int
+	// Runtime 是管理端可热更新的并发来源；为 nil 时使用上面的静态默认值。
+	Runtime              *runtimeconfig.Learning
 	LeaseTTL             time.Duration
 	HeartbeatInterval    time.Duration
 	PollInterval         time.Duration

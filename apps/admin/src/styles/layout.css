@@ -17,7 +17,8 @@
   border-right: 1px solid var(--sidebar-border);
   background: var(--sidebar);
   color: var(--sidebar-text);
-  transition: transform 0.2s ease;
+  overflow: hidden;
+  transition: transform 0.2s ease, width 0.22s cubic-bezier(0.2, 0.7, 0.2, 1), padding 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .brand {
@@ -57,16 +58,19 @@
 
 .sidebar-brand {
   padding: 0 8px;
+  transition: padding 0.22s ease;
 }
 
 .admin-workspace {
   display: flex;
   align-items: center;
   gap: 9px;
+  max-height: 64px;
   margin: 24px 2px 23px;
   padding: 10px 9px;
   border: 1px solid var(--sidebar-border);
   border-radius: 7px;
+  transition: max-height 0.2s ease, margin 0.2s ease, padding 0.2s ease, opacity 0.14s ease, border-width 0.2s ease;
 }
 
 .workspace-icon {
@@ -116,6 +120,7 @@
   font-weight: 500;
   letter-spacing: 0.08em;
   opacity: 0.52;
+  transition: opacity 0.14s ease;
 }
 
 .nav-heading:not(:first-of-type) {
@@ -160,6 +165,8 @@ a.admin-nav-item:hover {
 
 .admin-nav-item > span {
   flex: 1;
+  white-space: nowrap;
+  transition: opacity 0.14s ease;
 }
 
 .admin-nav-item > svg:last-child:not(:first-child) {
@@ -245,40 +252,98 @@ a.admin-nav-item:hover {
   overflow-wrap: anywhere;
 }
 
-.sidebar-admin {
+.sidebar-collapse {
   display: flex;
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 14px 7px 2px;
+  padding: 10px 8px;
+  border-radius: 6px;
   color: var(--sidebar-text);
+  font-size: var(--font-secondary);
   text-align: left;
+  transition: background 0.15s ease, color 0.15s ease, padding 0.22s ease;
 }
 
-.sidebar-admin-copy {
+.sidebar-collapse:hover {
+  background: color-mix(in srgb, var(--sidebar-text) 8%, transparent);
+  color: var(--sidebar-strong);
+}
+
+.sidebar-collapse-label {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  transition: opacity 0.14s ease;
 }
 
-.sidebar-admin b {
-  display: block;
-  overflow: hidden;
-  color: var(--sidebar-strong);
-  font-size: var(--font-caption);
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.admin-shell.is-sidebar-collapsed .admin-sidebar {
+  width: 76px;
+  padding-left: 10px;
+  padding-right: 10px;
 }
 
-.sidebar-admin span {
-  display: block;
-  margin-top: 3px;
+.admin-shell.is-sidebar-collapsed .admin-main {
+  margin-left: 76px;
+}
+
+.admin-shell.is-sidebar-collapsed .sidebar-brand {
+  display: flex;
+  justify-content: center;
+  padding: 0;
+}
+
+.admin-shell.is-sidebar-collapsed .admin-workspace {
+  max-height: 0;
+  margin: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  border-width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.admin-shell.is-sidebar-collapsed .nav-heading {
+  height: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-top: 0;
+  margin-bottom: 0;
   overflow: hidden;
-  color: var(--sidebar-text);
-  font-size: var(--font-caption);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  opacity: 0.65;
+  opacity: 0;
+}
+
+.admin-shell.is-sidebar-collapsed .admin-nav {
+  gap: 4px;
+}
+
+.admin-shell.is-sidebar-collapsed .admin-nav-item {
+  justify-content: center;
+  gap: 0;
+  padding: 10px;
+}
+
+.admin-shell.is-sidebar-collapsed .admin-nav-item > span {
+  flex: 0 0 0;
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.admin-shell.is-sidebar-collapsed .admin-nav-item > svg:last-child:not(:first-child),
+.admin-shell.is-sidebar-collapsed .admin-nav-badge,
+.admin-shell.is-sidebar-collapsed .selection-indicator {
+  display: none;
+}
+
+.admin-shell.is-sidebar-collapsed .sidebar-collapse {
+  justify-content: center;
+  padding: 10px;
+}
+
+.admin-shell.is-sidebar-collapsed .sidebar-collapse-label {
+  display: none;
 }
 
 .admin-main {
@@ -288,6 +353,7 @@ a.admin-nav-item:hover {
   min-width: 0;
   min-height: 100vh;
   margin-left: var(--sidebar-width);
+  transition: margin-left 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
 .admin-topbar {
@@ -1020,6 +1086,12 @@ a.admin-nav-item:hover {
   }
 }
 
+@media (prefers-reduced-motion: reduce) {
+  .admin-sidebar, .admin-main, .admin-workspace, .nav-heading, .admin-nav-item > span, .sidebar-collapse, .sidebar-collapse-label {
+    transition: none;
+  }
+}
+
 @media (max-width: 980px) {
   .admin-sidebar {
     transform: translateX(-100%);
@@ -1102,7 +1174,16 @@ a.admin-nav-item:hover {
     font-size: 26px;
   }
   .profile-button-copy {
+    display: flex;
+  }
+  .profile-button-copy span {
     display: none;
+  }
+  .profile-button-copy b {
+    max-width: 72px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .admin-topbar {
     height: 56px;

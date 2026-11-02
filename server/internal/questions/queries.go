@@ -117,6 +117,8 @@ type pricingSnapshot struct {
 	EstimatedAmountMinor  int64            `json:"estimated_amount_minor,omitempty"`
 	InputTokens           int64            `json:"input_tokens,omitempty"`
 	OutputTokens          int64            `json:"output_tokens,omitempty"`
+	CacheReadTokens       int64            `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens      int64            `json:"cache_write_tokens,omitempty"`
 	CostMicros            int64            `json:"cost_micros,omitempty"`
 	AmountMinor           int64            `json:"amount_minor,omitempty"`
 	ReservedMinor         int64            `json:"reserved_minor,omitempty"`
@@ -242,6 +244,7 @@ func snapshotFromQuote(quote Quote, reserved int64, holdID, billingState, billin
 		State: quote.State, Pricing: quote.Pricing, PriceVersion: priceVersion,
 		Rule: rule, Rounding: rounding,
 		InputTokens: quote.InputTokens, OutputTokens: quote.OutputTokens,
+		CacheReadTokens: quote.CacheReadTokens, CacheWriteTokens: quote.CacheWriteTokens,
 		CostMicros: quote.CostMicros, AmountMinor: quote.AmountMinor,
 		ReservedMinor: reserved, Charged: false, BillingState: billingState, HoldID: holdID,
 		BillingKey:               billingKey,
@@ -474,6 +477,24 @@ type answerCompletion struct {
 	recovered          bool
 }
 
+// keepQueryPending 只刷新在途查询的时间戳，保留预占与同键重放能力。
+// 与待复核不同，这条路径不认定失败，也不产生额外计费事实。
+func (s *Service) keepQueryPending(ctx context.Context, userID, queryID string) (QueryView, error) {
+	// 标记为“可立即恢复”：把 updated_at 推回到陈旧阈值之外，下一次同键请求
+	// 直接重投 fork 读取已落库结果，不必再等一个完整等待窗口。
+	_, err := s.pool.Exec(ctx, `UPDATE public.question_queries
+		SET updated_at = now() - make_interval(secs => $2), version = version + 1
+		WHERE id = $1 AND status = 'pending'`, queryID, s.stalePendingAge().Seconds()+1)
+	if err != nil {
+		return QueryView{}, err
+	}
+	record, err := s.loadQueryByID(ctx, userID, queryID)
+	if err != nil || record == nil {
+		return QueryView{}, errors.New("查询记录丢失")
+	}
+	return buildQueryView(record), nil
+}
+
 // recoveryUncertain 表示恢复时无法确定 fork 是否已产生结果或费用，必须停止自动收费。
 func recoveryUncertain(code string) bool {
 	switch code {
@@ -487,12 +508,8 @@ func recoveryUncertain(code string) bool {
 // completeAnswer 在已冻结的查询行上调用 fork 并完成结算/释放。
 func (s *Service) completeAnswer(ctx context.Context, c answerCompletion) (QueryView, error) {
 	queryID, userID := c.queryID, c.userID
-	offering, estimate := c.offering, c.estimate
+	estimate := c.estimate
 	holdID, reservedMinor := c.holdID, c.reservedMinor
-	billingConnected := c.billingConnected
-	if !c.recovered {
-		billingConnected = s.billing != nil
-	}
 	releaseState := func(defaultState string) string {
 		if holdID == "" && c.recovered && c.frozenBillingState != "" {
 			return c.frozenBillingState
@@ -524,6 +541,14 @@ func (s *Service) completeAnswer(ctx context.Context, c answerCompletion) (Query
 			code = safeForkCode(value.Code)
 		}
 		status := "failed"
+		// 本地等待窗口到点、fork 仍在处理：保持 pending，后续同键请求读取结果。
+		if code == "fork_pending" || code == "request_in_progress" {
+			view, finalizeErr := s.keepQueryPending(ctx, userID, queryID)
+			if finalizeErr != nil {
+				return QueryView{}, s.finalizeFailure(queryID)
+			}
+			return view, newQueryError("fork_pending", "题库仍在处理，请稍后重试", http.StatusAccepted, true)
+		}
 		// 超时或取消时上游可能已产生费用；保留查询事实并进入待复核，不自动重放。
 		if code == "upstream_timeout" || code == "request_cancelled" || code == "request_unknown" {
 			status = "needs_review"
@@ -543,6 +568,22 @@ func (s *Service) completeAnswer(ctx context.Context, c answerCompletion) (Query
 			return view, nil
 		}
 		return QueryView{}, forkQueryError(forkErr)
+	}
+	return s.finishWithForkResponse(ctx, c, response)
+}
+
+// finishWithForkResponse 用已确定的题库响应完成结算；调用方负责确认响应确实属于本查询。
+// 恢复器读取已落库结果时复用同一条完成链，保证计费、缓存与状态写入路径完全一致。
+func (s *Service) finishWithForkResponse(ctx context.Context, c answerCompletion, response ForkAnswerResponse) (QueryView, error) {
+	queryID, userID := c.queryID, c.userID
+	offering, estimate := c.offering, c.estimate
+	holdID, reservedMinor := c.holdID, c.reservedMinor
+	billingConnected := s.billing != nil
+	releaseState := func(defaultState string) string {
+		if holdID == "" && c.recovered && c.frozenBillingState != "" {
+			return c.frozenBillingState
+		}
+		return defaultState
 	}
 	if err := normalizeForkResponse(&response, queryID, offering.ProviderRef, c.request.Mode, s.maxImg+1); err != nil {
 		view, finalizeErr := s.finalizeQuery(ctx, queryID, userID, finalizeInput{
@@ -640,6 +681,7 @@ func (s *Service) completeAnswer(ctx context.Context, c answerCompletion) (Query
 const minStalePendingAge = 2 * time.Minute
 
 // stalePendingAge 至少为两分钟；fork 超时更长时顺延，避免恢复在途请求。
+
 func (s *Service) stalePendingAge() time.Duration {
 	threshold := minStalePendingAge
 	if candidate := s.timeout + 30*time.Second; candidate > threshold {
@@ -867,6 +909,7 @@ func frozenDecisionFrom(snapshot pricingSnapshot) (frozenDecision, bool) {
 	quote := Quote{
 		State: source.State, Pricing: source.Pricing,
 		InputTokens: source.EstimatedInputTokens, OutputTokens: source.EstimatedOutputTokens,
+		CacheReadTokens: source.CacheReadTokens, CacheWriteTokens: source.CacheWriteTokens,
 		CostMicros: source.EstimatedCostMicros, AmountMinor: source.EstimatedAmountMinor,
 		Estimated: true, ChargingAllowed: source.AutomaticChargingAllowed,
 		ChargingCheckedAt: source.ChargingCheckedAt,

@@ -135,6 +135,10 @@ type Options struct {
 	// Verifier 为外部平台适配器；nil 时用户外部登录返回 external_disabled。
 	Verifier Verifier
 
+	// LocalAdminAutoLogin 只由 development 模式下的回环装配层设置；为 true 时
+	// 管理员会话引导请求会为第一个可用管理员建立本地会话。生产配置校验不允许启用。
+	LocalAdminAutoLogin func(*http.Request) bool
+
 	SessionTTL           time.Duration
 	SessionIdle          time.Duration
 	AppAccessTTL         time.Duration

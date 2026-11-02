@@ -17,6 +17,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/onprs/ByebyeOCS/server/internal/platform/audit"
 	"github.com/onprs/ByebyeOCS/server/internal/platform/fault"
+	"github.com/onprs/ByebyeOCS/server/internal/platform/runtimeconfig"
 	"github.com/onprs/ByebyeOCS/server/internal/web"
 )
 
@@ -33,6 +34,8 @@ type Options struct {
 	BackupStatusFile    string
 	BackupMaxAge        time.Duration
 	QuestionConcurrency int
+	ConfigPath          string
+	LearningRuntime     *runtimeconfig.Learning
 	Export              func(context.Context, string) (map[string]any, error)
 	RevokeUser          func(context.Context, pgx.Tx, string) error
 	// Logger 记录后台清理与导出失败的安全分类码；未提供时不记录。
@@ -103,6 +106,7 @@ func (s *Service) Register(mux *http.ServeMux) {
 	routes := map[string]http.HandlerFunc{
 		"GET /admin/api/v1/audit-events":               s.auditEvents,
 		"GET /admin/api/v1/settings/runtime":           s.runtimeSettings,
+		"PATCH /admin/api/v1/settings/runtime":         s.updateRuntimeSettings,
 		"GET /admin/api/v1/maintenance":                s.runtimeSettings,
 		"POST /api/v1/me/data-exports":                 s.createExport,
 		"GET /api/v1/me/data-exports":                  s.listExports,
@@ -180,11 +184,33 @@ func (s *Service) Guard(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+func (s *Service) runtimeFacts() map[string]any {
+	facts := make(map[string]any, len(s.options.Runtime)+4)
+	for key, value := range s.options.Runtime {
+		facts[key] = value
+	}
+	if s.options.LearningRuntime != nil {
+		facts["global_concurrency"] = s.options.LearningRuntime.GlobalConcurrency()
+		facts["account_concurrency"] = s.options.LearningRuntime.AccountConcurrency()
+		facts["chapter_concurrency"] = s.options.LearningRuntime.ChapterConcurrency()
+		facts["request_interval_ms"] = s.options.LearningRuntime.RequestInterval().Milliseconds()
+	}
+	return facts
+}
+
 func (s *Service) runtimeSettings(w http.ResponseWriter, r *http.Request) {
 	if _, ok := web.Require(w, r, "admin", "operations.read"); !ok {
 		return
 	}
-	web.JSON(w, r, 200, map[string]any{"runtime": s.options.Runtime, "storage": s.Disk(), "backup": s.Backup(), "retention": map[string]any{"stream_days": 3, "outbox_days": 7, "question_content_days": 7, "export_hours": 24, "financial_records": "retained"}, "generated_at": time.Now().UTC()})
+	var configured map[string]any
+	var restartRequired bool
+	facts := s.runtimeFacts()
+	if values, err := s.configuredRuntimeSettings(); err == nil {
+		configured = values
+		restartRequired = runtimeRestartRequired(facts, values)
+	}
+	web.JSON(w, r, 200, map[string]any{"runtime": facts, "configured": configured,
+		"restart_required": restartRequired, "storage": s.Disk(), "backup": s.Backup(), "retention": map[string]any{"stream_days": 3, "outbox_days": 7, "question_content_days": 7, "export_hours": 24, "financial_records": "retained"}, "generated_at": time.Now().UTC()})
 }
 
 type auditCursor struct {

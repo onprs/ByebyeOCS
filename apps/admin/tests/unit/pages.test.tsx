@@ -40,6 +40,7 @@ vi.mock('../../src/api/endpoints', () => ({
   listTasks: api.listTasks,
   getTask: api.getTask,
   runTaskOperation: api.runTaskOperation,
+  getQuestionRecovery: vi.fn(async () => ({ runs: 1, handled: 0, failed: 0, last_run_at: '2026-11-02T10:00:00Z' })),
 }))
 
 import { UsersPage } from '../../src/pages/UsersPage'

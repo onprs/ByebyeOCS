@@ -1051,8 +1051,18 @@ export function normalizeRuntimeSettings(raw: unknown): RuntimeSettings {
   const object = asObject(unwrapData(raw)) ?? {}
   const storage = pickObject(object, ['storage'])
   const backup = pickObject(object, ['backup'])
+  const configured = pickObject(object, ['configured'])
   return {
     runtime: normalizeStringMap(object.runtime),
+    configured: configured
+      ? {
+          global_concurrency: pickNumber(configured, ['global_concurrency']),
+          account_concurrency: pickNumber(configured, ['account_concurrency']),
+          chapter_concurrency: pickNumber(configured, ['chapter_concurrency']),
+          request_interval_ms: pickNumber(configured, ['request_interval_ms']),
+        }
+      : null,
+    restart_required: pickBool(object, ['restart_required']) === true,
     storage: storage
       ? {
           status: pickString(storage, ['status']) ?? 'unknown',

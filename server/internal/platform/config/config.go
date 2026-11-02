@@ -41,6 +41,8 @@ type Log struct {
 }
 
 type Config struct {
+	// SourcePath 是实际读取的配置文件路径，仅供维护端原子回写；不参与序列化。
+	SourcePath string     `yaml:"-" json:"-"`
 	Mode       string     `yaml:"mode"`
 	Server     Server     `yaml:"server"`
 	Database   Database   `yaml:"database"`
@@ -90,6 +92,11 @@ func Load(path string, lookup LookupEnv, overrides Overrides) (Config, error) {
 		var extra any
 		if err := decoder.Decode(&extra); err != io.EOF {
 			return Config{}, fault.New("config_invalid", "配置文件必须仅包含一个 YAML 文档")
+		}
+		if absolute, err := filepath.Abs(path); err == nil {
+			cfg.SourcePath = absolute
+		} else {
+			cfg.SourcePath = path
 		}
 		resolveRuntimeFiles(&cfg, path)
 		if cfg.Database.DSNFile != "" && !filepath.IsAbs(cfg.Database.DSNFile) {

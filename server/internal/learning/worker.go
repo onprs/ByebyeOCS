@@ -113,8 +113,8 @@ func (s *Service) dispatchLoop(ctx context.Context) {
 		if !capabilities.Enabled {
 			continue
 		}
-		for range 4 {
-			if s.localRunning() >= s.opts.GlobalConcurrency {
+		for range s.globalLimit() {
+			if s.localRunning() >= s.globalLimit() {
 				break
 			}
 			job, err := s.claimNext(ctx)
@@ -152,7 +152,7 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 			WHERE ended_at IS NULL AND lease_expires_at > now()`).Scan(&active); err != nil {
 			return errServiceUnavailable
 		}
-		if active >= s.opts.GlobalConcurrency {
+		if active >= s.globalLimit() {
 			return nil
 		}
 		rows, err := tx.Query(ctx, `SELECT t.id::text, t.user_id::text, t.task_kind, matching_plan.priority
@@ -192,7 +192,7 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 			  AND att.snapshot_version = course.snapshot_version
 			ORDER BY COALESCE(a.last_claimed_at, '1970-01-01'::timestamptz),
 				matching_plan.priority DESC, COALESCE(t.next_attempt_at, t.created_at), t.created_at
-			LIMIT 100`, s.opts.MaxAttempts, s.opts.AccountConcurrency)
+			LIMIT 100`, s.opts.MaxAttempts, s.accountLimit())
 		if err != nil {
 			return errServiceUnavailable
 		}
@@ -216,7 +216,7 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 				WHERE user_id = $1 AND ended_at IS NULL AND lease_expires_at > now()`, candidate.userID).Scan(&userActive); err != nil {
 				return errServiceUnavailable
 			}
-			if userActive >= s.opts.AccountConcurrency {
+			if userActive >= s.accountLimit() {
 				continue
 			}
 			var job executionJob
@@ -535,6 +535,11 @@ func (s *Service) preflight(ctx context.Context, job executionJob, session []byt
 	if check.Status == CheckUnconfirmed && !check.Passed {
 		return false, nil
 	}
+	if check.Status == CheckUnknown && job.TaskKind == "quiz" {
+		// 测验卡片不提供完成字段；工作执行器会先重读试卷并确认是否已提交，
+		// 因此核验未知不能阻断做题，否则任何未作答测验都无法开始。
+		return false, nil
+	}
 	return false, Fail(FailureCapabilityMissing, "执行前平台核验结果不明确，已停止外部执行")
 }
 
@@ -710,6 +715,14 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 			return errServiceUnavailable
 		}
 		terminalBilling := false
+		if failure != nil && failure.Class == FailureVerificationNeeded {
+			s.opts.Logger.Warn("任务需要本人验证", "task_id", job.TaskID, "task_kind", job.TaskKind, "detail", failure.Detail)
+		}
+		if failure != nil && failure.Class != FailureVerificationNeeded && failure.Class != FailureStopped && failure.Class != FailureCancelled {
+			// 定位任务级失败必须能直接看到分类与原因，否则只能靠数据库事后猜。
+			s.opts.Logger.Warn("任务执行失败", "task_id", job.TaskID, "task_kind", job.TaskKind,
+				"class", string(failure.Class), "detail", failure.Detail)
+		}
 		verificationReason := "execution_completed"
 		if job.TaskKind == "quiz" {
 			verificationReason = "question_submission"
@@ -778,7 +791,16 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 				last_error_scope = 'task', version = version + 1, updated_at = $7
 				WHERE id = $1`, job.TaskID, target, desired, observationJSON, mediaJSON, errorCode, now)
 			terminalBilling = true
-		case failure.Class == FailureVerificationNeeded || failure.Class == FailureIdentityInvalid || failure.Class == FailureForbidden:
+		case failure.Class == FailureVerificationNeeded:
+			// 人脸抓拍或交互点属于任务级限制；会话本身仍可用于其他任务。
+			// 账号级验证由课程同步与独立核验处理，执行器不能因单个任务停用整个账号。
+			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
+				state = 'needs_attention', lease_attempt_id = NULL, lease_owner = '', lease_expires_at = NULL,
+				observation = $2, media_evidence = $3, last_error_code = $4, last_error_scope = 'task',
+				version = version + 1, updated_at = $5
+				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, string(failure.Class), now)
+			terminalBilling = true
+		case failure.Class == FailureIdentityInvalid || failure.Class == FailureForbidden:
 			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
 				state = 'needs_attention', lease_attempt_id = NULL, lease_owner = '', lease_expires_at = NULL,
 				observation = $2, media_evidence = $3, last_error_code = $4, last_error_scope = 'account',
@@ -786,7 +808,7 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, string(failure.Class), now)
 			terminalBilling = true
 			if err == nil {
-				err = s.blockAccount(ctx, tx, record.UserID, string(failure.Class), "平台要求重新验证或拒绝访问", nil)
+				err = s.blockAccount(ctx, tx, record.UserID, string(failure.Class), "平台要求重新登录或拒绝访问", nil)
 			}
 		case failure.Class == FailureCapabilityMissing || failure.Class == FailureAnswerUnavailable:
 			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
@@ -963,4 +985,22 @@ func (s *Service) retryDelay(failures int, failure *Failure) time.Duration {
 		delay = time.Second
 	}
 	return delay
+}
+
+func (s *Service) globalLimit() int {
+	if s.opts.Runtime != nil {
+		if value := s.opts.Runtime.GlobalConcurrency(); value > 0 {
+			return value
+		}
+	}
+	return s.opts.GlobalConcurrency
+}
+
+func (s *Service) accountLimit() int {
+	if s.opts.Runtime != nil {
+		if value := s.opts.Runtime.AccountConcurrency(); value > 0 {
+			return value
+		}
+	}
+	return s.opts.AccountConcurrency
 }

@@ -11,15 +11,17 @@ import (
 )
 
 type offeringUsage struct {
-	OfferingID   string         `json:"offering_id"`
-	DisplayName  string         `json:"display_name"`
-	Queries      int64          `json:"queries"`
-	CacheHits    int64          `json:"cache_hits"`
-	InputTokens  int64          `json:"input_tokens"`
-	OutputTokens int64          `json:"output_tokens"`
-	TotalTokens  int64          `json:"total_tokens"`
-	CostMicros   string         `json:"cost_micros"`
-	Pricing      *PublicPricing `json:"pricing,omitempty"`
+	OfferingID       string         `json:"offering_id"`
+	DisplayName      string         `json:"display_name"`
+	Queries          int64          `json:"queries"`
+	CacheHits        int64          `json:"cache_hits"`
+	InputTokens      int64          `json:"input_tokens"`
+	OutputTokens     int64          `json:"output_tokens"`
+	CacheReadTokens  int64          `json:"cache_read_tokens"`
+	CacheWriteTokens int64          `json:"cache_write_tokens"`
+	TotalTokens      int64          `json:"total_tokens"`
+	CostMicros       string         `json:"cost_micros"`
+	Pricing          *PublicPricing `json:"pricing,omitempty"`
 }
 
 func (s *Service) adminUsage(w http.ResponseWriter, r *http.Request) {
@@ -35,6 +37,8 @@ func (s *Service) adminUsage(w http.ResponseWriter, r *http.Request) {
 		count(q.id), count(q.id) FILTER (WHERE q.cache_hit),
 		COALESCE(SUM(CASE WHEN q.usage->>'input_tokens' ~ '^[0-9]+$' THEN (q.usage->>'input_tokens')::bigint ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN q.usage->>'output_tokens' ~ '^[0-9]+$' THEN (q.usage->>'output_tokens')::bigint ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN q.usage->>'cache_read_tokens' ~ '^[0-9]+$' THEN (q.usage->>'cache_read_tokens')::bigint ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN q.usage->>'cache_write_tokens' ~ '^[0-9]+$' THEN (q.usage->>'cache_write_tokens')::bigint ELSE 0 END), 0),
 		COALESCE(SUM(CASE WHEN q.pricing->>'state' = 'quoted' AND q.pricing->>'charged' = 'true'
 			THEN (q.pricing->>'cost_micros')::bigint ELSE 0 END), 0)
 		FROM public.question_offerings o LEFT JOIN public.question_queries q ON q.offering_id = o.id
@@ -50,7 +54,7 @@ func (s *Service) adminUsage(w http.ResponseWriter, r *http.Request) {
 		var item offeringUsage
 		var pricingJSON []byte
 		if err := rows.Scan(&item.OfferingID, &item.DisplayName, &pricingJSON, &item.Queries, &item.CacheHits,
-			&item.InputTokens, &item.OutputTokens, &item.CostMicros); err != nil {
+			&item.InputTokens, &item.OutputTokens, &item.CacheReadTokens, &item.CacheWriteTokens, &item.CostMicros); err != nil {
 			web.Error(w, r, 503, "service_unavailable", "题库用量格式无效")
 			return
 		}

@@ -17,7 +17,7 @@ func TestFreshLoginRecoversOnlyExpiredIdentityBlock(t *testing.T) {
 		{"失效身份", "identity_invalid", "", false, 202},
 		{"保留冷却", "identity_invalid", "", true, 409},
 		{"管理员限制", "admin_blocked", "admin_blocked", false, 409},
-		{"平台交互验证", "verification_required", "verification_required", false, 409},
+		{"平台交互验证", "verification_required", "", false, 202},
 		{"权限拒绝", "forbidden", "forbidden", false, 409},
 	} {
 		t.Run(item.name, func(t *testing.T) {

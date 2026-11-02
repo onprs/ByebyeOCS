@@ -59,7 +59,7 @@ func (p *Platform) do(ctx context.Context, session Session, method, rawURL strin
 		return nil, err
 	}
 	defer cleanup()
-	if err := p.factory.limiter.wait(ctx, p.options.MinRequestInterval); err != nil {
+	if err := p.factory.limiter.wait(ctx, p.requestInterval()); err != nil {
 		return nil, learning.Fail(learning.FailureTransient, "上游请求等待被取消")
 	}
 	var body io.Reader
@@ -428,7 +428,7 @@ func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, cour
 		}
 		return nil
 	})
-	for range min(4, len(catalog.Chapters)) {
+	for range min(p.chapterConcurrency(), len(catalog.Chapters)) {
 		group.Go(func() error {
 			for index := range jobs {
 				select {

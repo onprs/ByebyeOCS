@@ -24,6 +24,7 @@ import (
 
 	"github.com/onprs/ByebyeOCS/server/internal/auth"
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
+	"github.com/onprs/ByebyeOCS/server/internal/platform/runtimeconfig"
 )
 
 const adapterVersion = "chaoxing-read-v2"
@@ -63,13 +64,17 @@ type httpOptions struct {
 
 type Options struct {
 	httpOptions
-	ReadOnlyEnabled bool
-	MaxChapters     int
-	Endpoints       Endpoints
+	ReadOnlyEnabled     bool
+	MaxChapters         int
+	RequestInterval     time.Duration
+	DiscoverConcurrency int
+	Runtime             *runtimeconfig.Learning
+	Endpoints           Endpoints
 }
 
 type VerifierOptions struct {
 	httpOptions
+	Runtime *runtimeconfig.Learning
 	Enabled bool
 	// LoginEnabled 与 ReadOnlyAuthorized 是显式授权门槛；默认 false。
 	LoginEnabled       bool
@@ -275,6 +280,9 @@ type platformOptions struct {
 }
 
 func NewPlatform(options Options) (*Platform, error) {
+	if options.RequestInterval > 0 {
+		options.httpOptions.MinRequestInterval = options.RequestInterval
+	}
 	if err := normalizeOptions(&options.httpOptions); err != nil {
 		return nil, err
 	}
@@ -283,6 +291,12 @@ func NewPlatform(options Options) (*Platform, error) {
 	}
 	if options.MaxChapters > 1000 {
 		return nil, errors.New("章节上限过大")
+	}
+	if options.DiscoverConcurrency <= 0 {
+		options.DiscoverConcurrency = 4
+	}
+	if options.DiscoverConcurrency > 16 {
+		return nil, errors.New("并发章节上限过大")
 	}
 	endpoints := options.Endpoints
 	if endpoints.CourseList == "" {
@@ -314,8 +328,29 @@ func NewPlatform(options Options) (*Platform, error) {
 	}
 	factory := clientFactory{options: options.httpOptions, limiter: &rateLimiter{}}
 	return &Platform{options: platformOptions{Options: options, endpoints: endpoints},
-		factory: factory, discoverSlots: make(chan struct{}, 4), coverSlots: make(chan struct{}, 2),
+		factory: factory, discoverSlots: make(chan struct{}, 16), coverSlots: make(chan struct{}, 2),
 		coverClient: factory.client(nil)}, nil
+}
+
+func (p *Platform) chapterConcurrency() int {
+	if p.options.Runtime != nil {
+		if value := p.options.Runtime.ChapterConcurrency(); value > 0 {
+			return value
+		}
+	}
+	if p.options.DiscoverConcurrency > 0 {
+		return p.options.DiscoverConcurrency
+	}
+	return 4
+}
+
+func (p *Platform) requestInterval() time.Duration {
+	if p.options.Runtime != nil {
+		if value := p.options.Runtime.RequestInterval(); value > 0 {
+			return value
+		}
+	}
+	return p.options.MinRequestInterval
 }
 
 func (p *Platform) Capabilities() learning.PlatformCapabilities {
@@ -368,6 +403,23 @@ func (p *Platform) CheckTask(ctx context.Context, sessionBytes []byte, ref learn
 			}
 			check.Passed = attachment.Passed
 			return check, nil
+		}
+		if attachment.Kind == "quiz" {
+			// 测验卡片没有完成字段时，只能以工作页是否已提交/已批阅为准。
+			submitted, err := p.checkWorkSubmitted(ctx, session, ref)
+			if err != nil {
+				return learning.PlatformCheck{Status: learning.CheckUnknown, CheckedAt: time.Now().UTC(),
+					Source: "chaoxing.work"}, err
+			}
+			workCheck := learning.PlatformCheck{CheckedAt: time.Now().UTC(), Source: "chaoxing.work"}
+			if submitted {
+				workCheck.Status = learning.CheckConfirmed
+				workCheck.Passed = true
+				workCheck.Note = "测验已提交或已批阅"
+				return workCheck, nil
+			}
+			workCheck.Status = learning.CheckUnconfirmed
+			return workCheck, nil
 		}
 		if value, pendingKnown := pending[ref.ChapterExternalID]; pendingKnown {
 			check.Status = learning.CheckUnconfirmed

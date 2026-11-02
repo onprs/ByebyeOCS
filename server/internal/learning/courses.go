@@ -91,8 +91,9 @@ func (s *Service) BindAccountTx(ctx context.Context, tx pgx.Tx, userID string, i
 	if otherUser != "" && otherUser != userID {
 		return apiErr(409, "identity_conflict", "该学习通主体已关联其他用户，需人工核验")
 	}
-	// 同主体的新鲜凭据验证可恢复会话失效；管理员限制、平台验证/拒绝和冷却独立保留。
-	recoverIdentity := boundUser != "" && blockedCode == string(FailureIdentityInvalid) &&
+	// 同主体的新鲜凭据验证可恢复会话失效与平台重验证限制；管理员限制、拒绝和冷却独立保留。
+	recoverIdentity := boundUser != "" && (blockedCode == string(FailureIdentityInvalid) ||
+		blockedCode == string(FailureVerificationNeeded)) &&
 		(blockedAt == nil || !identity.VerifiedAt.Before(*blockedAt))
 	_, err = tx.Exec(ctx, `INSERT INTO public.learning_accounts
 		(user_id, provider, identity_namespace, identity_fingerprint, school, display_name, verified_at, updated_at)
@@ -108,6 +109,16 @@ func (s *Service) BindAccountTx(ctx context.Context, tx pgx.Tx, userID string, i
 		truncate(identity.DisplayName, 128), identity.VerifiedAt, recoverIdentity)
 	if err != nil {
 		return errServiceUnavailable
+	}
+	if recoverIdentity {
+		if _, err := tx.Exec(ctx, `UPDATE public.learning_tasks SET
+			state = 'pending', next_attempt_at = $2, last_error_code = '', last_error_scope = '',
+			verification_reason = '', version = version + 1, updated_at = $2
+			WHERE user_id = $1 AND state = 'needs_attention' AND desired_state = 'run'
+			  AND last_error_code = 'verification_required' AND last_error_scope = 'account'`,
+			userID, s.now()); err != nil {
+			return errServiceUnavailable
+		}
 	}
 	return nil
 }

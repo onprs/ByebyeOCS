@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/onprs/ByebyeOCS/server/internal/learning"
+	"github.com/onprs/ByebyeOCS/server/internal/platform/runtimeconfig"
 )
 
 // ProfileProbeOptions 配置账户资料页探针。学习通网页没有同时提供稳定主体与
@@ -29,6 +30,7 @@ type ProfileProbeOptions struct {
 
 	AllowedHosts       []string
 	MinRequestInterval time.Duration
+	Runtime            *runtimeconfig.Learning
 	Timeout            time.Duration
 	MaxResponseBytes   int64
 
@@ -100,6 +102,15 @@ func profileEndpoint(raw string) (*url.URL, error) {
 	return endpoint, nil
 }
 
+func (p *ProfileSubjectProbe) requestInterval() time.Duration {
+	if p.options.Runtime != nil {
+		if value := p.options.Runtime.RequestInterval(); value > 0 {
+			return value
+		}
+	}
+	return p.options.MinRequestInterval
+}
+
 func (p *ProfileSubjectProbe) Probe(ctx context.Context, session Session) (SubjectEvidence, error) {
 	if !p.options.Enabled {
 		return SubjectEvidence{}, learning.Fail(learning.FailureCapabilityMissing, "账户资料探针未启用")
@@ -139,7 +150,18 @@ func (p *ProfileSubjectProbe) Probe(ctx context.Context, session Session) (Subje
 }
 
 func (p *ProfileSubjectProbe) schoolName(ctx context.Context, client *http.Client, jar http.CookieJar, userAgent string) (string, error) {
-	body, err := p.fetch(ctx, client, p.school, userAgent, "application/json")
+	var body []byte
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		body, err = p.fetch(ctx, client, p.school, userAgent, "application/json")
+		if err == nil {
+			break
+		}
+		var failure *learning.Failure
+		if !errors.As(err, &failure) || failure.Class != learning.FailureTransient {
+			return "", err
+		}
+	}
 	if err != nil {
 		return "", err
 	}
@@ -176,19 +198,20 @@ func (p *ProfileSubjectProbe) fetch(ctx context.Context, client *http.Client, en
 		if sameOrigin(req.URL, &base) {
 			return nil
 		}
-		// 学习通会先 302 到 HTTP 并下发 ws Cookie；不跟随明文降级，
-		// 由调用方在原 HTTPS 地址上重试一次。
+		// 学习通会先 302 到 HTTP 并附带 ws 查询参数；不跟随明文降级，
+		// 调用方会把同一目标改回 HTTPS 并保留该查询参数后重试。
 		if req.URL.Scheme == "http" && strings.EqualFold(req.URL.Host, base.Host) {
 			return http.ErrUseLastResponse
 		}
 		return errors.New("账户资料查询禁止跨域重定向")
 	}
 	var lastStatus int
+	target := *endpoint
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := p.factory.limiter.wait(ctx, p.options.MinRequestInterval); err != nil {
+		if err := p.factory.limiter.wait(ctx, p.requestInterval()); err != nil {
 			return nil, learning.Fail(learning.FailureTransient, "账户资料查询等待被取消")
 		}
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 		if err != nil {
 			return nil, learning.Fail(learning.FailurePermanent, "无法建立账户资料查询")
 		}
@@ -203,6 +226,13 @@ func (p *ProfileSubjectProbe) fetch(ctx context.Context, client *http.Client, en
 			location, _ := url.Parse(response.Header.Get("Location"))
 			response.Body.Close()
 			if attempt == 0 && location != nil && location.Scheme == "http" && strings.EqualFold(location.Host, base.Host) {
+				// 302 的 ws 查询参数是完成资料查询所需条件。只把同一主机的
+				// 目标改回 HTTPS 后重试，绝不向明文地址发送平台 Cookie。
+				target.Scheme = "https"
+				if location.Path != "" {
+					target.Path, target.RawPath = location.Path, location.RawPath
+				}
+				target.RawQuery = location.RawQuery
 				continue
 			}
 			return nil, learning.Fail(learning.FailureTransient, "账户资料查询重定向未完成")

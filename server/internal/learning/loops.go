@@ -907,7 +907,7 @@ func (s *Service) finishSyncFailure(ctx context.Context, job courseSyncJob, resu
 	}
 	if result.blockAccount {
 		_ = s.withTx(ctx, func(tx pgx.Tx) error {
-			return s.blockAccount(ctx, tx, job.UserID, result.errorCode, "课程同步期间平台拒绝访问或要求重新验证", nil)
+			return s.blockAccountExcept(ctx, tx, job.UserID, result.errorCode, "课程同步期间平台拒绝访问或要求重新验证", nil, job.ID)
 		})
 	}
 	if err := s.finishCourseSync(ctx, &job, result.status, result.errorCode, 0, 0); err != nil {

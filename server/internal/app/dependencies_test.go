@@ -37,13 +37,13 @@ func TestConfiguredVerifierReachesCredentialValidation(t *testing.T) {
 
 func TestDefaultExecutorUsesHTTPWithoutBrowser(t *testing.T) {
 	cfg := config.Defaults()
-	if executor, err := buildExecutor(cfg); err != nil || executor != nil {
+	if executor, err := buildExecutor(cfg, nil); err != nil || executor != nil {
 		t.Fatal("关闭执行时仍装配执行器")
 	}
 	cfg.Learning.ExecutionEnabled = true
 	cfg.Learning.ExecutionEvidenceReference = "fixture-http-protocol-evidence"
 	cfg.Learning.GlobalConcurrency = 2
-	executor, err := buildExecutor(cfg)
+	executor, err := buildExecutor(cfg, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestDefaultExecutorUsesHTTPWithoutBrowser(t *testing.T) {
 		t.Fatal("原生请求能力或媒体证据声明错误")
 	}
 	cfg.Learning.ExecutionEvidenceReference = ""
-	executor, err = buildExecutor(cfg)
+	executor, err = buildExecutor(cfg, nil)
 	if err != nil || executor.Capabilities().Enabled {
 		t.Fatal("缺少目标验证依据时仍允许执行")
 	}

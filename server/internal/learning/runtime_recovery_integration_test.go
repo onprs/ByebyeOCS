@@ -31,6 +31,33 @@ func TestOlderIdentityBindingPreservesNewerIdentityBlock(t *testing.T) {
 	}
 }
 
+func TestFreshIdentityClearsPlatformVerificationBlockAndRequeuesTasks(t *testing.T) {
+	pool := testPool(t)
+	service, user, taskID := prepareTask(t, pool, defaultFakePlatform())
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `UPDATE public.learning_accounts SET blocked_code='verification_required',blocked_at=now()-interval '1 minute' WHERE user_id=$1`, user); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE public.learning_tasks SET state='needs_attention',last_error_code='verification_required',last_error_scope='account',desired_state='run' WHERE id=$1`, taskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.BindAccount(ctx, user, AccountIdentity{
+		Provider: "chaoxing", Namespace: "chaoxing-test", Subject: "subject-" + user, VerifiedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var blocked, state, scope string
+	if err := pool.QueryRow(ctx, `SELECT blocked_code FROM public.learning_accounts WHERE user_id=$1`, user).Scan(&blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT state,COALESCE(last_error_scope,'') FROM public.learning_tasks WHERE id=$1`, taskID).Scan(&state, &scope); err != nil {
+		t.Fatal(err)
+	}
+	if blocked != "" || state != StatePending || scope != "" {
+		t.Fatalf("新鲜登录未恢复验证状态: blocked=%q state=%q scope=%q", blocked, state, scope)
+	}
+}
+
 func TestResumeActiveTaskDoesNotCancelItsAttempt(t *testing.T) {
 	pool := testPool(t)
 	service, user, taskID := prepareTask(t, pool, defaultFakePlatform())

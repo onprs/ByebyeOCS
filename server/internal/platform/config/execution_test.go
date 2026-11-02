@@ -29,3 +29,34 @@ func TestHTTPExecutionAuthorizationWithoutBrowser(t *testing.T) {
 		t.Fatal("开发模式允许了真实学习执行")
 	}
 }
+
+func TestDevelopmentExecutionRequiresExplicitLoopbackAuthorization(t *testing.T) {
+	cfg := Defaults()
+	cfg.Mode = "development"
+	cfg.Auth.Enabled = true
+	cfg.Auth.CookieSecure = false
+	cfg.Auth.EncryptionKey = make([]byte, 32)
+	cfg.Auth.IdentityKey = make([]byte, 32)
+	cfg.Auth.IdentityKey[0] = 1
+	cfg.Auth.UserOrigin = "http://127.0.0.1:8090"
+	cfg.Auth.AdminOrigin = "http://127.0.0.1:8091"
+	cfg.Learning.Enabled = true
+	cfg.Learning.AuthorizationReference = "fixture-platform-authorization"
+	cfg.Learning.SubjectNamespace = "fixture-namespace"
+	cfg.Learning.SubjectProbeURL = "https://passport2.chaoxing.com/fixture-subject"
+	cfg.Learning.SubjectPath = "subject"
+	cfg.Learning.SessionExpiryPath = "expires_at"
+	cfg.Learning.ExecutionEnabled = true
+	cfg.Learning.ExecutionEvidenceReference = "fixture-http-protocol-evidence"
+	if err := validateRuntime(&cfg); err == nil {
+		t.Fatal("未显式授权的开发执行被接受")
+	}
+	cfg.Learning.DevelopmentExecutionAuthorized = true
+	if err := validateRuntime(&cfg); err != nil {
+		t.Fatalf("回环开发执行授权被拒绝：%v", err)
+	}
+	cfg.Auth.AdminOrigin = "https://admin.example.test"
+	if err := validateRuntime(&cfg); err == nil {
+		t.Fatal("非回环入口的开发执行授权被接受")
+	}
+}

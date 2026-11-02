@@ -34,17 +34,18 @@ const directPanelPassword = "Isolated-Maintenance-2026!"
 
 // 使用实际 fork 进程与独立数据库；只有上游模型和登录身份是受控夹具。
 type directForkFixture struct {
-	url       string
-	db        *postgres.Database
-	calls     atomic.Int64
-	missing   atomic.Bool
-	fail      atomic.Bool
-	quiz      atomic.Bool
-	mu        sync.Mutex
-	models    []string
-	before    func() bool
-	badHold   atomic.Int64
-	badSecret atomic.Int64
+	url         string
+	upstreamURL string
+	db          *postgres.Database
+	calls       atomic.Int64
+	missing     atomic.Bool
+	fail        atomic.Bool
+	quiz        atomic.Bool
+	mu          sync.Mutex
+	models      []string
+	before      func() bool
+	badHold     atomic.Int64
+	badSecret   atomic.Int64
 }
 
 func newDirectForkFixture(t *testing.T, shared bool) *directForkFixture {
@@ -53,7 +54,7 @@ func newDirectForkFixture(t *testing.T, shared bool) *directForkFixture {
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
-			_, _ = io.WriteString(w, `{"data":[]}`)
+			_, _ = io.WriteString(w, `{"data":[{"id":"browser-upstream","owned_by":"fixture"},{"id":"gpt-4o","owned_by":"openai"}]}`)
 			return
 		}
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/chat/completions" {
@@ -99,6 +100,7 @@ func newDirectForkFixture(t *testing.T, shared bool) *directForkFixture {
 		_ = json.NewEncoder(w).Encode(response)
 	}))
 	t.Cleanup(upstream.Close)
+	f.upstreamURL = upstream.URL + "/v1"
 	directory := t.TempDir()
 	writeFile := func(name string, data []byte) string {
 		t.Helper()
@@ -118,8 +120,8 @@ func newDirectForkFixture(t *testing.T, shared bool) *directForkFixture {
 	address := listener.Addr().String()
 	_ = listener.Close()
 	f.url = "http://" + address
-	models := make([]any, 0, 2)
-	for _, id := range []string{"primary", "alternate"} {
+	models := make([]any, 0, 3)
+	for _, id := range []string{"primary", "alternate", "shared"} {
 		keyPath := writeFile(id+".key", []byte("isolated-upstream-key-"+id))
 		models = append(models, map[string]any{
 			"id": id, "display_name": "接口联调模型" + id, "protocol": "openai-chat", "model": id,
@@ -233,6 +235,9 @@ func (f *directForkFixture) seedOffering(t *testing.T, displayName, providerRef,
 		offeringID, publicID, displayName, providerRef, capabilities, pricingJSON, priceVersion, policy, isDefault); err != nil {
 		t.Fatal("无法写入题库公开条目", err)
 	}
+	if _, err := f.db.Pool().Exec(context.Background(), `INSERT INTO tiku.offering_model_bindings(provider_ref, offering_id) VALUES($1,$2)`, providerRef, offeringID); err != nil {
+		t.Fatal("无法绑定题库模型公开条目", err)
+	}
 	if pricing != nil {
 		if _, err := f.db.Pool().Exec(context.Background(), `INSERT INTO tiku.offering_price_versions
 			(id, offering_id, version, pricing, created_by) VALUES ($1,$2,$3,$4,'integration-fixture')`,
@@ -296,7 +301,7 @@ func TestTikuForkDirectAdaptation(t *testing.T) {
 	for _, provider := range []string{"primary", "alternate", "shared"} {
 		providerRef, scope := provider, "user"
 		if provider == "shared" {
-			providerRef, scope = "primary", "shared"
+			scope = "shared"
 		}
 		modelIDs[provider] = fork.seedOffering(t, "题库适配模型"+provider, providerRef, scope, 1, adaptationPricing, false)
 	}
@@ -539,6 +544,7 @@ func TestTikuForkDirectAdaptation(t *testing.T) {
 	t.Logf("模型公开缓存有效期为1天，真实 fork 缓存有效期为 %.2f 小时", cacheHours)
 	if script := os.Getenv("BYEBYEOCS_TIKU_PANEL_PROBE_SCRIPT"); script != "" {
 		probe := exec.Command("node", script, fork.url)
+		probe.Env = append(os.Environ(), "BYEBYEOCS_TIKU_TEST_PROVIDER_BASE_URL="+fork.upstreamURL)
 		if output, err := probe.CombinedOutput(); err != nil {
 			t.Fatalf("真实题库面板浏览器探测失败：%v\n%s", err, output)
 		} else {

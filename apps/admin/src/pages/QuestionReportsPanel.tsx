@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { newIdempotencyKey } from '../api/client'
-import { invalidateQuestionCache } from '../api/endpoints'
+import { getQuestionRecovery, invalidateQuestionCache } from '../api/endpoints'
 import { listCacheReports, reviewCacheReport } from '../api/questionReports'
 import type { CacheReport, CacheReportStatus } from '../api/questionReports'
 import {
@@ -19,10 +19,29 @@ export function QuestionReportsPanel({ canManage }: { canManage: boolean }) {
   const reports = useAsync(() => listCacheReports(status, pagination.cursor), [status, pagination.cursor], { resetOnDepsChange: true })
   const [selected, setSelected] = useState<{ report: CacheReport; invalidate: boolean } | null>(null)
 
-  if (reports.data && reports.data.items.length === 0 && !reports.error) return null
+  const recovery = useAsync(() => getQuestionRecovery(), [])
 
   return (
     <>
+      <Card className="section-gap">
+        <CardHeader
+          title="题库在途回收"
+          actions={<Button size="sm" onClick={recovery.reload} loading={recovery.loading}><RefreshCw size={14} /> 刷新状态</Button>}
+        />
+        {recovery.data ? (
+          <div className="u-padding-18px">
+            <p className="u-margin-0">
+              最近运行：{recovery.data.last_run_at ? formatDateTime(recovery.data.last_run_at) : '尚未运行'}　
+              累计运行 {recovery.data.runs} 次，处理 {recovery.data.handled} 条，失败 {recovery.data.failed} 次
+            </p>
+            {recovery.data.last_error ? (
+              <p className="u-margin-0"><small className="cell-sub">最近错误码：{recovery.data.last_error}</small></p>
+            ) : null}
+          </div>
+        ) : recovery.error ? (
+          <div className="u-padding-18px"><ErrorState error={recovery.error} onRetry={recovery.reload} /></div>
+        ) : <LoadingBlock rows={1} />}
+      </Card>
       <Card className="section-gap">
         <CardHeader
           title="用户答案报告"

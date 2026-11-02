@@ -437,6 +437,16 @@ func (f *idempotentFork) Answer(_ context.Context, request ForkAnswerRequest, _ 
 	return response, nil
 }
 
+func (f *idempotentFork) RequestStatus(_ context.Context, idempotencyKey string) (ForkRequestStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if response, ok := f.responses[idempotencyKey]; ok {
+		copied := response
+		return ForkRequestStatus{State: "completed", Response: &copied}, nil
+	}
+	return ForkRequestStatus{State: "pending"}, nil
+}
+
 func (*idempotentFork) TestModel(context.Context, string, string, bool) (ForkTestResult, error) {
 	return ForkTestResult{}, nil
 }

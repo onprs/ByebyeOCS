@@ -324,6 +324,11 @@ func (s *Service) resolveSession(ctx context.Context, userID string) ([]byte, er
 // blockAccount 在账号范围停止新的外部操作，并给当前活跃尝试发出停止请求。
 // 已发生的外部事实不会被抹掉。
 func (s *Service) blockAccount(ctx context.Context, tx pgx.Tx, userID, code, reason string, until *time.Time) error {
+	return s.blockAccountExcept(ctx, tx, userID, code, reason, until, "")
+}
+
+// blockAccountExcept 允许当前正在写入结果的课程同步自行完成状态落库，避免被账号阻断覆盖。
+func (s *Service) blockAccountExcept(ctx context.Context, tx pgx.Tx, userID, code, reason string, until *time.Time, exemptSyncID string) error {
 	now := s.now()
 	if _, err := tx.Exec(ctx, `UPDATE public.learning_accounts
 		SET blocked_code = $2, blocked_reason = $3, blocked_at = $4, blocked_until = $5,
@@ -336,6 +341,12 @@ func (s *Service) blockAccount(ctx context.Context, tx pgx.Tx, userID, code, rea
 		FROM public.learning_tasks t
 		WHERE a.task_id = t.id AND a.user_id = $1 AND a.ended_at IS NULL
 		  AND t.state IN ('preparing', 'running')`, userID); err != nil {
+		return errServiceUnavailable
+	}
+	// 阻断后停止并结算在途课程同步，避免服务重启后继续领取并反复阻断账号。
+	if _, err := tx.Exec(ctx, `UPDATE public.learning_course_syncs
+		SET status = 'failed', error_code = $2, finished_at = $3, lease_expires_at = $3, updated_at = $3
+		WHERE user_id = $1 AND status = 'running' AND ($4 = '' OR id::text <> $4)`, userID, code, now, exemptSyncID); err != nil {
 		return errServiceUnavailable
 	}
 	return nil

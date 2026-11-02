@@ -181,6 +181,13 @@ func (s *Service) Middleware(kind string, next http.Handler) http.Handler {
 			if presented.CookieBased && code == "unauthenticated" {
 				s.clearSessionCookie(w, kind)
 			}
+			// 本地开发自动登录：浏览器残留旧管理员 Cookie 时，让会话引导重新建立，
+			// 不把用户推到登录页；该分支仍严格受 development 回环回调约束。
+			if code == "unauthenticated" && kind == KindAdmin && r.Method == http.MethodGet &&
+				r.URL.Path == "/admin/api/v1/auth/session" && s.localAdminAutoLoginAllowed(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
 			if code == "unauthenticated" {
 				web.Error(w, r, http.StatusUnauthorized, "unauthenticated", "登录已失效，请重新验证身份")
 				return
@@ -219,6 +226,10 @@ func (s *Service) Middleware(kind string, next http.Handler) http.Handler {
 			SessionID:       state.ID,
 			Permissions:     permissions,
 			AuthenticatedAt: state.AuthenticatedAt,
+		}
+		// 本地开发自动登录不要求二次验证；敏感操作仍校验权限和 CSRF。
+		if kind == KindAdmin && s.localAdminAutoLoginAllowed(r) {
+			actor.AuthenticatedAt = now
 		}
 		ctx := web.WithActor(r.Context(), actor)
 		ctx = withSession(ctx, state)

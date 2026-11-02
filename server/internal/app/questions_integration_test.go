@@ -75,6 +75,10 @@ func seedOffering(t *testing.T, fork questions.ForkClient, displayName, provider
 	return publicID
 }
 
+func (f *accountedFork) RequestStatus(context.Context, string) (questions.ForkRequestStatus, error) {
+	return questions.ForkRequestStatus{State: "pending"}, nil
+}
+
 func (f *accountedFork) Answer(ctx context.Context, r questions.ForkAnswerRequest, key string) (questions.ForkAnswerResponse, error) {
 	f.calls.Add(1)
 	if f.before != nil {

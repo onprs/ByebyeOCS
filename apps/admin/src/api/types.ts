@@ -409,6 +409,13 @@ export interface BillingSettings {
 
 export interface RuntimeSettings {
   runtime: Array<{ key: string; value: string }>
+  configured: {
+    global_concurrency: number | null
+    account_concurrency: number | null
+    chapter_concurrency: number | null
+    request_interval_ms: number | null
+  } | null
+  restart_required: boolean
   storage: {
     status: string
     used_percent: number | null

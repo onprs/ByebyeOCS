@@ -4,6 +4,8 @@ import { useTableOverflowAffordance } from '../lib/useTableOverflowAffordance'
 import {
   ChevronDown,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   CreditCard,
   ExternalLink,
   LayoutDashboard,
@@ -22,7 +24,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/AuthProvider'
 import { Logo } from '../components/Logo'
 import { SelectionTrack } from '../components/SelectionTrack'
-import { Avatar, IconButton } from '../components/ui'
+import { IconButton } from '../components/ui'
 import { useToast } from '../components/toast'
 import { useClickOutside } from '../lib/hooks'
 import { useAppearance } from '../theme/AppearanceProvider'
@@ -58,6 +60,9 @@ export function AdminLayout() {
   const [navOpen, setNavOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
+  const [desktop, setDesktop] = useState(() => window.matchMedia('(min-width: 981px)').matches)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const isCollapsed = desktop && sidebarCollapsed
   const profileRef = useRef<HTMLDivElement | null>(null)
   useClickOutside(profileRef, () => setProfileOpen(false), profileOpen)
   useScrollMemory(location.pathname)
@@ -67,6 +72,21 @@ export function AdminLayout() {
     setNavOpen(false)
     setProfileOpen(false)
   }, [location.pathname])
+
+  useEffect(() => {
+    const media = window.matchMedia('(min-width: 981px)')
+    const update = () => setDesktop(media.matches)
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
+
+  const toggleSidebar = () => {
+    if (!desktop) {
+      setNavOpen(false)
+      return
+    }
+    setSidebarCollapsed(value => !value)
+  }
 
   const visibleNavigation = navigation.filter(item => hasPermission(me, item.permission))
   const active =
@@ -100,11 +120,11 @@ export function AdminLayout() {
   }
 
   return (
-    <div className="admin-shell">
+    <div className={`admin-shell ${isCollapsed ? 'is-sidebar-collapsed' : ''}`}>
       {navOpen ? <div className="sidebar-scrim" onClick={() => setNavOpen(false)} aria-hidden="true" /> : null}
       <aside className={`admin-sidebar ${navOpen ? 'is-open' : ''}`} aria-label="管理导航">
         <div className="sidebar-brand">
-          <Logo />
+          <Logo compact={isCollapsed} />
         </div>
         <div className="admin-workspace">
           <span className="workspace-icon">
@@ -173,13 +193,14 @@ export function AdminLayout() {
         </nav>
         </SelectionTrack>
         <div className="admin-sidebar-bottom">
-          <button className="sidebar-admin" onClick={() => navigate('/settings')} aria-label="打开账户与设置">
-            <Avatar name={me?.display_name ?? '管'} small />
-            <span className="sidebar-admin-copy">
-              <b>{me?.display_name ?? '管理员'}</b>
-              <span>{roleLabel(me?.role ?? 'admin')}</span>
-            </span>
-            <ChevronRight size={14} aria-hidden="true" />
+          <button
+            className="sidebar-collapse"
+            onClick={toggleSidebar}
+            aria-label={isCollapsed ? '展开侧边栏' : '收起侧边栏'}
+            aria-pressed={isCollapsed}
+          >
+            {isCollapsed ? <ChevronsRight size={16} aria-hidden="true" /> : <ChevronsLeft size={16} aria-hidden="true" />}
+            <span className="sidebar-collapse-label">{isCollapsed ? '展开侧边栏' : '收起侧边栏'}</span>
           </button>
         </div>
       </aside>
@@ -217,7 +238,6 @@ export function AdminLayout() {
                 aria-label="管理员账户菜单"
                 onClick={() => setProfileOpen(value => !value)}
               >
-                <Avatar name={me?.display_name ?? '管'} small />
                 <span className="profile-button-copy">
                   <b>{me?.display_name ?? '管理员'}</b>
                   <span>{roleLabel(me?.role ?? 'admin')}</span>
