@@ -840,8 +840,10 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 			snapshotVersion = version
 		}
 		processed++
+		interval := s.currentRequestInterval()
 		s.opts.Logger.Info("课程结构同步完成", "course_index", processed, "course_total", len(courses),
-			"chapters", len(snapshot.Chapters), "elapsed_ms", s.now().Sub(started).Milliseconds())
+			"chapters", len(snapshot.Chapters), "elapsed_ms", s.now().Sub(started).Milliseconds(),
+			"request_interval_ms", interval.Milliseconds())
 		if err := s.updateCourseSyncProgress(ctx, &job, processed); err != nil {
 			if errors.Is(err, errLeaseLost) {
 				return
@@ -855,6 +857,17 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		errorCode = "course_structure_partial"
 		if partial == 0 && transientPartial > 0 {
 			errorCode = "course_transient_partial"
+			// 纯瞬态失败：同一个同步任务自动重试，已完成的课程由恢复逻辑跳过。
+			// 不把一次网络抖动留给用户手动重试，也不重新拉取已成功的课程。
+			if job.AttemptCount <= s.opts.MaxAttempts {
+				delay := s.retryDelay(job.AttemptCount, nil)
+				if retryErr := s.retryCourseSync(ctx, &job, errorCode, s.now().Add(delay)); retryErr == nil {
+					s.opts.Logger.Info("课程同步瞬态失败，已排队重试", "user_id", job.UserID,
+						"transient", transientPartial, "total", len(courses), "delay_ms", delay.Milliseconds())
+					return
+				}
+				s.opts.Logger.Warn("课程同步重试排队失败", "code", describe(err))
+			}
 		}
 		s.opts.Logger.Warn("课程同步部分完成", "user_id", job.UserID, "partial", partial,
 			"transient", transientPartial, "total", len(courses))
@@ -913,4 +926,12 @@ func (s *Service) finishSyncFailure(ctx context.Context, job courseSyncJob, resu
 	if err := s.finishCourseSync(ctx, &job, result.status, result.errorCode, 0, 0); err != nil {
 		s.opts.Logger.Warn("课程同步失败状态写入失败", "code", describe(err))
 	}
+}
+
+// currentRequestInterval 返回平台当前实际请求间隔，用于观察自适应节奏。
+func (s *Service) currentRequestInterval() time.Duration {
+	if reporter, ok := s.opts.Platform.(interface{ CurrentRequestInterval() time.Duration }); ok {
+		return reporter.CurrentRequestInterval()
+	}
+	return 0
 }

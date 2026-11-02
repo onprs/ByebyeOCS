@@ -66,6 +66,9 @@ type fakePlatform struct {
 	checks    map[string]PlatformCheck
 	failure   error
 	listCalls int
+	// discoverFailures 控制指定课程前 N 次结构读取返回瞬态失败。
+	discoverFailures map[string]int
+	discoverCalls    map[string]int
 }
 
 func (f *fakePlatform) Capabilities() PlatformCapabilities {
@@ -89,6 +92,14 @@ func (f *fakePlatform) DiscoverCourse(ctx context.Context, session []byte, ref P
 		return PlatformCourseSnapshot{}, f.failure
 	}
 	key := ref.ExternalCourseID + "/" + ref.ExternalClassID
+	if f.discoverCalls == nil {
+		f.discoverCalls = map[string]int{}
+	}
+	f.discoverCalls[key]++
+	if f.discoverFailures != nil && f.discoverFailures[key] > 0 {
+		f.discoverFailures[key]--
+		return PlatformCourseSnapshot{}, Fail(FailureTransient, "上游请求未完成")
+	}
 	snapshot, ok := f.snapshots[key]
 	if !ok {
 		return PlatformCourseSnapshot{}, Fail(FailureCapabilityMissing, "missing fake course")
