@@ -59,7 +59,7 @@ func (p *Platform) do(ctx context.Context, session Session, method, rawURL strin
 		return nil, err
 	}
 	defer cleanup()
-	if err := p.factory.limiter.wait(ctx, p.requestInterval()); err != nil {
+	if err := p.factory.limiter.wait(ctx, p.requestInterval(), p.requestIntervalFloor()); err != nil {
 		return nil, learning.Fail(learning.FailureTransient, "上游请求等待被取消")
 	}
 	var body io.Reader
@@ -96,13 +96,13 @@ func (p *Platform) do(ctx context.Context, session Session, method, rawURL strin
 		return nil, learning.Fail(learning.FailureForbidden, "平台拒绝访问，可能需要重新验证身份")
 	}
 	if response.StatusCode == http.StatusTooManyRequests {
-		p.factory.limiter.onThrottle(p.requestInterval())
+		p.factory.limiter.onThrottle(p.requestInterval(), p.requestIntervalFloor())
 		return nil, learning.Fail(learning.FailureRateLimited, "平台限流，已停止相关操作")
 	}
 	if response.StatusCode != http.StatusOK {
 		return nil, learning.Fail(learning.FailureTransient, "上游响应未成功")
 	}
-	p.factory.limiter.onSuccess(p.requestInterval())
+	p.factory.limiter.onSuccess(p.requestInterval(), p.requestIntervalFloor())
 	limited := io.LimitReader(response.Body, p.options.MaxResponseBytes+1)
 	payload, err := io.ReadAll(limited)
 	if err != nil {

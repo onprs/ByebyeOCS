@@ -127,7 +127,7 @@ func (p *Platform) fetchWorkImage(ctx context.Context, session Session, ref work
 	if p.options.MaxResponseBytes > 0 && p.options.MaxResponseBytes < limit {
 		limit = p.options.MaxResponseBytes
 	}
-	if err := p.factory.limiter.wait(ctx, p.requestInterval()); err != nil {
+	if err := p.factory.limiter.wait(ctx, p.requestInterval(), p.requestIntervalFloor()); err != nil {
 		return learning.WorkImage{}, learning.Fail(learning.FailureTransient, "测验图片读取等待被取消")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)

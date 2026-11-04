@@ -141,7 +141,7 @@ type rateLimiter struct {
 
 // wait 按实际放行时间推进下一时刻，避免预留时间槽在调度延迟后形成突发。
 // 等待名额和等待发送间隔均可取消，不会因其他账号排队而阻塞停止请求。
-func (r *rateLimiter) wait(ctx context.Context, interval time.Duration) error {
+func (r *rateLimiter) wait(ctx context.Context, interval, floor time.Duration) error {
 	r.once.Do(func() { r.gate = make(chan struct{}, 1) })
 	select {
 	case r.gate <- struct{}{}:
@@ -149,7 +149,7 @@ func (r *rateLimiter) wait(ctx context.Context, interval time.Duration) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	interval = r.currentInterval(interval)
+	interval = r.currentInterval(interval, floor)
 	if delay := time.Until(r.next); delay > 0 {
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
@@ -653,10 +653,20 @@ func bytesRepeat(value byte, count int) []byte {
 }
 
 // 自适应区间的下限与上限：配置值的 1/2（不低于 60 毫秒）与 4 倍（不高于 1.5 秒）。
-func intervalBounds(configured time.Duration) (time.Duration, time.Duration) {
-	floor := configured / 2
-	if floor < 60*time.Millisecond {
-		floor = 60 * time.Millisecond
+func intervalBounds(configured, configuredFloor time.Duration) (time.Duration, time.Duration) {
+	floor := configuredFloor
+	if floor <= 0 {
+		// 未显式配置时取请求间隔的一半，并保留 60 毫秒的历史下限。
+		floor = configured / 2
+		if floor < 60*time.Millisecond {
+			floor = 60 * time.Millisecond
+		}
+	}
+	if floor < 20*time.Millisecond {
+		floor = 20 * time.Millisecond
+	}
+	if floor > configured {
+		floor = configured
 	}
 	ceiling := configured * 4
 	if ceiling > 1500*time.Millisecond {
@@ -669,7 +679,7 @@ func intervalBounds(configured time.Duration) (time.Duration, time.Duration) {
 }
 
 // currentInterval 在配置变化时重置为配置值，否则返回自适应后的间隔。
-func (r *rateLimiter) currentInterval(configured time.Duration) time.Duration {
+func (r *rateLimiter) currentInterval(configured, floor time.Duration) time.Duration {
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
 	if r.configured != configured || r.current <= 0 {
@@ -681,7 +691,7 @@ func (r *rateLimiter) currentInterval(configured time.Duration) time.Duration {
 }
 
 // onSuccess 在连续成功达到阈值后小幅加速；加速始终不越过下限。
-func (r *rateLimiter) onSuccess(configured time.Duration) {
+func (r *rateLimiter) onSuccess(configured, configuredFloor time.Duration) {
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
 	if r.configured != configured || r.current <= 0 {
@@ -694,7 +704,7 @@ func (r *rateLimiter) onSuccess(configured time.Duration) {
 		return
 	}
 	r.streak = 0
-	floor, _ := intervalBounds(configured)
+	floor, _ := intervalBounds(configured, configuredFloor)
 	next := r.current - r.current/10
 	if next < floor {
 		next = floor
@@ -703,14 +713,14 @@ func (r *rateLimiter) onSuccess(configured time.Duration) {
 }
 
 // onThrottle 在平台限流时立刻退让。
-func (r *rateLimiter) onThrottle(configured time.Duration) {
+func (r *rateLimiter) onThrottle(configured, configuredFloor time.Duration) {
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
 	if r.configured != configured || r.current <= 0 {
 		r.configured = configured
 		r.current = configured
 	}
-	_, ceiling := intervalBounds(configured)
+	_, ceiling := intervalBounds(configured, configuredFloor)
 	next := r.current * 2
 	if next > ceiling {
 		next = ceiling
@@ -721,13 +731,13 @@ func (r *rateLimiter) onThrottle(configured time.Duration) {
 }
 
 // observe 返回当前自适应间隔与累计被限流次数，供日志与运维观察。
-func (r *rateLimiter) observe(configured time.Duration) (time.Duration, int64) {
+func (r *rateLimiter) observe(configured, floor time.Duration) (time.Duration, int64) {
 	r.stateMu.Lock()
 	defer r.stateMu.Unlock()
-	return r.currentIntervalLocked(configured), r.throttled
+	return r.currentIntervalLocked(configured, floor), r.throttled
 }
 
-func (r *rateLimiter) currentIntervalLocked(configured time.Duration) time.Duration {
+func (r *rateLimiter) currentIntervalLocked(configured, floor time.Duration) time.Duration {
 	if r.configured != configured || r.current <= 0 {
 		r.configured = configured
 		r.current = configured
@@ -738,6 +748,22 @@ func (r *rateLimiter) currentIntervalLocked(configured time.Duration) time.Durat
 
 // CurrentRequestInterval 暴露当前自适应请求间隔，供同步日志与运维观察。
 func (p *Platform) CurrentRequestInterval() time.Duration {
-	interval, _ := p.factory.limiter.observe(p.requestInterval())
+	interval, _ := p.factory.limiter.observe(p.requestInterval(), p.requestIntervalFloor())
 	return interval
+}
+
+// requestIntervalFloor 返回自适应提速下限；未配置时返回 0，由限速器按间隔一半推导。
+func (p *Platform) requestIntervalFloor() time.Duration {
+	if p.options.Runtime != nil {
+		if value := p.options.Runtime.RequestIntervalFloor(); value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+// CurrentRequestThrottles 返回进程内被平台限流的累计次数，供同步日志核对节奏是否过高。
+func (p *Platform) CurrentRequestThrottles() int64 {
+	_, count := p.factory.limiter.observe(p.requestInterval(), p.requestIntervalFloor())
+	return count
 }

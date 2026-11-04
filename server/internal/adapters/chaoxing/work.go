@@ -774,7 +774,7 @@ func (p *Platform) postWorkSubmission(ctx context.Context, session Session, page
 	// 最终提交不跟随重定向，避免 POST 被改写成 GET 或转向未确认地址。
 	// 该 client 只在本次任务的上下文内使用，提交之后不再发出请求。
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	if err := p.factory.limiter.wait(ctx, p.requestInterval()); err != nil {
+	if err := p.factory.limiter.wait(ctx, p.requestInterval(), p.requestIntervalFloor()); err != nil {
 		return learning.WorkSubmission{}, learning.Fail(learning.FailureStopped, "测验提交等待被停止")
 	}
 	if err := ctx.Err(); err != nil {

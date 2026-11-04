@@ -55,6 +55,8 @@ type Learning struct {
 	AccountConcurrency             int  `yaml:"account_concurrency"`
 	// RequestInterval 控制同一平台适配器相邻上游请求的最小间隔；默认 300ms。
 	RequestInterval time.Duration `yaml:"request_interval"`
+	// RequestIntervalFloor 是自适应提速的下限；0 表示取 RequestInterval 的一半。
+	RequestIntervalFloor time.Duration `yaml:"request_interval_floor,omitempty"`
 	// ChapterConcurrency 控制单门课程同步时并发读取章节的上限；默认 4。
 	ChapterConcurrency int `yaml:"chapter_concurrency"`
 }
@@ -262,6 +264,10 @@ func validateRuntime(cfg *Config) error {
 	}
 	if cfg.Learning.RequestInterval < 50*time.Millisecond || cfg.Learning.RequestInterval > 2*time.Second {
 		return invalid("学习上游请求间隔必须在 50ms 到 2s 之间")
+	}
+	if cfg.Learning.RequestIntervalFloor > 0 &&
+		(cfg.Learning.RequestIntervalFloor < 20*time.Millisecond || cfg.Learning.RequestIntervalFloor > cfg.Learning.RequestInterval) {
+		return invalid("学习请求间隔下限必须在 20ms 到请求间隔之间")
 	}
 	if cfg.Learning.ChapterConcurrency <= 0 {
 		cfg.Learning.ChapterConcurrency = 4

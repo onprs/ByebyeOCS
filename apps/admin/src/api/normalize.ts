@@ -1060,6 +1060,7 @@ export function normalizeRuntimeSettings(raw: unknown): RuntimeSettings {
           account_concurrency: pickNumber(configured, ['account_concurrency']),
           chapter_concurrency: pickNumber(configured, ['chapter_concurrency']),
           request_interval_ms: pickNumber(configured, ['request_interval_ms']),
+          request_interval_floor_ms: pickNumber(configured, ['request_interval_floor_ms']),
         }
       : null,
     restart_required: pickBool(object, ['restart_required']) === true,

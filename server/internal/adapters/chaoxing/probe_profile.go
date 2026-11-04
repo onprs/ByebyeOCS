@@ -208,7 +208,7 @@ func (p *ProfileSubjectProbe) fetch(ctx context.Context, client *http.Client, en
 	var lastStatus int
 	target := *endpoint
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := p.factory.limiter.wait(ctx, p.requestInterval()); err != nil {
+		if err := p.factory.limiter.wait(ctx, p.requestInterval(), p.requestIntervalFloor()); err != nil {
 			return nil, learning.Fail(learning.FailureTransient, "账户资料查询等待被取消")
 		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
@@ -272,3 +272,13 @@ func truncateRunes(value string, limit int) string {
 }
 
 var _ SubjectProbe = (*ProfileSubjectProbe)(nil)
+
+// requestIntervalFloor 读取自适应下限；探针只按配置间隔发送，未配置时返回 0。
+func (p *ProfileSubjectProbe) requestIntervalFloor() time.Duration {
+	if p.options.Runtime != nil {
+		if value := p.options.Runtime.RequestIntervalFloor(); value > 0 {
+			return value
+		}
+	}
+	return 0
+}

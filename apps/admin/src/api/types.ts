@@ -414,6 +414,7 @@ export interface RuntimeSettings {
     account_concurrency: number | null
     chapter_concurrency: number | null
     request_interval_ms: number | null
+    request_interval_floor_ms?: number | null
   } | null
   restart_required: boolean
   storage: {

@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestHTTPExecutionAuthorizationWithoutBrowser(t *testing.T) {
 	cfg := Defaults()
@@ -58,5 +61,29 @@ func TestDevelopmentExecutionRequiresExplicitLoopbackAuthorization(t *testing.T)
 	cfg.Auth.AdminOrigin = "https://admin.example.test"
 	if err := validateRuntime(&cfg); err == nil {
 		t.Fatal("非回环入口的开发执行授权被接受")
+	}
+}
+
+// 自适应提速下限不能超过请求间隔，也不能低于 20 毫秒。
+func TestLearningRequestIntervalFloorValidation(t *testing.T) {
+	base := func() Config {
+		cfg := Defaults()
+		cfg.Learning.RequestInterval = 150 * time.Millisecond
+		return cfg
+	}
+	cfg := base()
+	cfg.Learning.RequestIntervalFloor = 10 * time.Millisecond
+	if err := validateRuntime(&cfg); err == nil {
+		t.Fatal("低于 20 毫秒的下限被接受")
+	}
+	cfg = base()
+	cfg.Learning.RequestIntervalFloor = 200 * time.Millisecond
+	if err := validateRuntime(&cfg); err == nil {
+		t.Fatal("超过请求间隔的下限被接受")
+	}
+	cfg = base()
+	cfg.Learning.RequestIntervalFloor = 30 * time.Millisecond
+	if err := validateRuntime(&cfg); err != nil {
+		t.Fatalf("合法下限被拒绝：%v", err)
 	}
 }

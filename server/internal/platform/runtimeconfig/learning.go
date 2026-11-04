@@ -12,15 +12,16 @@ type Learning struct {
 	account  atomic.Int64
 	chapter  atomic.Int64
 	interval atomic.Int64
+	floor    atomic.Int64
 }
 
-func NewLearning(global, account, chapter int, interval time.Duration) *Learning {
+func NewLearning(global, account, chapter int, interval, floor time.Duration) *Learning {
 	settings := &Learning{}
-	settings.Set(global, account, chapter, interval)
+	settings.Set(global, account, chapter, interval, floor)
 	return settings
 }
 
-func (s *Learning) Set(global, account, chapter int, interval time.Duration) {
+func (s *Learning) Set(global, account, chapter int, interval, floor time.Duration) {
 	if s == nil {
 		return
 	}
@@ -36,6 +37,7 @@ func (s *Learning) Set(global, account, chapter int, interval time.Duration) {
 	if interval > 0 {
 		s.interval.Store(int64(interval))
 	}
+	s.floor.Store(int64(floor))
 }
 
 func (s *Learning) GlobalConcurrency() int {
@@ -64,4 +66,12 @@ func (s *Learning) RequestInterval() time.Duration {
 		return 0
 	}
 	return time.Duration(s.interval.Load())
+}
+
+// RequestIntervalFloor 返回自适应提速下限；0 表示按请求间隔的一半推导。
+func (s *Learning) RequestIntervalFloor() time.Duration {
+	if s == nil {
+		return 0
+	}
+	return time.Duration(s.floor.Load())
 }

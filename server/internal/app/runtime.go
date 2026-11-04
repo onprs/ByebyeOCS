@@ -61,7 +61,8 @@ func Assemble(cfg config.Config, db *postgres.Database, logger *slog.Logger, dep
 	settings := deps.Settings
 	if settings == nil {
 		settings = runtimeconfig.NewLearning(cfg.Learning.GlobalConcurrency, cfg.Learning.AccountConcurrency,
-			cfg.Learning.ChapterConcurrency, cfg.Learning.RequestInterval)
+			cfg.Learning.ChapterConcurrency, cfg.Learning.RequestInterval,
+			cfg.Learning.RequestIntervalFloor)
 	}
 	runtime := &Runtime{cfg: cfg, db: db, logger: logger, userLoginAvailable: deps.Verifier != nil}
 	runtime.HTTP.User.AssetsDir = cfg.Storage.ClientAssetsDir

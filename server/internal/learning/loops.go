@@ -840,10 +840,10 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 			snapshotVersion = version
 		}
 		processed++
-		interval := s.currentRequestInterval()
+		interval, throttled := s.currentRequestPacing()
 		s.opts.Logger.Info("课程结构同步完成", "course_index", processed, "course_total", len(courses),
 			"chapters", len(snapshot.Chapters), "elapsed_ms", s.now().Sub(started).Milliseconds(),
-			"request_interval_ms", interval.Milliseconds())
+			"request_interval_ms", interval.Milliseconds(), "throttled", throttled)
 		if err := s.updateCourseSyncProgress(ctx, &job, processed); err != nil {
 			if errors.Is(err, errLeaseLost) {
 				return
@@ -928,10 +928,15 @@ func (s *Service) finishSyncFailure(ctx context.Context, job courseSyncJob, resu
 	}
 }
 
-// currentRequestInterval 返回平台当前实际请求间隔，用于观察自适应节奏。
-func (s *Service) currentRequestInterval() time.Duration {
+// currentRequestPacing 返回平台当前实际请求间隔与限流次数，用于观察自适应节奏。
+func (s *Service) currentRequestPacing() (time.Duration, int64) {
+	var interval time.Duration
+	var throttled int64
 	if reporter, ok := s.opts.Platform.(interface{ CurrentRequestInterval() time.Duration }); ok {
-		return reporter.CurrentRequestInterval()
+		interval = reporter.CurrentRequestInterval()
 	}
-	return 0
+	if reporter, ok := s.opts.Platform.(interface{ CurrentRequestThrottles() int64 }); ok {
+		throttled = reporter.CurrentRequestThrottles()
+	}
+	return interval, throttled
 }

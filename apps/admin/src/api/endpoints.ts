@@ -674,6 +674,7 @@ export async function updateRuntimeSettings(input: {
   account_concurrency: number
   chapter_concurrency: number
   request_interval_ms: number
+  request_interval_floor_ms?: number
 }): Promise<ApiResponse<RuntimeSettings>> {
   const response = await apiRequest<unknown>('/settings/runtime', { method: 'PATCH', body: input })
   return { data: normalizeRuntimeSettings(response.data), etag: response.etag }

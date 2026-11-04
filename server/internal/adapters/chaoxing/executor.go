@@ -182,7 +182,7 @@ func (r *httpExecution) get(ctx context.Context, address, role string) ([]byte, 
 	if err != nil || !factory.allowedURL(target) || target.Fragment != "" {
 		return nil, learning.Fail(learning.FailureCapabilityMissing, "原生请求地址未通过平台范围校验")
 	}
-	if err := factory.limiter.wait(ctx, r.executor.platform.requestInterval()); err != nil {
+	if err := factory.limiter.wait(ctx, r.executor.platform.requestInterval(), r.executor.platform.requestIntervalFloor()); err != nil {
 		return nil, learning.Fail(learning.FailureStopped, "原生请求等待已停止")
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)

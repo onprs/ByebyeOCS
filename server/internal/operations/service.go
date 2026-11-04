@@ -194,6 +194,7 @@ func (s *Service) runtimeFacts() map[string]any {
 		facts["account_concurrency"] = s.options.LearningRuntime.AccountConcurrency()
 		facts["chapter_concurrency"] = s.options.LearningRuntime.ChapterConcurrency()
 		facts["request_interval_ms"] = s.options.LearningRuntime.RequestInterval().Milliseconds()
+		facts["request_interval_floor_ms"] = s.options.LearningRuntime.RequestIntervalFloor().Milliseconds()
 	}
 	return facts
 }

@@ -16,7 +16,8 @@ import (
 
 func defaultDependencies(cfg config.Config) (Dependencies, error) {
 	result := Dependencies{Settings: runtimeconfig.NewLearning(cfg.Learning.GlobalConcurrency,
-		cfg.Learning.AccountConcurrency, cfg.Learning.ChapterConcurrency, cfg.Learning.RequestInterval)}
+		cfg.Learning.AccountConcurrency, cfg.Learning.ChapterConcurrency, cfg.Learning.RequestInterval,
+		cfg.Learning.RequestIntervalFloor)}
 	if !cfg.Auth.Enabled {
 		return result, nil
 	}

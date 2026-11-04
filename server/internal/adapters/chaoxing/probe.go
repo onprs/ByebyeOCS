@@ -128,7 +128,7 @@ func (p *JSONSubjectProbe) Probe(ctx context.Context, session Session) (SubjectE
 		}
 		return nil
 	}
-	if err := p.factory.limiter.wait(ctx, p.requestInterval()); err != nil {
+	if err := p.factory.limiter.wait(ctx, p.requestInterval(), p.requestIntervalFloor()); err != nil {
 		return SubjectEvidence{}, learning.Fail(learning.FailureTransient, "可信会话查询等待被取消")
 	}
 	request, err := http.NewRequestWithContext(ctx, p.options.Method, p.endpoint.String(), nil)
@@ -297,3 +297,13 @@ func probeExpiry(value any, format string) (time.Time, error) {
 }
 
 var _ SubjectProbe = (*JSONSubjectProbe)(nil)
+
+// requestIntervalFloor 读取自适应下限；探针只按配置间隔发送，未配置时返回 0。
+func (p *JSONSubjectProbe) requestIntervalFloor() time.Duration {
+	if p.options.Runtime != nil {
+		if value := p.options.Runtime.RequestIntervalFloor(); value > 0 {
+			return value
+		}
+	}
+	return 0
+}

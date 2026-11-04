@@ -483,6 +483,7 @@ const runtimeKeyLabels: Record<string, string> = {
   account_concurrency: '账号默认并发',
   chapter_concurrency: '单课同步并发',
   request_interval_ms: '请求最小间隔（毫秒）',
+  request_interval_floor_ms: '自适应提速下限（毫秒）',
   execution_enabled: '任务执行启用',
   instance_id: '节点标识',
   session_ttl: '会话有效期',
@@ -539,7 +540,7 @@ function RuntimePanel() {
   const { me } = useAuth()
   const { notify } = useToast()
   const canManage = hasPermission(me, 'admin.users.manage')
-  const [form, setForm] = useState({ global_concurrency: '4', account_concurrency: '3', chapter_concurrency: '8', request_interval_ms: '150' })
+  const [form, setForm] = useState({ global_concurrency: '4', account_concurrency: '3', chapter_concurrency: '8', request_interval_ms: '150', request_interval_floor_ms: '' })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<unknown | null>(null)
   const [savedRestartRequired, setSavedRestartRequired] = useState(false)
@@ -553,6 +554,7 @@ function RuntimePanel() {
       account_concurrency: String(configured?.account_concurrency ?? effective.account_concurrency ?? 3),
       chapter_concurrency: String(configured?.chapter_concurrency ?? effective.chapter_concurrency ?? 8),
       request_interval_ms: String(configured?.request_interval_ms ?? effective.request_interval_ms ?? 150),
+      request_interval_floor_ms: configured?.request_interval_floor_ms ? String(configured.request_interval_floor_ms) : '',
     })
     setSavedRestartRequired(runtime.data.restart_required)
   }, [runtime.data])
@@ -564,6 +566,7 @@ function RuntimePanel() {
       account_concurrency: Number(form.account_concurrency),
       chapter_concurrency: Number(form.chapter_concurrency),
       request_interval_ms: Number(form.request_interval_ms),
+      request_interval_floor_ms: form.request_interval_floor_ms === '' ? 0 : Number(form.request_interval_floor_ms),
     }
     if (![input.global_concurrency, input.account_concurrency, input.chapter_concurrency, input.request_interval_ms].every(Number.isInteger)) {
       setError(new Error('请填写整数并发和毫秒值。'))
@@ -573,6 +576,7 @@ function RuntimePanel() {
     if (input.account_concurrency < 1 || input.account_concurrency > input.global_concurrency) { setError(new Error('账号默认并发必须在 1 到全局名额之间。')); return }
     if (input.chapter_concurrency < 1 || input.chapter_concurrency > 16) { setError(new Error('单课同步并发必须在 1 到 16 之间。')); return }
     if (input.request_interval_ms < 50 || input.request_interval_ms > 2000) { setError(new Error('请求间隔必须在 50 到 2000 毫秒之间。')); return }
+    if (input.request_interval_floor_ms !== 0 && (input.request_interval_floor_ms < 20 || input.request_interval_floor_ms > input.request_interval_ms)) { setError(new Error('提速下限必须留空或为 20 到请求间隔之间的毫秒值。')); return }
     setSaving(true)
     setError(null)
     try {
@@ -584,6 +588,7 @@ function RuntimePanel() {
         account_concurrency: String(configured.account_concurrency ?? input.account_concurrency),
         chapter_concurrency: String(configured.chapter_concurrency ?? input.chapter_concurrency),
         request_interval_ms: String(configured.request_interval_ms ?? input.request_interval_ms),
+        request_interval_floor_ms: configured.request_interval_floor_ms ? String(configured.request_interval_floor_ms) : '',
       })
       notify(response.data.restart_required ? '并发设置已保存，当前运行参数待重启同步' : '并发设置已实时生效')
       runtime.reload()
@@ -629,6 +634,9 @@ function RuntimePanel() {
                       <input value={form.request_interval_ms} onChange={event => update('request_interval_ms', event.target.value)} inputMode="numeric" disabled={saving} />
                     </Field>
                   </div>
+                  <Field label="自适应提速下限（毫秒）" hint="连续成功后间隔最多降到该值，留空表示取请求间隔的一半；20 毫秒起。">
+                    <input value={form.request_interval_floor_ms} onChange={event => update('request_interval_floor_ms', event.target.value)} inputMode="numeric" placeholder="留空 = 请求间隔的一半" disabled={saving} />
+                  </Field>
                   {savedRestartRequired ? (
                     <Callout tone="warning" icon={<CircleAlert size={16} />}>
                       当前运行参数与配置文件不一致，重启主服务后会按配置重新加载。

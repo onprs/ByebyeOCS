@@ -16,18 +16,20 @@ import (
 )
 
 type runtimeSettingsPatch struct {
-	GlobalConcurrency  *int `json:"global_concurrency"`
-	AccountConcurrency *int `json:"account_concurrency"`
-	ChapterConcurrency *int `json:"chapter_concurrency"`
-	RequestIntervalMS  *int `json:"request_interval_ms"`
+	GlobalConcurrency      *int `json:"global_concurrency"`
+	AccountConcurrency     *int `json:"account_concurrency"`
+	ChapterConcurrency     *int `json:"chapter_concurrency"`
+	RequestIntervalMS      *int `json:"request_interval_ms"`
+	RequestIntervalFloorMS *int `json:"request_interval_floor_ms"`
 }
 
 func runtimeConfiguredValues(cfg config.Config) map[string]any {
 	return map[string]any{
-		"global_concurrency":  cfg.Learning.GlobalConcurrency,
-		"account_concurrency": cfg.Learning.AccountConcurrency,
-		"chapter_concurrency": cfg.Learning.ChapterConcurrency,
-		"request_interval_ms": cfg.Learning.RequestInterval.Milliseconds(),
+		"global_concurrency":        cfg.Learning.GlobalConcurrency,
+		"account_concurrency":       cfg.Learning.AccountConcurrency,
+		"chapter_concurrency":       cfg.Learning.ChapterConcurrency,
+		"request_interval_ms":       cfg.Learning.RequestInterval.Milliseconds(),
+		"request_interval_floor_ms": cfg.Learning.RequestIntervalFloor.Milliseconds(),
 	}
 }
 
@@ -93,6 +95,7 @@ func (s *Service) updateRuntimeSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	global, account, chapter, interval := current.Learning.GlobalConcurrency, current.Learning.AccountConcurrency,
 		current.Learning.ChapterConcurrency, int(current.Learning.RequestInterval.Milliseconds())
+	floor := int(current.Learning.RequestIntervalFloor.Milliseconds())
 	if input.GlobalConcurrency != nil {
 		global = *input.GlobalConcurrency
 	}
@@ -104,6 +107,9 @@ func (s *Service) updateRuntimeSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	if input.RequestIntervalMS != nil {
 		interval = *input.RequestIntervalMS
+	}
+	if input.RequestIntervalFloorMS != nil {
+		floor = *input.RequestIntervalFloorMS
 	}
 	if global < 1 || global > 64 {
 		web.Error(w, r, 422, "validation_failed", "全局执行名额必须在 1 到 64 之间")
@@ -119,6 +125,10 @@ func (s *Service) updateRuntimeSettings(w http.ResponseWriter, r *http.Request) 
 	}
 	if interval < 50 || interval > 2000 {
 		web.Error(w, r, 422, "validation_failed", "请求间隔必须在 50 到 2000 毫秒之间")
+		return
+	}
+	if floor < 0 || floor > interval || (floor > 0 && floor < 20) {
+		web.Error(w, r, 422, "validation_failed", "请求间隔下限必须在 0 或 20 毫秒到请求间隔之间")
 		return
 	}
 	raw, err := os.ReadFile(s.options.ConfigPath)
@@ -140,6 +150,11 @@ func (s *Service) updateRuntimeSettings(w http.ResponseWriter, r *http.Request) 
 	learning["account_concurrency"] = account
 	learning["chapter_concurrency"] = chapter
 	learning["request_interval"] = fmt.Sprintf("%dms", interval)
+	if floor > 0 {
+		learning["request_interval_floor"] = fmt.Sprintf("%dms", floor)
+	} else {
+		delete(learning, "request_interval_floor")
+	}
 	document["learning"] = learning
 	encoded, err := yaml.Marshal(document)
 	if err != nil {
@@ -182,7 +197,8 @@ func (s *Service) updateRuntimeSettings(w http.ResponseWriter, r *http.Request) 
 		web.Error(w, r, 503, "service_unavailable", "无法替换配置文件")
 		return
 	}
-	s.options.LearningRuntime.Set(global, account, chapter, time.Duration(interval)*time.Millisecond)
+	s.options.LearningRuntime.Set(global, account, chapter,
+		time.Duration(interval)*time.Millisecond, time.Duration(floor)*time.Millisecond)
 	after := runtimeConfiguredValues(validated)
 	detail, _ := json.Marshal(map[string]any{"before": before, "after": after})
 	ctx := r.Context()
