@@ -266,14 +266,14 @@ func validateRuntime(cfg *Config) error {
 		return invalid("学习上游请求间隔必须在 50ms 到 2s 之间")
 	}
 	if cfg.Learning.RequestIntervalFloor > 0 &&
-		(cfg.Learning.RequestIntervalFloor < 20*time.Millisecond || cfg.Learning.RequestIntervalFloor > cfg.Learning.RequestInterval) {
-		return invalid("学习请求间隔下限必须在 20ms 到请求间隔之间")
+		(cfg.Learning.RequestIntervalFloor < 10*time.Millisecond || cfg.Learning.RequestIntervalFloor > cfg.Learning.RequestInterval) {
+		return invalid("学习请求间隔下限必须在 10ms 到请求间隔之间")
 	}
 	if cfg.Learning.ChapterConcurrency <= 0 {
 		cfg.Learning.ChapterConcurrency = 4
 	}
-	if cfg.Learning.ChapterConcurrency > 16 {
-		return invalid("单门课程并发章节上限不能超过 16")
+	if cfg.Learning.ChapterConcurrency > 64 {
+		return invalid("单门课程并发章节上限不能超过 64")
 	}
 	if cfg.Learning.Enabled && (!cfg.Auth.Enabled || cfg.Learning.AuthorizationReference == "" || cfg.Learning.SubjectNamespace == "") {
 		return invalid("启用平台连接前须配置认证、授权依据和已验证主体命名空间")

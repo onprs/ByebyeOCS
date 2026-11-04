@@ -817,6 +817,8 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		if snapshot.Adapter == "" {
 			snapshot.Adapter = capabilities.Adapter
 		}
+		readElapsed := s.now().Sub(started)
+		writeStarted := s.now()
 		version, err := s.applyCourseSnapshot(ctx, &job, account, snapshot)
 		if err != nil {
 			if errors.Is(err, errLeaseLost) {
@@ -843,7 +845,9 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 		interval, throttled := s.currentRequestPacing()
 		s.opts.Logger.Info("课程结构同步完成", "course_index", processed, "course_total", len(courses),
 			"chapters", len(snapshot.Chapters), "elapsed_ms", s.now().Sub(started).Milliseconds(),
-			"request_interval_ms", interval.Milliseconds(), "throttled", throttled)
+			"read_ms", readElapsed.Milliseconds(), "write_ms", s.now().Sub(writeStarted).Milliseconds(),
+			"request_interval_ms", interval.Milliseconds(), "throttled", throttled,
+			"requests_total", s.currentRequestCount())
 		if err := s.updateCourseSyncProgress(ctx, &job, processed); err != nil {
 			if errors.Is(err, errLeaseLost) {
 				return
@@ -939,4 +943,12 @@ func (s *Service) currentRequestPacing() (time.Duration, int64) {
 		throttled = reporter.CurrentRequestThrottles()
 	}
 	return interval, throttled
+}
+
+// currentRequestCount 返回本进程已放行的上游请求总数；平台未提供时返回 0。
+func (s *Service) currentRequestCount() int64 {
+	if reporter, ok := s.opts.Platform.(interface{ CurrentRequestCount() int64 }); ok {
+		return reporter.CurrentRequestCount()
+	}
+	return 0
 }

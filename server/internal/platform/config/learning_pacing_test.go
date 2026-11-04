@@ -24,7 +24,11 @@ func TestLearningRequestPacingBounds(t *testing.T) {
 	if err := validateRuntime(&cfg); err != nil {
 		t.Fatalf("合法的本地请求节奏被拒绝：%v", err)
 	}
-	cfg.Learning.ChapterConcurrency = 20
+	cfg.Learning.ChapterConcurrency = 32
+	if err := validateRuntime(&cfg); err != nil {
+		t.Fatalf("允许范围内的章节并发被拒绝：%v", err)
+	}
+	cfg.Learning.ChapterConcurrency = 65
 	if err := validateRuntime(&cfg); err == nil {
 		t.Fatal("过高的章节并发被接受")
 	}

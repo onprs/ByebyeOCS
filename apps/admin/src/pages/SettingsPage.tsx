@@ -574,9 +574,9 @@ function RuntimePanel() {
     }
     if (input.global_concurrency < 1 || input.global_concurrency > 64) { setError(new Error('全局执行名额必须在 1 到 64 之间。')); return }
     if (input.account_concurrency < 1 || input.account_concurrency > input.global_concurrency) { setError(new Error('账号默认并发必须在 1 到全局名额之间。')); return }
-    if (input.chapter_concurrency < 1 || input.chapter_concurrency > 16) { setError(new Error('单课同步并发必须在 1 到 16 之间。')); return }
+    if (input.chapter_concurrency < 1 || input.chapter_concurrency > 64) { setError(new Error('单课同步并发必须在 1 到 64 之间。')); return }
     if (input.request_interval_ms < 50 || input.request_interval_ms > 2000) { setError(new Error('请求间隔必须在 50 到 2000 毫秒之间。')); return }
-    if (input.request_interval_floor_ms !== 0 && (input.request_interval_floor_ms < 20 || input.request_interval_floor_ms > input.request_interval_ms)) { setError(new Error('提速下限必须留空或为 20 到请求间隔之间的毫秒值。')); return }
+    if (input.request_interval_floor_ms !== 0 && (input.request_interval_floor_ms < 10 || input.request_interval_floor_ms > input.request_interval_ms)) { setError(new Error('提速下限必须留空或为 10 到请求间隔之间的毫秒值。')); return }
     setSaving(true)
     setError(null)
     try {
@@ -627,14 +627,14 @@ function RuntimePanel() {
                     </Field>
                   </div>
                   <div className="field-row">
-                    <Field label="单课同步并发章节" hint="课程同步时单门课同时读取的章节数，1–16。">
+                    <Field label="单课同步并发章节" hint="课程同步时单门课同时读取的章节数，1–64。">
                       <input value={form.chapter_concurrency} onChange={event => update('chapter_concurrency', event.target.value)} inputMode="numeric" disabled={saving} />
                     </Field>
                     <Field label="请求最小间隔（毫秒）" hint="平台请求的最小间隔，50–2000；过低可能触发平台限流。">
                       <input value={form.request_interval_ms} onChange={event => update('request_interval_ms', event.target.value)} inputMode="numeric" disabled={saving} />
                     </Field>
                   </div>
-                  <Field label="自适应提速下限（毫秒）" hint="连续成功后间隔最多降到该值，留空表示取请求间隔的一半；20 毫秒起。">
+                  <Field label="自适应提速下限（毫秒）" hint="连续成功后间隔最多降到该值，留空表示取请求间隔的一半；10 毫秒起。">
                     <input value={form.request_interval_floor_ms} onChange={event => update('request_interval_floor_ms', event.target.value)} inputMode="numeric" placeholder="留空 = 请求间隔的一半" disabled={saving} />
                   </Field>
                   {savedRestartRequired ? (

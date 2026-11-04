@@ -89,7 +89,7 @@ func TestRateLimiterExplicitFloor(t *testing.T) {
 		t.Fatalf("未配置下限时应为间隔一半：%s", got)
 	}
 	floor, _ := intervalBounds(150*time.Millisecond, 5*time.Millisecond)
-	if floor != 20*time.Millisecond {
-		t.Fatalf("下限不能低于 20 毫秒：%s", floor)
+	if floor != 10*time.Millisecond {
+		t.Fatalf("下限不能低于 10 毫秒：%s", floor)
 	}
 }

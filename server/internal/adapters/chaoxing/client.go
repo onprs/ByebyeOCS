@@ -137,6 +137,7 @@ type rateLimiter struct {
 	current    time.Duration
 	streak     int64
 	throttled  int64
+	total      int64
 }
 
 // wait 按实际放行时间推进下一时刻，避免预留时间槽在调度延迟后形成突发。
@@ -163,6 +164,9 @@ func (r *rateLimiter) wait(ctx context.Context, interval, floor time.Duration) e
 		return err
 	}
 	r.next = time.Now().Add(interval)
+	r.stateMu.Lock()
+	r.total++
+	r.stateMu.Unlock()
 	return nil
 }
 
@@ -304,7 +308,7 @@ func NewPlatform(options Options) (*Platform, error) {
 	if options.DiscoverConcurrency <= 0 {
 		options.DiscoverConcurrency = 4
 	}
-	if options.DiscoverConcurrency > 16 {
+	if options.DiscoverConcurrency > 64 {
 		return nil, errors.New("并发章节上限过大")
 	}
 	endpoints := options.Endpoints
@@ -662,8 +666,8 @@ func intervalBounds(configured, configuredFloor time.Duration) (time.Duration, t
 			floor = 60 * time.Millisecond
 		}
 	}
-	if floor < 20*time.Millisecond {
-		floor = 20 * time.Millisecond
+	if floor < 10*time.Millisecond {
+		floor = 10 * time.Millisecond
 	}
 	if floor > configured {
 		floor = configured
@@ -766,4 +770,11 @@ func (p *Platform) requestIntervalFloor() time.Duration {
 func (p *Platform) CurrentRequestThrottles() int64 {
 	_, count := p.factory.limiter.observe(p.requestInterval(), p.requestIntervalFloor())
 	return count
+}
+
+// CurrentRequestCount 返回本进程已经放行的上游请求总数，用于核对同步请求规模。
+func (p *Platform) CurrentRequestCount() int64 {
+	p.factory.limiter.stateMu.Lock()
+	defer p.factory.limiter.stateMu.Unlock()
+	return p.factory.limiter.total
 }

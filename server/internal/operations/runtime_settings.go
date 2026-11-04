@@ -119,16 +119,16 @@ func (s *Service) updateRuntimeSettings(w http.ResponseWriter, r *http.Request) 
 		web.Error(w, r, 422, "validation_failed", "账号默认并发必须在 1 到全局名额之间")
 		return
 	}
-	if chapter < 1 || chapter > 16 {
-		web.Error(w, r, 422, "validation_failed", "单课同步并发必须在 1 到 16 之间")
+	if chapter < 1 || chapter > 64 {
+		web.Error(w, r, 422, "validation_failed", "单课同步并发必须在 1 到 64 之间")
 		return
 	}
 	if interval < 50 || interval > 2000 {
 		web.Error(w, r, 422, "validation_failed", "请求间隔必须在 50 到 2000 毫秒之间")
 		return
 	}
-	if floor < 0 || floor > interval || (floor > 0 && floor < 20) {
-		web.Error(w, r, 422, "validation_failed", "请求间隔下限必须在 0 或 20 毫秒到请求间隔之间")
+	if floor < 0 || floor > interval || (floor > 0 && floor < 10) {
+		web.Error(w, r, 422, "validation_failed", "请求间隔下限必须在 0 或 10 毫秒到请求间隔之间")
 		return
 	}
 	raw, err := os.ReadFile(s.options.ConfigPath)

@@ -64,7 +64,7 @@ func TestDevelopmentExecutionRequiresExplicitLoopbackAuthorization(t *testing.T)
 	}
 }
 
-// 自适应提速下限不能超过请求间隔，也不能低于 20 毫秒。
+// 自适应提速下限不能超过请求间隔，也不能低于 10 毫秒。
 func TestLearningRequestIntervalFloorValidation(t *testing.T) {
 	base := func() Config {
 		cfg := Defaults()
@@ -72,9 +72,9 @@ func TestLearningRequestIntervalFloorValidation(t *testing.T) {
 		return cfg
 	}
 	cfg := base()
-	cfg.Learning.RequestIntervalFloor = 10 * time.Millisecond
+	cfg.Learning.RequestIntervalFloor = 5 * time.Millisecond
 	if err := validateRuntime(&cfg); err == nil {
-		t.Fatal("低于 20 毫秒的下限被接受")
+		t.Fatal("低于 10 毫秒的下限被接受")
 	}
 	cfg = base()
 	cfg.Learning.RequestIntervalFloor = 200 * time.Millisecond
