@@ -506,19 +506,21 @@ func (p *Platform) discoverCourse(ctx context.Context, sessionBytes []byte, cour
 				knowledge := catalog.Chapters[index].ExternalID
 				var attachments []learning.PlatformAttachment
 				var skipped int
+				// worker 内必须使用局部错误变量：共享外层变量会在并发章节之间产生数据竞争。
+				var readErr error
 				if hint != nil {
 					var modified int64
-					attachments, skipped, modified, err = p.readCardsByIndexes(readCtx, session, course,
+					attachments, skipped, modified, readErr = p.readCardsByIndexes(readCtx, session, course,
 						knowledge, hint.Indexes[knowledge], &observed)
-					if err == nil && modified > 0 && modified != hint.ModifiedAt {
-						err = errStructureChanged
+					if readErr == nil && modified > 0 && modified != hint.ModifiedAt {
+						readErr = errStructureChanged
 					}
 				} else {
-					attachments, skipped, _, err = p.readCardsMeta(readCtx, session, course, knowledge, &observed, refreshIndexes)
+					attachments, skipped, _, readErr = p.readCardsMeta(readCtx, session, course, knowledge, &observed, refreshIndexes)
 				}
 				<-p.discoverSlots
-				if err != nil {
-					return err
+				if readErr != nil {
+					return readErr
 				}
 				taskPointCount := 0
 				for _, attachment := range attachments {
