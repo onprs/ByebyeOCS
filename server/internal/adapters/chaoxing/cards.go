@@ -15,11 +15,12 @@ import (
 const maxChapterCards = 32
 
 // chapterCardIndexes 读取章节页面中的实际卡片页码；固定测试入口可仅提供单卡片。
-func (p *Platform) chapterCardIndexes(ctx context.Context, session Session, course learning.PlatformCourseRef, knowledge string) ([]int, error) {
+func (p *Platform) chapterCardIndexes(ctx context.Context, session Session, course learning.PlatformCourseRef,
+	knowledge string, refresh bool) ([]int, error) {
 	if p.options.endpoints.Study == "" {
 		return []int{0}, nil
 	}
-	return p.cachedCardIndexes(ctx, p.resourceKey(course, knowledge), func() ([]int, error) {
+	load := func() ([]int, error) {
 		query := url.Values{"courseId": {course.ExternalCourseID}, "clazzid": {course.ExternalClassID},
 			"chapterId": {knowledge}, "cpi": {course.CPI}, "verificationcode": {""}, "mooc2": {"1"}}
 		payload, err := p.do(ctx, session, http.MethodGet, p.options.endpoints.Study, query, "chapter_study")
@@ -27,7 +28,11 @@ func (p *Platform) chapterCardIndexes(ctx context.Context, session Session, cour
 			return nil, err
 		}
 		return chapterCardIndexes(payload, course, knowledge)
-	})
+	}
+	if refresh {
+		return p.reloadCardIndexes(ctx, p.resourceKey(course, knowledge), load)
+	}
+	return p.cachedCardIndexes(ctx, p.resourceKey(course, knowledge), load)
 }
 
 func cardAttr(node *html.Node, name string) string {
@@ -108,18 +113,39 @@ func chapterCardIndexes(payload []byte, course learning.PlatformCourseRef, knowl
 }
 
 func (p *Platform) readCardsAtIndex(ctx context.Context, session Session, course learning.PlatformCourseRef, knowledge string, index int) ([]learning.PlatformAttachment, int, error) {
+	attachments, skipped, _, err := p.readCardsAtIndexMeta(ctx, session, course, knowledge, index)
+	return attachments, skipped, err
+}
+
+// readCardsAtIndexMeta 在读取附件的同时返回平台课程级修改时间，供结构指纹判定。
+func (p *Platform) readCardsAtIndexMeta(ctx context.Context, session Session,
+	course learning.PlatformCourseRef, knowledge string, index int) ([]learning.PlatformAttachment, int, int64, error) {
 	if index < 0 || index >= maxChapterCards {
-		return nil, 0, learning.Fail(learning.FailureInvalidTask, "任务卡片页码无效")
+		return nil, 0, 0, learning.Fail(learning.FailureInvalidTask, "任务卡片页码无效")
 	}
 	payload, err := p.do(ctx, session, http.MethodGet, p.cardsURLAtIndex(course, knowledge, index), nil, "course_cards")
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	attachments, skipped, err := parseAttachments(payload)
 	for offset := range attachments {
 		attachments[offset].CardIndex = index
 	}
-	return attachments, skipped, err
+	return attachments, skipped, cardsModifiedAt(payload), err
+}
+
+// cardsModifiedAt 读取卡片 JSON 里的平台课程级修改时间；缺失或格式不符时返回 0。
+func cardsModifiedAt(payload []byte) int64 {
+	config, err := parseCards(payload)
+	if err != nil {
+		return 0
+	}
+	defaults := mapValue(config["defaults"])
+	value, ok := defaults["lastmodifytime"]
+	if !ok {
+		return 0
+	}
+	return int64(nonNegative(number(value)))
 }
 
 func (p *Platform) readTaskAttachments(ctx context.Context, session Session, ref learning.PlatformTaskRef) ([]learning.PlatformAttachment, map[string]int, error) {

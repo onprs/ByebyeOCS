@@ -858,7 +858,7 @@ func TestReadCardsRecognizesQuiz(t *testing.T) {
 	fixture := newWorkFixture(t)
 	platform := fixture.platform(t)
 	attachments, _, err := platform.readCards(context.Background(), testSession(),
-		workTaskRef().Course, workChapterID)
+		workTaskRef().Course, workChapterID, false)
 	if err != nil {
 		t.Fatal(err)
 	}

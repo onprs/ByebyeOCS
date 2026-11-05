@@ -69,6 +69,19 @@ type fakePlatform struct {
 	// discoverFailures 控制指定课程前 N 次结构读取返回瞬态失败。
 	discoverFailures map[string]int
 	discoverCalls    map[string]int
+	// 结构指纹路径的调用记录，供测试断言。
+	hintCalls int
+	lastHint  CourseStructureHint
+}
+
+// DiscoverCourseWithHint 记录调用方传入的结构指纹后按完整发现执行。
+func (f *fakePlatform) DiscoverCourseWithHint(ctx context.Context, session []byte,
+	ref PlatformCourseRef, hint CourseStructureHint) (PlatformCourseSnapshot, error) {
+	f.mu.Lock()
+	f.hintCalls++
+	f.lastHint = hint
+	f.mu.Unlock()
+	return f.DiscoverCourse(ctx, session, ref)
 }
 
 func (f *fakePlatform) Capabilities() PlatformCapabilities {
@@ -127,7 +140,7 @@ func defaultFakePlatform() *fakePlatform {
 		snapshots: map[string]PlatformCourseSnapshot{
 			"101/202": {
 				Course: PlatformCourseRef{ExternalCourseID: "101", ExternalClassID: "202", CPI: "303", CycleKey: "current"},
-				Title:  "测试课程", Adapter: "fake",
+				Title:  "测试课程", Adapter: "fake", PlatformModifiedAt: 1234,
 				Chapters: []PlatformChapter{{ExternalID: "5001", Title: "", SortOrder: 0,
 					Attachments: []PlatformAttachment{
 						{ObjectID: "video-1", TaskPointID: "9001", Kind: "video", Title: "视频任务",

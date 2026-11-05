@@ -786,7 +786,14 @@ func (s *Service) runCourseSync(ctx context.Context, job courseSyncJob) {
 			CPI: course.CPI, CycleKey: "current",
 		}
 		started := s.now()
-		snapshot, err := s.opts.Platform.DiscoverCourse(ctx, session, ref)
+		hint := s.courseStructureHint(ctx, job.UserID, course.ExternalCourseID, course.ExternalClassID)
+		var snapshot PlatformCourseSnapshot
+		if hinted, ok := s.opts.Platform.(HintedPlatform); ok && hint.ModifiedAt > 0 {
+			// 结构指纹一致时跳过逐章页码枚举；不一致由适配器自动退回完整发现。
+			snapshot, err = hinted.DiscoverCourseWithHint(ctx, session, ref, hint)
+		} else {
+			snapshot, err = s.opts.Platform.DiscoverCourse(ctx, session, ref)
+		}
 		if err != nil {
 			failure := failureOf(err)
 			s.opts.Logger.Warn("课程结构读取失败", "user_id", job.UserID, "course_index", processed, "class", string(failure.Class), "detail", failure.Detail)

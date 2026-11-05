@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
 
@@ -220,18 +221,41 @@ func (p *Platform) cardsURLAtIndex(course learning.PlatformCourseRef, knowledge 
 	return parsed.String()
 }
 
-func (p *Platform) readCards(ctx context.Context, session Session, course learning.PlatformCourseRef, knowledge string) ([]learning.PlatformAttachment, int, error) {
-	indexes, err := p.chapterCardIndexes(ctx, session, course, knowledge)
+func (p *Platform) readCards(ctx context.Context, session Session, course learning.PlatformCourseRef,
+	knowledge string, refreshIndexes bool) ([]learning.PlatformAttachment, int, error) {
+	attachments, skipped, _, err := p.readCardsMeta(ctx, session, course, knowledge, nil, refreshIndexes)
+	return attachments, skipped, err
+}
+
+// readCardsMeta 读取章节全部卡片，并把首次看到的平台课程级修改时间写回 observed。
+func (p *Platform) readCardsMeta(ctx context.Context, session Session, course learning.PlatformCourseRef,
+	knowledge string, observed *atomic.Int64, refreshIndexes bool) ([]learning.PlatformAttachment, int, int64, error) {
+	indexes, err := p.chapterCardIndexes(ctx, session, course, knowledge, refreshIndexes)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
+	return p.readCardsByIndexes(ctx, session, course, knowledge, indexes, observed)
+}
+
+// readCardsByIndexes 按给定页码读取章节卡片；observed 记录首次看到的修改时间。
+func (p *Platform) readCardsByIndexes(ctx context.Context, session Session, course learning.PlatformCourseRef,
+	knowledge string, indexes []int, observed *atomic.Int64) ([]learning.PlatformAttachment, int, int64, error) {
+	modifiedAt := int64(0)
 	var result []learning.PlatformAttachment
 	skipped := 0
 	seen := map[string]learning.PlatformAttachment{}
 	for _, cardIndex := range indexes {
-		attachments, count, err := p.readCardsAtIndex(ctx, session, course, knowledge, cardIndex)
+		attachments, count, modified, err := p.readCardsAtIndexMeta(ctx, session, course, knowledge, cardIndex)
+		if modified > 0 {
+			if modifiedAt == 0 {
+				modifiedAt = modified
+			}
+			if observed != nil && observed.Load() == 0 {
+				observed.CompareAndSwap(0, modified)
+			}
+		}
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 		skipped += count
 		for _, attachment := range attachments {
@@ -241,7 +265,7 @@ func (p *Platform) readCards(ctx context.Context, session Session, course learni
 			}
 			if previous, exists := seen[key]; exists {
 				if previous.ObjectID != attachment.ObjectID || previous.Kind != attachment.Kind || previous.PassedKnown != attachment.PassedKnown || previous.Passed != attachment.Passed {
-					return nil, 0, learning.Fail(learning.FailureCapabilityMissing, "章节卡片含相互冲突的任务点标识")
+					return nil, 0, 0, learning.Fail(learning.FailureCapabilityMissing, "章节卡片含相互冲突的任务点标识")
 				}
 				continue
 			}
@@ -250,7 +274,7 @@ func (p *Platform) readCards(ctx context.Context, session Session, course learni
 			result = append(result, attachment)
 		}
 	}
-	return result, skipped, nil
+	return result, skipped, modifiedAt, nil
 }
 
 func parseAttachments(payload []byte) ([]learning.PlatformAttachment, int, error) {
@@ -394,7 +418,29 @@ func parseCards(payload []byte) (map[string]any, error) {
 	return nil, errors.New("任务卡片无法识别")
 }
 
+// errStructureChanged 表示结构指纹与平台现状不一致，需要退回完整发现。
+var errStructureChanged = errors.New("课程结构指纹已变化")
+
 func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, course learning.PlatformCourseRef) (learning.PlatformCourseSnapshot, error) {
+	return p.discoverCourse(ctx, sessionBytes, course, nil, false)
+}
+
+// DiscoverCourseWithHint 用上一版结构指纹跳过逐章页码枚举；指纹不符时自动完整发现。
+func (p *Platform) DiscoverCourseWithHint(ctx context.Context, sessionBytes []byte,
+	course learning.PlatformCourseRef, hint learning.CourseStructureHint) (learning.PlatformCourseSnapshot, error) {
+	if hint.ModifiedAt <= 0 || len(hint.Indexes) == 0 {
+		return p.DiscoverCourse(ctx, sessionBytes, course)
+	}
+	snapshot, err := p.discoverCourse(ctx, sessionBytes, course, &hint, false)
+	if errors.Is(err, errStructureChanged) {
+		// 指纹变化时必须绕过页码缓存重新枚举，否则仍会读到旧目录。
+		return p.discoverCourse(ctx, sessionBytes, course, nil, true)
+	}
+	return snapshot, err
+}
+
+func (p *Platform) discoverCourse(ctx context.Context, sessionBytes []byte, course learning.PlatformCourseRef,
+	hint *learning.CourseStructureHint, refreshIndexes bool) (learning.PlatformCourseSnapshot, error) {
 	if !p.options.ReadOnlyEnabled {
 		return learning.PlatformCourseSnapshot{}, learning.Fail(learning.FailureCapabilityMissing, "学习通只读适配未启用")
 	}
@@ -411,8 +457,27 @@ func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, cour
 	if err != nil {
 		return learning.PlatformCourseSnapshot{}, err
 	}
+	if hint != nil {
+		// 缺键代表出现了新章节，指纹不可信；空列表代表已知但无任务点的章节。
+		indexes := make(map[string][]int, len(catalog.Chapters))
+		for _, chapter := range catalog.Chapters {
+			if chapter.IsGroup {
+				continue
+			}
+			known, exists := hint.Indexes[chapter.ExternalID]
+			if !exists {
+				return learning.PlatformCourseSnapshot{}, errStructureChanged
+			}
+			if len(known) == 0 {
+				known = []int{0}
+			}
+			indexes[chapter.ExternalID] = known
+		}
+		hint = &learning.CourseStructureHint{ModifiedAt: hint.ModifiedAt, Indexes: indexes}
+	}
 	snapshot := learning.PlatformCourseSnapshot{Course: course, Adapter: adapterVersion,
 		Chapters: catalog.Chapters}
+	var observed atomic.Int64
 	skippedCounts := make([]int, len(catalog.Chapters))
 	group, readCtx := errgroup.WithContext(ctx)
 	jobs := make(chan int)
@@ -439,7 +504,18 @@ func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, cour
 					return readCtx.Err()
 				}
 				knowledge := catalog.Chapters[index].ExternalID
-				attachments, skipped, err := p.readCards(readCtx, session, course, knowledge)
+				var attachments []learning.PlatformAttachment
+				var skipped int
+				if hint != nil {
+					var modified int64
+					attachments, skipped, modified, err = p.readCardsByIndexes(readCtx, session, course,
+						knowledge, hint.Indexes[knowledge], &observed)
+					if err == nil && modified > 0 && modified != hint.ModifiedAt {
+						err = errStructureChanged
+					}
+				} else {
+					attachments, skipped, _, err = p.readCardsMeta(readCtx, session, course, knowledge, &observed, refreshIndexes)
+				}
 				<-p.discoverSlots
 				if err != nil {
 					return err
@@ -471,6 +547,7 @@ func (p *Platform) DiscoverCourse(ctx context.Context, sessionBytes []byte, cour
 	for _, skipped := range skippedCounts {
 		snapshot.SkippedAttachments += skipped
 	}
+	snapshot.PlatformModifiedAt = observed.Load()
 	return snapshot, nil
 }
 

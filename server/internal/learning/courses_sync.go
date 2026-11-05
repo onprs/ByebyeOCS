@@ -194,10 +194,11 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 		}
 		_, err = tx.Exec(ctx, `INSERT INTO public.learning_course_snapshots
 			(id, course_id, user_id, version, captured_at, adapter, chapter_count, attachment_count,
-			 task_point_count, incomplete_task_point_count, skipped_attachment_count)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			 task_point_count, incomplete_task_point_count, skipped_attachment_count, platform_modified_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 			newID(), courseID, account.UserID, version, now, truncate(snapshot.Adapter, 64),
-			counts.Chapters, counts.Attachments, counts.TaskPoints, counts.Incomplete, snapshot.SkippedAttachments)
+			counts.Chapters, counts.Attachments, counts.TaskPoints, counts.Incomplete,
+			snapshot.SkippedAttachments, snapshot.PlatformModifiedAt)
 		if err != nil {
 			return errServiceUnavailable
 		}

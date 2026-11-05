@@ -141,3 +141,25 @@ func (p *Platform) cachedCardIndexes(ctx context.Context, key string, load func(
 		return indexes, err
 	}
 }
+
+// reloadCardIndexes 跳过内存与持久缓存直接回源，并覆盖两处缓存。
+// 结构指纹变化时必须走这条路径，否则会继续使用旧的页码目录。
+func (p *Platform) reloadCardIndexes(ctx context.Context, key string, load func() ([]int, error)) ([]int, error) {
+	indexes, err := load()
+	expires := time.Now().Add(resourceCacheTTL)
+	cache := &p.resourceCache
+	cache.mu.Lock()
+	store := cache.store
+	if err == nil && validCardIndexes(indexes) {
+		if cache.entries == nil {
+			cache.entries = map[string]cardLayout{}
+		}
+		cache.entries[key] = cardLayout{indexes: append([]int(nil), indexes...), expires: expires, usedAt: time.Now()}
+		cache.misses++
+	}
+	cache.mu.Unlock()
+	if store != nil && err == nil && validCardIndexes(indexes) {
+		store.StoreCardIndexes(ctx, key, indexes, expires)
+	}
+	return indexes, err
+}

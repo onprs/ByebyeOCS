@@ -165,6 +165,21 @@ type PlatformCourseSnapshot struct {
 	Chapters []PlatformChapter
 	// SkippedAttachments 记录缺少稳定标识而未建目录条目的附件数量。
 	SkippedAttachments int
+	// PlatformModifiedAt 是平台下发的课程级修改时间，作为结构指纹；0 表示未知。
+	PlatformModifiedAt int64
+}
+
+// CourseStructureHint 是上一版快照的结构指纹：平台课程级修改时间与各章节卡片页码。
+// 指纹一致时可以跳过逐章页码枚举，只读取已知页码的卡片内容。
+type CourseStructureHint struct {
+	ModifiedAt int64
+	Indexes    map[string][]int
+}
+
+// HintedPlatform 支持用结构指纹跳过页码枚举；不支持时按完整发现处理。
+type HintedPlatform interface {
+	DiscoverCourseWithHint(ctx context.Context, session []byte, course PlatformCourseRef,
+		hint CourseStructureHint) (PlatformCourseSnapshot, error)
 }
 
 // PlatformTaskRef 是只读核验所需的稳定任务引用。
