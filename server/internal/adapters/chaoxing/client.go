@@ -125,6 +125,9 @@ func normalizeOptions(options *httpOptions) error {
 	return nil
 }
 
+// maxDiscoverConcurrency 是章节并发与全局发现槽位的共同上限。
+const maxDiscoverConcurrency = 64
+
 type rateLimiter struct {
 	once sync.Once
 	gate chan struct{}
@@ -308,7 +311,7 @@ func NewPlatform(options Options) (*Platform, error) {
 	if options.DiscoverConcurrency <= 0 {
 		options.DiscoverConcurrency = 4
 	}
-	if options.DiscoverConcurrency > 64 {
+	if options.DiscoverConcurrency > maxDiscoverConcurrency {
 		return nil, errors.New("并发章节上限过大")
 	}
 	endpoints := options.Endpoints
@@ -340,9 +343,11 @@ func NewPlatform(options Options) (*Platform, error) {
 		}
 	}
 	factory := clientFactory{options: options.httpOptions, limiter: &rateLimiter{}}
+	// 槽位按最大允许并发创建；实际并发由每次发现的 worker 数量和运行时限流决定。
+	// 之前固定 16 会让更高的章节并发设置完全失效。
 	return &Platform{options: platformOptions{Options: options, endpoints: endpoints},
-		factory: factory, discoverSlots: make(chan struct{}, 16), coverSlots: make(chan struct{}, 2),
-		coverClient: factory.client(nil)}, nil
+		factory: factory, discoverSlots: make(chan struct{}, maxDiscoverConcurrency),
+		coverSlots: make(chan struct{}, 2), coverClient: factory.client(nil)}, nil
 }
 
 func (p *Platform) chapterConcurrency() int {
