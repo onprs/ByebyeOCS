@@ -90,22 +90,23 @@ type ForkAnswerResponse struct {
 
 // ForkOffering 是题库服务发布的公开模型条目；价格与缓存策略由题库维护。
 type ForkOffering struct {
-	ID           string           `json:"id"`
-	PublicID     string           `json:"public_id"`
-	DisplayName  string           `json:"display_name"`
-	Description  string           `json:"description"`
-	ProviderRef  string           `json:"provider_ref"`
-	Capabilities []string         `json:"capabilities"`
-	Pricing      *OfferingPricing `json:"pricing"`
-	PriceVersion string           `json:"price_version"`
-	CachePolicy  CachePolicy      `json:"cache_policy"`
-	Enabled      bool             `json:"enabled"`
-	Default      bool             `json:"is_default"`
-	SortOrder    int              `json:"sort_order"`
-	Health       string           `json:"health"`
-	Version      int64            `json:"version"`
-	CreatedAt    time.Time        `json:"created_at"`
-	UpdatedAt    time.Time        `json:"updated_at"`
+	ID              string           `json:"id"`
+	PublicID        string           `json:"public_id"`
+	DisplayName     string           `json:"display_name"`
+	Description     string           `json:"description"`
+	ProviderRef     string           `json:"provider_ref"`
+	Capabilities    []string         `json:"capabilities"`
+	MaxOutputTokens int              `json:"max_output_tokens"`
+	Pricing         *OfferingPricing `json:"pricing"`
+	PriceVersion    string           `json:"price_version"`
+	CachePolicy     CachePolicy      `json:"cache_policy"`
+	Enabled         bool             `json:"enabled"`
+	Default         bool             `json:"is_default"`
+	SortOrder       int              `json:"sort_order"`
+	Health          string           `json:"health"`
+	Version         int64            `json:"version"`
+	CreatedAt       time.Time        `json:"created_at"`
+	UpdatedAt       time.Time        `json:"updated_at"`
 }
 
 type ForkTestResult struct {

@@ -66,12 +66,21 @@ func TestTaskAndPlanPagesUseBoundedDatabaseRoundTrips(t *testing.T) {
 	if len(plans.Items) != 10 || plans.NextCursor == "" {
 		t.Fatal("安排分页缺失")
 	}
-	if planQueries != 1 {
-		t.Fatalf("安排页仍逐条开启事务: %d", planQueries)
+	// 安排概要与整页任务进度各查询一次，不能随安排数量增加数据库往返。
+	if planQueries != 2 {
+		t.Fatalf("安排概要与批量进度未保持固定查询数量: %d", planQueries)
+	}
+	for _, plan := range plans.Items {
+		if plan.Progress.Total != 100 || plan.Progress.Active != 100 || plan.Progress.Attention != 0 {
+			t.Fatalf("批量进度丢失: %+v", plan.Progress)
+		}
 	}
 	next, err := service.ListPlans(ctx, Actor{ID: user, Kind: "user"}, PlanFilter{Limit: 10, Cursor: plans.NextCursor})
 	if err != nil || len(next.Items) != 10 || next.Items[0].ID == plans.Items[0].ID {
 		t.Fatalf("安排下一页错误: %v", err)
+	}
+	if queries := counter.count.Load(); queries != planQueries {
+		t.Fatalf("第二页没有保持相同的查询上限: %d/%d", queries, planQueries)
 	}
 	t.Logf("100任务/20关联安排：任务页%d次SQL，10条安排页%d次SQL", taskQueries, planQueries)
 }

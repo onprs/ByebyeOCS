@@ -101,6 +101,20 @@ func judgementValue(raw string) (string, bool) {
 	}
 }
 
+var labelledWorkAnswer = regexp.MustCompile(`(?is)^\s*([A-Z])(?:\s*[.．、:：)）]\s*|\s+)(.+?)\s*$`)
+
+func matchBareWorkLabel(options []WorkOption, label string) (string, bool) {
+	value := ""
+	count := 0
+	for _, option := range options {
+		if strings.EqualFold(strings.TrimSpace(option.Label), label) {
+			value = option.Value
+			count++
+		}
+	}
+	return value, count == 1
+}
+
 func matchWorkOption(options []WorkOption, raw string) (string, bool) {
 	label := strings.ToUpper(strings.TrimSpace(raw))
 	matched := []string{}
@@ -115,6 +129,26 @@ func matchWorkOption(options []WorkOption, raw string) (string, bool) {
 	for _, option := range options {
 		if answerText(option.Text) == answerText(raw) && option.Text != "" {
 			matched = append(matched, option.Value)
+		}
+	}
+	if len(matched) == 0 {
+		if prefix := labelledWorkAnswer.FindStringSubmatch(raw); len(prefix) == 3 {
+			labelValue, labelKnown := matchBareWorkLabel(options, prefix[1])
+			for _, option := range options {
+				text := option.Text
+				if part := labelledWorkAnswer.FindStringSubmatch(text); len(part) == 3 && (strings.EqualFold(part[1], option.Label) || strings.EqualFold(part[1], option.Value)) {
+					text = part[2]
+				}
+				equal := answerText(text) == answerText(prefix[2])
+				if wanted, ok := judgementValue(prefix[2]); ok {
+					if actual, known := judgementValue(text); known {
+						equal = actual == wanted
+					}
+				}
+				if equal && labelKnown && labelValue == option.Value {
+					matched = append(matched, option.Value)
+				}
+			}
 		}
 	}
 	if len(matched) != 1 {

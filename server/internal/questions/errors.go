@@ -129,6 +129,9 @@ func storedQueryError(code string) *QueryError {
 		return newQueryError(code, "余额不足，未发起模型调用", http.StatusConflict, false)
 	case "request_unknown":
 		return newQueryError(code, "题库上游结果未知，已保留待复核事实", http.StatusConflict, false)
+	case "abandoned", "released_unknown_usage":
+		// 历史中断或人工释放不能证明上游未调用，重放不能变成暂时故障重试。
+		return newQueryError("request_unknown", "题库前次请求已中断，结果与用量待核对", http.StatusConflict, false)
 	default:
 		return newQueryError("service_unavailable", "题库查询失败", http.StatusServiceUnavailable, true)
 	}

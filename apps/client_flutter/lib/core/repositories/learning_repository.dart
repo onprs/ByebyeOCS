@@ -132,11 +132,21 @@ class LearningRepository {
     return PlanControlResult.parse(response.data);
   }
 
+  Future<PlanControlResult> deletePlan({required String id}) async {
+    final response = await _api.delete(
+      'plans/$id',
+      idempotencyKey: newIdempotencyKey(),
+    );
+    return PlanControlResult.parse(response.data);
+  }
+
   Future<Page<LearningTask>> fetchTasks({
     String? cursor,
     String? planId,
     String? courseId,
     List<String> states = const <String>[],
+    bool actionable = false,
+    String? category,
     int limit = 50,
   }) async {
     final response = await _api.get('tasks', query: {
@@ -145,6 +155,8 @@ class LearningRepository {
       if (planId != null && planId.isNotEmpty) 'plan_id': planId,
       if (courseId != null && courseId.isNotEmpty) 'course_id': courseId,
       if (states.isNotEmpty) 'state': states.join(','),
+      if (actionable) 'actionable': 'true',
+      if (category != null) 'category': category,
     });
     return parsePage<LearningTask>(response.data, LearningTask.parse);
   }

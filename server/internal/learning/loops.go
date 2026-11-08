@@ -391,7 +391,8 @@ func (s *Service) runVerification(ctx context.Context, verifier Verifier, taskID
 		Verification: record.VerificationAttempts,
 	})
 	if err != nil {
-		_ = s.applyVerification(ctx, taskID, PlatformCheck{Status: CheckUnknown}, err)
+		check.Status = CheckUnknown
+		_ = s.applyVerification(ctx, taskID, check, err)
 		return
 	}
 	_ = s.applyVerification(ctx, taskID, check, nil)
@@ -411,6 +412,12 @@ func (s *Service) applyVerification(ctx context.Context, taskID string, check Pl
 	}
 	if check.Status == "" {
 		check.Status = CheckUnknown
+	}
+	if verifyErr != nil {
+		if failure := failureOf(verifyErr); failure.Class == FailurePlatformClosed {
+			check.Status = CheckUnknown
+			check.Note = failure.Detail
+		}
 	}
 	return s.withTx(ctx, func(tx pgx.Tx) error {
 		record, err := s.loadTask(ctx, tx, taskID, "", true)
@@ -572,6 +579,24 @@ func (s *Service) applyVerification(ctx context.Context, taskID string, check Pl
 			failure := failureOf(verifyErr)
 			errorCode = string(failure.Class)
 			switch failure.Class {
+			case FailurePlatformClosed:
+				// 关闭事实独立于提交结果；保留报价、预占和提交记录，停止重复核验。
+				code, err := closedTaskErrorCode(ctx, tx, taskID)
+				if err != nil {
+					return err
+				}
+				if _, err := tx.Exec(ctx, `UPDATE public.learning_tasks SET
+					state='needs_attention', platform_check=$2, platform_status='unknown',
+					platform_checked_at=$3, last_error_code=$4, last_error_scope='task',
+					next_attempt_at=NULL, next_verify_at=NULL, version=version+1, updated_at=$3
+					WHERE id=$1`, taskID, checkJSON, now, code); err != nil {
+					return errServiceUnavailable
+				}
+				if err := recordClosedTaskPoint(ctx, tx, taskID, now); err != nil {
+					return err
+				}
+				return writeOutbox(ctx, tx, outboxEvent{Topic: "task.state_changed", ResourceType: "task", ResourceID: taskID, UserID: record.UserID,
+					Payload: map[string]any{"state": StateNeedsAttention, "error_code": code}})
 			case FailureIdentityInvalid, FailureVerificationNeeded, FailureForbidden:
 				if err := s.blockAccount(ctx, tx, record.UserID, string(failure.Class),
 					"核验期间平台拒绝访问或要求重新验证", nil); err != nil {
@@ -646,7 +671,7 @@ func (s *Service) applyVerification(ctx context.Context, taskID string, check Pl
 			return err
 		}
 		// 查询结果不明：限次退避，长期不明转人工，不重放执行。
-		next := now.Add(s.retryDelay(verificationAttempts, nil))
+		next := now.Add(s.retryDelay(verificationAttempts, nil, taskID))
 		if verificationAttempts >= s.opts.MaxVerifications {
 			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
 				state = 'needs_attention', platform_check = $2, platform_status = 'unknown',

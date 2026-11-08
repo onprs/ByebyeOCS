@@ -1,0 +1,20 @@
+ByebyeOCS 第三方数据声明
+
+本项目的 MIT 许可证不替代以下第三方数据的许可证。
+
+Source Han Sans 1.000
+Copyright © 2014 Adobe Systems Incorporated. All Rights Reserved.
+来源：https://github.com/adobe-fonts/source-han-sans
+固定版本：f25136e6c310c99be8354d447b7e17404075415f
+原文件：Normal/OTC/SourceHanSansSC-Normal.otf
+许可证：Apache License 2.0，完整文本见 licenses/SourceHanSans-1.000-Apache-2.0.txt。
+修改声明：本项目将原版字体与自动生成的 Unicode 轮廓目录封装为
+server/internal/adapters/chaoxing/secretfont_reference.bin.gz；字体轮廓保持原样，
+目录归并标准部首等价字及原字体明确共享的注记别名。
+
+Unicode 17.0.0
+Copyright © 1991-2025 Unicode, Inc. All rights reserved.
+来源：https://www.unicode.org/Public/17.0.0/ucd/EquivalentUnifiedIdeograph.txt
+许可证：Unicode License V3，完整文本见 licenses/Unicode-3.0.txt。
+修改声明：本项目将 Equivalent_Unified_Ideograph 属性转换为 Go 映射，
+用于将标准部首和笔画别名归并到对应的统一汉字。

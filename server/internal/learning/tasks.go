@@ -68,6 +68,8 @@ type TaskSummary struct {
 	FailureCount         int              `json:"failure_count"`
 	VerificationAttempts int              `json:"verification_attempts"`
 	LastErrorCode        string           `json:"last_error_code,omitempty"`
+	Availability         string           `json:"availability"`
+	Category             string           `json:"category"`
 	ConfirmationReason   string           `json:"confirmation_reason,omitempty"`
 	PreCompletedNoCharge bool             `json:"pre_completed_no_charge"`
 	NextAttemptAt        *time.Time       `json:"next_attempt_at,omitempty"`
@@ -122,9 +124,14 @@ type TaskFilter struct {
 	UserID   string // 仅管理员接口使用
 	Limit    int
 	Cursor   string
+	// Actionable 只返回当前有效安排仍关联的可处理异常。
+	Actionable bool
+	Category   string
 }
 
 type taskRecord struct {
+	RecoveryCycles        int
+	AnswerRetryGeneration int
 	TaskSummary
 	UserID             string
 	CourseExternal     string
@@ -152,7 +159,8 @@ const taskSelect = `SELECT t.id::text, t.user_id::text, t.state, t.desired_state
 	t.observation, t.platform_check, t.media_evidence, t.lease_attempt_id::text, t.billing_state,
 	t.billing_quote, t.billing_hold_id, t.billing_error, t.course_external_id, t.chapter_external_id,
 	t.cycle_key, c.external_cpi, a.external_object_id, a.card_index, t.fence_token, t.class_external_id,
-	t.verification_reason, t.pre_completed_no_charge, t.confirmation_reason
+	t.verification_reason, t.pre_completed_no_charge, t.confirmation_reason,
+	CASE WHEN ch.snapshot_version=c.snapshot_version THEN ch.availability ELSE 'unknown' END, ` + taskCategorySQL + `, t.recovery_cycles, t.answer_retry_generation
 	FROM public.learning_tasks t
 	JOIN public.learning_courses c ON c.id = t.course_id AND c.user_id = t.user_id
 	JOIN public.learning_chapters ch ON ch.id = t.chapter_id AND ch.user_id = t.user_id
@@ -169,7 +177,7 @@ func scanTask(row pgx.Row) (taskRecord, error) {
 		&item.PlatformRaw, &item.MediaRaw, &lease, &item.Billing.State, &item.BillingQuote,
 		&item.BillingHoldID, &item.Billing.ErrorCode, &item.CourseExternal, &item.ChapterExternal,
 		&item.CycleKey, &item.CPI, &item.ObjectID, &item.CardIndex, &item.FenceToken, &item.ClassExternal,
-		&item.VerificationReason, &item.PreCompletedNoCharge, &item.ConfirmationReason)
+		&item.VerificationReason, &item.PreCompletedNoCharge, &item.ConfirmationReason, &item.Availability, &item.Category, &item.RecoveryCycles, &item.AnswerRetryGeneration)
 	if err != nil {
 		return item, err
 	}
@@ -292,7 +300,14 @@ func (s *Service) AdminListTasks(ctx context.Context, actor Actor, filter TaskFi
 
 func (s *Service) listTasks(ctx context.Context, actor Actor, filter TaskFilter, admin bool) (Page[TaskSummary], error) {
 	limit := clampLimit(filter.Limit)
-	position, err := decodeCursor(filter.Cursor)
+	if filter.Category != "" && filter.Category != "current" && filter.Category != "attention" && filter.Category != "closed" && filter.Category != "history" {
+		return Page[TaskSummary]{}, validation("任务分类无效")
+	}
+	positionValue, scope, err := splitTaskCursor(filter.Cursor, filter.Category)
+	if err != nil {
+		return Page[TaskSummary]{}, err
+	}
+	position, err := decodeCursor(positionValue)
 	if err != nil {
 		return Page[TaskSummary]{}, err
 	}
@@ -312,14 +327,47 @@ func (s *Service) listTasks(ctx context.Context, actor Actor, filter TaskFilter,
 	if admin {
 		owner = filter.UserID
 	}
-	query := taskSelect + ` WHERE ($1 = '' OR t.user_id = $1::uuid)
+	conditions := ` WHERE ($1 = '' OR t.user_id = $1::uuid)
 		AND (cardinality($2::text[]) = 0 OR t.state = ANY($2::text[]))
 		AND ($3 = '' OR t.course_id = $3::uuid)
 		AND ($4 = '' OR EXISTS (SELECT 1 FROM public.learning_plan_task_bindings b
-			WHERE b.task_id = t.id AND b.plan_id = $4::uuid))
-		AND ($5::timestamptz IS NULL OR (t.created_at, t.id) < ($5::timestamptz, $6::uuid))
-		ORDER BY t.created_at DESC, t.id DESC LIMIT $7`
-	rows, err := s.pool.Query(ctx, query, owner, states, filter.CourseID, filter.PlanID,
+			WHERE b.task_id = t.id AND b.plan_id = $4::uuid)
+			AND ($6='' OR ` + currentTaskBindingSQL + `))
+		AND (NOT $5::boolean OR (` + actionableTaskSQL + `))`
+	var q interface {
+		rowQuerier
+		Query(context.Context, string, ...any) (pgx.Rows, error)
+	} = s.pool
+	var snapshot pgx.Tx
+	page := Page[TaskSummary]{}
+	if filter.Actionable || filter.Category != "" {
+		snapshot, err = s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		if err != nil {
+			return page, errServiceUnavailable
+		}
+		defer rollbackLearningTx(snapshot)
+		q = snapshot
+	}
+	if filter.Category != "" {
+		if err := populateTaskPageMetadata(ctx, q, owner, filter, conditions, &page); err != nil {
+			return page, err
+		}
+		if scope != "" && scope != taskCursorScope(owner, filter, page.TaskMeta.PlanRevisionID) {
+			return page, apiErr(409, "task_list_changed", "任务范围已更新，请刷新列表")
+		}
+	} else if filter.Actionable {
+		var count int
+		if err := q.QueryRow(ctx, `SELECT count(*) FROM public.learning_tasks t`+conditions,
+			owner, states, filter.CourseID, filter.PlanID, filter.Actionable, filter.Category).Scan(&count); err != nil {
+			return page, errServiceUnavailable
+		}
+		page.TotalCount = &count
+	}
+	query := taskSelect + conditions + `
+		AND ($6='' OR ` + taskCategorySQL + `=$6)
+		AND ($7::timestamptz IS NULL OR (t.created_at, t.id) < ($7::timestamptz, $8::uuid))
+		ORDER BY t.created_at DESC, t.id DESC LIMIT $9`
+	rows, err := q.Query(ctx, query, owner, states, filter.CourseID, filter.PlanID, filter.Actionable, filter.Category,
 		nullableTime(position.Time), nullableID(position.ID), limit+1)
 	if err != nil {
 		return Page[TaskSummary]{}, errServiceUnavailable
@@ -336,17 +384,20 @@ func (s *Service) listTasks(ctx context.Context, actor Actor, filter TaskFilter,
 	if err := rows.Err(); err != nil {
 		return Page[TaskSummary]{}, errServiceUnavailable
 	}
-	page := Page[TaskSummary]{}
+	rows.Close()
 	if len(records) > limit {
 		records = records[:limit]
 		last := records[limit-1]
 		page.NextCursor = encodeCursor(last.CreatedAt, last.ID)
+		if page.TaskMeta != nil {
+			page.NextCursor += "." + taskCursorScope(owner, filter, page.TaskMeta.PlanRevisionID)
+		}
 	}
 	ids := make([]string, len(records))
 	for i := range records {
 		ids[i] = records[i].ID
 	}
-	refs, err := s.taskPlanRefsBatch(ctx, ids)
+	refs, err := s.taskPlanRefsBatch(ctx, q, ids)
 	if err != nil {
 		return Page[TaskSummary]{}, err
 	}
@@ -354,6 +405,11 @@ func (s *Service) listTasks(ctx context.Context, actor Actor, filter TaskFilter,
 	for _, record := range records {
 		record.PlanRefs = refs[record.ID]
 		page.Items = append(page.Items, record.TaskSummary)
+	}
+	if snapshot != nil {
+		if err := snapshot.Commit(ctx); err != nil {
+			return Page[TaskSummary]{}, errServiceUnavailable
+		}
 	}
 	return page, nil
 }
@@ -363,6 +419,14 @@ func (s *Service) GetTask(ctx context.Context, actor Actor, taskID string) (Task
 		return TaskDetail{}, errNotFound
 	}
 	return s.getTask(ctx, actor.ID, taskID)
+}
+
+// AdminGetTask 由管理路由校验 learning.read 后读取任务，管理员标识不能作为用户归属过滤。
+func (s *Service) AdminGetTask(ctx context.Context, actor Actor, taskID string) (TaskDetail, error) {
+	if !web.ValidID(taskID) {
+		return TaskDetail{}, errNotFound
+	}
+	return s.getTask(ctx, "", taskID)
 }
 
 func (s *Service) getTask(ctx context.Context, userID, taskID string) (TaskDetail, error) {
@@ -656,6 +720,25 @@ func (s *Service) ControlTask(ctx context.Context, actor Actor, taskID, idempote
 				return errNotFound
 			}
 			state = StateWaitingVerification
+			record.Version++
+		}
+		if action == "redispatch" && !hasSubmission {
+			if _, err := tx.Exec(ctx, `UPDATE public.learning_tasks SET recovery_cycles=0,answer_retry_generation=
+			 CASE WHEN $2=ANY(ARRAY['answer_unavailable','answer_mapping_failed','answer_result_unknown','answer_output_limit','answer_empty']) THEN LEAST(answer_retry_generation+1,3) ELSE answer_retry_generation END WHERE id=$1`, taskID, record.LastErrorCode); err != nil {
+				return errServiceUnavailable
+			}
+		}
+		if !hasSubmission && state == StatePending && record.Availability == "closed" {
+			// 章节可用性来自目录，重新检查先同步目录，不能直接派发隐藏内容。
+			if err := requestChapterAvailabilityCheck(ctx, tx, record.UserID, actor, now); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `UPDATE public.learning_tasks SET state='needs_attention',
+				last_error_code='chapter_closed',last_error_scope='task',next_attempt_at=NULL,
+				version=version+1 WHERE id=$1`, taskID); err != nil {
+				return errServiceUnavailable
+			}
+			state = StateNeedsAttention
 			record.Version++
 		}
 		if active && action != "resume" {
@@ -1034,6 +1117,17 @@ func (s *Service) processAccountCommandItem(ctx context.Context, actor Actor, co
 			if _, err := tx.Exec(ctx, `UPDATE public.learning_accounts
 				SET blocked_code = '', blocked_reason = '', blocked_at = NULL, blocked_until = NULL,
 				    version = version + 1, updated_at = $2 WHERE user_id = $1`, userID, now); err != nil {
+				return errServiceUnavailable
+			}
+			// 账号恢复后，因身份或权限停止的任务重新排队；执行前会重新核验会话，
+			// 仍然无效时会再次停下，不会静默跳过。
+			if _, err := tx.Exec(ctx, `UPDATE public.learning_tasks
+				SET state = 'pending', desired_state = 'run', last_error_code = '', last_error_scope = '',
+				    failure_count = 0, verification_attempts = 0, next_attempt_at = $2,
+				    version = version + 1, updated_at = $2
+				WHERE user_id = $1 AND state = 'needs_attention'
+				  AND last_error_code IN ('identity_invalid', 'forbidden')
+				  AND desired_state = 'run'`, userID, now); err != nil {
 				return errServiceUnavailable
 			}
 		}

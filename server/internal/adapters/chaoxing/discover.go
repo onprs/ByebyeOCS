@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -61,7 +62,7 @@ func (p *Platform) do(ctx context.Context, session Session, method, rawURL strin
 	}
 	defer cleanup()
 	if err := p.factory.limiter.wait(ctx, p.requestInterval(), p.requestIntervalFloor()); err != nil {
-		return nil, learning.Fail(learning.FailureTransient, "上游请求等待被取消")
+		return nil, requestFailure(err, "平台请求等待中断")
 	}
 	var body io.Reader
 	if method == http.MethodPost {
@@ -87,7 +88,7 @@ func (p *Platform) do(ctx context.Context, session Session, method, rawURL strin
 	}
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, learning.Fail(learning.FailureTransient, "上游请求未完成")
+		return nil, requestFailure(err, "平台连接暂时中断，等待自动恢复")
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusUnauthorized {
@@ -98,16 +99,16 @@ func (p *Platform) do(ctx context.Context, session Session, method, rawURL strin
 	}
 	if response.StatusCode == http.StatusTooManyRequests {
 		p.factory.limiter.onThrottle(p.requestInterval(), p.requestIntervalFloor())
-		return nil, learning.Fail(learning.FailureRateLimited, "平台限流，已停止相关操作")
+		return nil, &learning.Failure{Class: learning.FailureRateLimited, RetryAfter: platformRetryAfter(response.Header.Get("Retry-After"), time.Now()), Detail: "平台限流，等待冷却后恢复"}
 	}
 	if response.StatusCode != http.StatusOK {
-		return nil, learning.Fail(learning.FailureTransient, "上游响应未成功")
+		return nil, &learning.Failure{Class: learning.FailureTransient, Code: "upstream_unavailable", Detail: "平台暂时不可用，等待自动恢复"}
 	}
 	p.factory.limiter.onSuccess(p.requestInterval(), p.requestIntervalFloor())
 	limited := io.LimitReader(response.Body, p.options.MaxResponseBytes+1)
 	payload, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, learning.Fail(learning.FailureTransient, "上游响应读取失败")
+		return nil, requestFailure(err, "平台响应读取中断，等待自动恢复")
 	}
 	if int64(len(payload)) > p.options.MaxResponseBytes {
 		return nil, learning.Fail(learning.FailureCapabilityMissing, "上游响应超出允许体积")
@@ -197,6 +198,11 @@ func (p *Platform) ListCourses(ctx context.Context, sessionBytes []byte) ([]lear
 				course.Teacher = item.Teacher
 			}
 			course.CoverURL, course.CoverKnown = item.CoverURL, true
+			if item.Closed {
+				course.PlatformState = "closed"
+			} else {
+				course.PlatformState = "active"
+			}
 		}
 	}
 	return courses, nil
@@ -461,7 +467,7 @@ func (p *Platform) discoverCourse(ctx context.Context, sessionBytes []byte, cour
 		// 缺键代表出现了新章节，指纹不可信；空列表代表已知但无任务点的章节。
 		indexes := make(map[string][]int, len(catalog.Chapters))
 		for _, chapter := range catalog.Chapters {
-			if chapter.IsGroup {
+			if chapter.IsGroup || chapter.Closed {
 				continue
 			}
 			known, exists := hint.Indexes[chapter.ExternalID]
@@ -484,7 +490,7 @@ func (p *Platform) discoverCourse(ctx context.Context, sessionBytes []byte, cour
 	group.Go(func() error {
 		defer close(jobs)
 		for index, chapter := range catalog.Chapters {
-			if chapter.IsGroup {
+			if chapter.IsGroup || chapter.Closed {
 				continue
 			}
 			select {

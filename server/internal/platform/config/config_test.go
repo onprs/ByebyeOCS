@@ -209,3 +209,25 @@ func TestQuestionsSharedCacheSetting(t *testing.T) {
 		t.Fatalf("启用共享缓存未通过配置校验：%v", err)
 	}
 }
+
+// 学习执行并发上限为 256；超过上限或单账号超过全局都必须拒绝。
+func TestLearningConcurrencyCeiling(t *testing.T) {
+	accept := func(global, account int) error {
+		cfg := Defaults()
+		cfg.Database.DSN = testDSN
+		cfg.Learning.GlobalConcurrency = global
+		cfg.Learning.AccountConcurrency = account
+		return cfg.Validate()
+	}
+	for _, value := range []int{1, 64, 128, 256} {
+		if err := accept(value, value); err != nil {
+			t.Fatalf("合法并发被拒绝 %d: %v", value, err)
+		}
+	}
+	if err := accept(257, 256); err == nil {
+		t.Fatal("超过 256 的全局名额未被拒绝")
+	}
+	if err := accept(256, 257); err == nil {
+		t.Fatal("单账号超过全局名额未被拒绝")
+	}
+}

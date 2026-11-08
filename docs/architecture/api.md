@@ -38,13 +38,14 @@
 | POST `/me/data-exports` | 请求导出 | 新鲜验证、异步、受限下载 |
 | POST `/me/deletion-requests` | 请求删除 | 资金和必要保留记录先复核 |
 | POST `/me/identity-appeals` | 身份变更申诉 | 不自动转移余额 |
-| GET `/courses` | 课程摘要 | 平台已确认和待完成分别统计 |
+| GET `/courses` | 课程摘要 | 平台已确认、待完成与已关闭分别统计；在目录快照上叠加最新独立平台核验，无需重新同步目录；`platform_state=closed` 表示整门课程已结束，不再派发任务 |
 | POST `/course-syncs` | 发起同步 | 202，后台任务、账号去重和限速 |
-| GET `/courses/{id}` | 章节、任务点与普通资源 | 校验用户归属 |
-| GET/POST `/plans` | 列表或建立安排 | 不可变版本、范围校验 |
+| GET `/courses/{id}` | 章节、任务点与普通资源 | 校验用户归属；概要、章节附件采用与列表相同的进度投影；附件 `availability` 表示可用性，关闭且未完成的任务不进入可执行分母，平台记录时长与执行观察分开 |
+| GET/POST `/plans` | 列表或建立安排 | 不可变版本、范围校验；`progress` 含 `closed`，关闭任务不进入完成率分母 |
 | GET/PATCH `/plans/{id}` | 查看和编辑 | If-Match，返回新版本及生效边界 |
 | POST `/plans/{id}/controls` | 启停后续安排 | 202，不伪称当前任务已停止 |
-| GET `/tasks` | 当前任务、异常、历史 | 按用户、安排和状态过滤 |
+| DELETE `/plans/{id}` | 删除安排 | 归档语义，需 Idempotency-Key；列表隐藏、停止派发、保留任务与账本 |
+| GET `/tasks` | 当前任务、异常、历史 | 按用户、安排、状态及 `category=current/attention/closed/history` 过滤；分类分页的 `task_meta`、`total_count` 与当前页共用可重复读快照，包含当前安排版本及完整进度；游标绑定归属、筛选与版本，变化后返回 409 `task_list_changed`；`actionable=true` 仅返回当前有效安排可处理异常，并提供独立于分页的 `total_count`；`availability` 表示当前章节可用性，`quiz_closed`、`course_closed`、`chapter_closed` 分别保留平台关闭原因；`observation` 只表示执行观察 |
 | GET `/tasks/{id}` | 任务证据与时间线 | 观察/平台/媒体字段独立 |
 | POST `/tasks/{id}/controls` | 暂停、继续、取消、重调度 | 状态条件、命令版本和幂等 |
 | GET `/question-models` | 题库面板已发布且用户可用的模型条目 | 不含上游模型名、服务密钥或内部健康细节 |
@@ -70,8 +71,8 @@
 | GET `/dashboard` | 聚合运行、财务和服务摘要 |
 | GET `/users`、GET `/users/{id}` | 脱敏用户/账号摘要 |
 | POST `/account-operations` | 显式账号集合的暂停、限制、配置；原因必填 |
-| GET `/tasks`、GET `/tasks/{id}` | 跨用户任务与归属，权限控制 |
-| POST `/task-operations` | 逐项控制和冲突结果，审计 |
+| GET `/tasks`、GET `/tasks/{id}` | 跨用户任务与归属，要求 `learning.read`；详情含尝试、控制命令与独立平台事实，普通用户接口仍校验本人归属 |
+| POST `/task-operations` | 逐项控制和冲突结果，审计；已持久化最终提交的任务重新调度只进入独立平台核验，核验关卷后回写稳定可用性并停止重试，不改写原提交、报价或预占 |
 | GET `/orders`、GET `/wallets/{id}/entries` | 订单与账本，限制财务可见范围 |
 | POST `/wallet-adjustments` | 金额、原因、关联单据、提升验证和专用权限 |
 | POST `/refunds` | 资金来源核对、渠道能力和审批 |

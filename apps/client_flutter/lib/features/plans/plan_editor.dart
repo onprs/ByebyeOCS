@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../app/providers.dart';
 import '../../core/api/api_error.dart';
 import '../../core/api/api_response.dart';
-import '../../core/models/course.dart';
 import '../../core/models/plan.dart';
 import '../../core/models/question.dart';
 import '../../design/components.dart';
@@ -46,20 +45,17 @@ class PlanEditorSheet extends ConsumerStatefulWidget {
 
 class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
   final _nameController = TextEditingController();
+  final _courseSearchController = TextEditingController();
   final _scrollController = ScrollController();
 
   Set<String> _courseIds = <String>{};
-  String _scopeKind = 'all';
-  Set<String> _chapterKeys = <String>{};
+  String _courseSearch = '';
   Set<String> _taskTypes = <String>{'video'};
   int _priority = 50;
   bool _questionEnabled = false;
   String? _questionModelId;
   AnswerMode _answerMode = AnswerMode.cacheFirst;
-
-  final Map<String, CourseDetail> _details = <String, CourseDetail>{};
-  final Set<String> _loadingDetails = <String>{};
-  String? _detailError;
+  bool _hadChapterScope = false;
 
   PlanSnapshot? _snapshot;
   bool _loadingSnapshot = false;
@@ -83,14 +79,12 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
         widget.initialCourseId!.isNotEmpty) {
       _courseIds = {widget.initialCourseId!};
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _ensureDetails(_courseIds);
-    });
   }
 
   @override
   void dispose() {
     _nameController.dispose();
+    _courseSearchController.dispose();
     _scrollController.dispose();
     super.dispose();
   }
@@ -98,10 +92,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
   void _applyPlan(LearningPlan plan) {
     _nameController.text = plan.name;
     _courseIds = plan.courseIds.toSet();
-    _scopeKind = plan.scope.isSelected ? 'selected' : 'all';
-    _chapterKeys = plan.scope.chapters
-        .map((chapter) => '${chapter.courseId}::${chapter.chapterId}')
-        .toSet();
+    _hadChapterScope = plan.scope.isSelected;
     _taskTypes =
         plan.taskTypes.isEmpty ? <String>{'video'} : plan.taskTypes.toSet();
     _priority = plan.priority >= 67
@@ -133,7 +124,6 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
           _dirty = false;
         }
       });
-      _ensureDetails(_courseIds);
     } on ApiException catch (error) {
       if (!mounted) return;
       setState(() {
@@ -149,49 +139,11 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
     }
   }
 
-  Future<void> _ensureDetails(Set<String> ids) async {
-    final repository = ref.read(learningRepositoryProvider);
-    for (final id in ids) {
-      if (_details.containsKey(id) || _loadingDetails.contains(id)) continue;
-      setState(() {
-        _loadingDetails.add(id);
-        _detailError = null;
-      });
-      try {
-        final detail = await repository.fetchCourse(id);
-        if (!mounted) return;
-        setState(() {
-          _details[id] = detail;
-          _loadingDetails.remove(id);
-        });
-      } on ApiException catch (error) {
-        if (!mounted) return;
-        setState(() {
-          _loadingDetails.remove(id);
-          _detailError = error.userMessage;
-        });
-      } catch (_) {
-        if (!mounted) return;
-        setState(() {
-          _loadingDetails.remove(id);
-          _detailError = '课程章节暂时无法加载';
-        });
-      }
-    }
-  }
-
   Future<void> _save() async {
     if (_saving || _loadingSnapshot || _conflict) return;
     final draft = PlanDraft(
       name: _nameController.text,
       courseIds: _courseIds.toList(growable: false),
-      scopeKind: _scopeKind,
-      chapters: _scopeKind == 'selected'
-          ? _chapterKeys.map((key) {
-              final parts = key.split('::');
-              return PlanChapterRef(courseId: parts[0], chapterId: parts[1]);
-            }).toList(growable: false)
-          : const <PlanChapterRef>[],
       taskTypes: _taskTypes.toList(growable: false),
       priority: _priority,
       questionPolicy: QuestionPolicy(
@@ -204,7 +156,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
     if (_questionEnabled) {
       final offerings = ref.read(questionOfferingsProvider).valueOrNull;
       if (offerings != null && offerings.isEmpty) {
-        errors.add('管理员尚未发布可用模型，请关闭题库策略');
+        errors.add('管理员尚未发布可用模型，请关闭题库配置');
       } else if (offerings != null &&
           _questionModelId != null &&
           offerings.every((model) => model.id != _questionModelId)) {
@@ -305,7 +257,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                     child: SheetHeader(
                       title: _isEditing ? '编辑任务安排' : '新建任务安排',
                       subtitle:
-                          _isEditing ? '修改会保存为新的安排版本。' : '选择课程、章节范围和任务类型。',
+                          _isEditing ? '修改会保存为新的安排版本。' : '选择课程和任务类型。',
                     ),
                   ),
                   IconButton(
@@ -379,32 +331,12 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                     ),
                     const SizedBox(height: 8),
                     _buildCourses(context),
-                    const SizedBox(height: 20),
-                    _FieldLabel(text: '章节范围'),
-                    const SizedBox(height: 8),
-                    SegmentedButton<String>(
-                      segments: const [
-                        ButtonSegment(value: 'all', label: Text('全部章节')),
-                        ButtonSegment(value: 'selected', label: Text('选择章节')),
-                      ],
-                      selected: {_scopeKind},
-                      showSelectedIcon: false,
-                      onSelectionChanged: _saving
-                          ? null
-                          : (value) {
-                              setState(() {
-                                _scopeKind = value.first;
-                                _dirty = true;
-                                _saveError = null;
-                              });
-                              if (_scopeKind == 'selected') {
-                                _ensureDetails(_courseIds);
-                              }
-                            },
-                    ),
-                    if (_scopeKind == 'selected') ...[
+                    if (_hadChapterScope) ...[
                       const SizedBox(height: 10),
-                      _buildChapters(context),
+                      const InlineNotice(
+                        icon: Icons.info_outline,
+                        message: '这条安排原按选定章节执行；保存后统一为全部章节。',
+                      ),
                     ],
                     const SizedBox(height: 20),
                     _FieldLabel(text: '任务类型'),
@@ -497,186 +429,119 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
             message: '还没有已同步课程，请先在课程页同步。',
           );
         }
-        return Container(
-          constraints: const BoxConstraints(maxHeight: 230),
-          decoration: BoxDecoration(
-            color: context.colors.surfaceSubtle,
-            borderRadius: context.colors.cardRadius,
-            border: Border.all(color: context.colors.border),
-          ),
-          child: Scrollbar(
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: state.courses.length,
-              itemBuilder: (context, index) {
-                final course = state.courses[index];
-                final selected = _courseIds.contains(course.id);
-                return Material(
-                  color: Colors.transparent,
-                  child: CheckboxListTile(
-                    value: selected,
-                    dense: true,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    title: Text(
-                      course.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 14),
-                    ),
-                    subtitle: Text(
-                      '${course.teacher ?? '教师待同步'} · ${course.chapterCount} 章节',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                    onChanged: _saving
-                        ? null
-                        : (value) {
-                            setState(() {
-                              if (value == true) {
-                                _courseIds.add(course.id);
-                              } else {
-                                _courseIds.remove(course.id);
-                                _chapterKeys.removeWhere(
-                                  (key) => key.startsWith('${course.id}::'),
-                                );
-                              }
-                              _dirty = true;
-                              _saveError = null;
-                            });
-                            _ensureDetails(_courseIds);
-                          },
-                  ),
-                );
-              },
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildChapters(BuildContext context) {
-    final colors = context.colors;
-    if (_courseIds.isEmpty) {
-      return const InlineNotice(
-        icon: Icons.touch_app_outlined,
-        message: '先选择课程，再勾选章节。',
-      );
-    }
-    if (_loadingDetails.isNotEmpty && _details.isEmpty) {
-      return const LoadingList(rows: 1, height: 56);
-    }
-    final children = <Widget>[];
-    for (final courseId in _courseIds) {
-      final detail = _details[courseId];
-      if (detail == null) {
-        continue;
-      }
-      children.add(
-        Padding(
-          padding: const EdgeInsets.only(top: 6, bottom: 4),
-          child: Text(
-            detail.summary.title,
-            style: TextStyle(
-              color: colors.textSecondary,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
-      );
-      for (final node in detail.chapterTree.expand((root) => root.subtree)) {
-        final keys = node.selectableChapters
-            .map((chapter) => '$courseId::${chapter.id}')
-            .toSet();
-        final selectedCount = keys.where(_chapterKeys.contains).length;
-        children.add(
-          Material(
-            color: Colors.transparent,
-            child: CheckboxListTile(
-              value: selectedCount == 0
-                  ? false
-                  : selectedCount == keys.length
-                      ? true
-                      : null,
-              tristate: true,
-              dense: true,
-              contentPadding: EdgeInsets.only(
-                left: node.depth.clamp(0, 4) * 12.0,
+        final keyword = _courseSearch.trim().toLowerCase();
+        final matches = keyword.isEmpty
+            ? state.courses
+            : state.courses.where((course) {
+                final title = course.title.toLowerCase();
+                final teacher = (course.teacher ?? '').toLowerCase();
+                return title.contains(keyword) || teacher.contains(keyword);
+              }).toList(growable: false);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              key: const Key('plan-course-search'),
+              controller: _courseSearchController,
+              enabled: !_saving,
+              textInputAction: TextInputAction.search,
+              onChanged: (value) => setState(() => _courseSearch = value),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: '搜索课程名称或教师',
+                prefixIcon: const Icon(Icons.search, size: 18),
+                suffixIcon: _courseSearch.trim().isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: '清除搜索',
+                        onPressed: () {
+                          _courseSearchController.clear();
+                          setState(() => _courseSearch = '');
+                        },
+                        icon: const Icon(Icons.close, size: 16),
+                      ),
               ),
-              controlAffinity: ListTileControlAffinity.leading,
-              title: Text(
-                node.chapter.displayTitle,
-                style: TextStyle(
-                  fontSize: 13,
-                  fontWeight: node.chapter.isGroup ? FontWeight.w600 : null,
+            ),
+            const SizedBox(height: 8),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 230),
+              decoration: BoxDecoration(
+                color: context.colors.surfaceSubtle,
+                borderRadius: context.colors.cardRadius,
+                border: Border.all(color: context.colors.border),
+              ),
+              child: matches.isEmpty
+                  ? const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 18),
+                      child: Center(
+                        child: Text(
+                          '没有匹配的课程',
+                          style: TextStyle(fontSize: 13),
+                        ),
+                      ),
+                    )
+                  : Scrollbar(
+                      child: ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: matches.length,
+                        itemBuilder: (context, index) {
+                          final course = matches[index];
+                          final selected = _courseIds.contains(course.id);
+                          return Material(
+                            color: Colors.transparent,
+                            child: CheckboxListTile(
+                              value: selected,
+                              dense: true,
+                              enabled: !course.isClosed,
+                              controlAffinity: ListTileControlAffinity.leading,
+                              title: Text(
+                                course.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                              subtitle: Text(
+                                course.isClosed
+                                    ? '课程已结束，不再派发任务'
+                                    : '${course.teacher ?? '教师待同步'} · ${course.chapterCount} 章节'
+                                        '${course.closedTaskPointCount > 0 ? ' · ${course.closedTaskPointCount} 个已关闭任务点' : ''}',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                              onChanged: _saving || course.isClosed
+                                  ? null
+                                  : (value) {
+                                      setState(() {
+                                        if (value == true) {
+                                          _courseIds.add(course.id);
+                                        } else {
+                                          _courseIds.remove(course.id);
+                                        }
+                                        _dirty = true;
+                                        _saveError = null;
+                                      });
+                                    },
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+            ),
+            if (_courseIds.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  '已选 ${_courseIds.length} 门；搜索不会改变已选课程。',
+                  style: TextStyle(
+                    color: context.colors.muted,
+                    fontSize: 12,
+                  ),
                 ),
               ),
-              subtitle: Text(
-                node.taskPointCount == 0
-                    ? '本章暂无任务点'
-                    : '${node.taskPointCount} 个任务点',
-                style: const TextStyle(fontSize: 12),
-              ),
-              onChanged: _saving || keys.isEmpty
-                  ? null
-                  : (_) {
-                      setState(() {
-                        if (selectedCount != keys.length) {
-                          _chapterKeys.addAll(keys);
-                        } else {
-                          _chapterKeys.removeAll(keys);
-                        }
-                        _dirty = true;
-                        _saveError = null;
-                      });
-                    },
-            ),
-          ),
+          ],
         );
-      }
-    }
-    if (_loadingDetails.isNotEmpty) {
-      children.add(
-        const Padding(
-          padding: EdgeInsets.symmetric(vertical: 10),
-          child: LinearProgressIndicator(minHeight: 2),
-        ),
-      );
-    }
-    if (_detailError != null) {
-      children.add(
-        Padding(
-          padding: const EdgeInsets.only(top: 8),
-          child: ErrorPanel(
-            message: _detailError!,
-            compact: true,
-            onRetry: () {
-              _details.clear();
-              _ensureDetails(_courseIds);
-            },
-          ),
-        ),
-      );
-    }
-    if (children.isEmpty) {
-      return const InlineNotice(
-        icon: Icons.info_outline,
-        message: '课程章节尚未加载，请稍后重试。',
-      );
-    }
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: colors.surfaceSubtle,
-        borderRadius: colors.cardRadius,
-        border: Border.all(color: colors.border),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: children,
-      ),
+      },
     );
   }
 
@@ -710,7 +575,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      '题库策略',
+                      '题库配置',
                       style: TextStyle(
                         color: colors.text,
                         fontSize: 14,
@@ -719,7 +584,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      '策略随安排版本冻结；开启后自动查询并提交测验答案。',
+                      '开启后自动查询测验答案并提交，结果以平台复核为准。',
                       style: TextStyle(
                         color: colors.textSecondary,
                         fontSize: 12,
@@ -749,7 +614,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
           if (!_questionEnabled) ...[
             const SizedBox(height: 8),
             Text(
-              '关闭时不会查询或提交测验答案。',
+              '关闭时不查询也不提交测验答案。',
               style: TextStyle(
                 color: colors.textSecondary,
                 fontSize: 12,
@@ -764,7 +629,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
               InlineNotice(
                 tone: StatusTone.warning,
                 icon: Icons.cloud_off_outlined,
-                message: '题库模型目录暂时无法加载；可保留现有策略，暂不改动。',
+                message: '模型列表暂时无法加载；可保留现有配置，暂不改动。',
                 action: TextButton(
                   onPressed: () => ref.invalidate(questionOfferingsProvider),
                   child: const Text('重试'),
@@ -774,21 +639,22 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
               InlineNotice(
                 tone: StatusTone.warning,
                 icon: Icons.lock_outline,
-                message: '管理员尚未发布可用模型，不能开启安排级题库策略。',
+                message: '管理员尚未发布可用模型，暂时不能开启题库配置。',
                 action: TextButton(
                   onPressed: () => setState(() {
                     _questionEnabled = false;
                     _questionModelId = null;
                     _saveError = null;
                   }),
-                  child: const Text('关闭策略'),
+                  child: const Text('关闭题库配置'),
                 ),
               )
             else ...[
               DropdownButtonFormField<String>(
                 initialValue: selected?.id,
+                style: TextStyle(fontSize: 14, color: colors.text),
                 decoration: const InputDecoration(
-                  labelText: '公开模型',
+                  labelText: '模型',
                   isDense: true,
                 ),
                 items: [
@@ -796,9 +662,12 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                     DropdownMenuItem(
                       value: offering.id,
                       child: Text(
-                        '${offering.displayName} · ${offering.capabilityLabel} · ${offering.priceLabel}',
+                        offering.supportsImages
+                            ? '${offering.displayName} · 支持图片题'
+                            : offering.displayName,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
+                        style: TextStyle(fontSize: 14, color: colors.text),
                       ),
                     ),
                 ],
@@ -816,7 +685,7 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
                 const SizedBox(height: 8),
                 const InlineNotice(
                   tone: StatusTone.warning,
-                  message: '安排中的模型已不可用，请重新选择，或关闭题库策略。',
+                  message: '安排中的模型已不可用，请重新选择，或关闭题库配置。',
                 ),
               ],
             ],
@@ -825,11 +694,11 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
               segments: const [
                 ButtonSegment(
                   value: AnswerMode.cacheFirst,
-                  label: Text('cache_first'),
+                  label: Text('优先复用答案'),
                 ),
                 ButtonSegment(
                   value: AnswerMode.alwaysLlm,
-                  label: Text('always_llm'),
+                  label: Text('每次调用模型'),
                 ),
               ],
               selected: {_answerMode},
@@ -846,15 +715,6 @@ class _PlanEditorSheetState extends ConsumerState<PlanEditorSheet> {
             const SizedBox(height: 7),
             Text(
               _answerMode.description,
-              style: TextStyle(
-                color: colors.textSecondary,
-                fontSize: 12,
-                height: 1.5,
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              '提交结果以平台复核为准。',
               style: TextStyle(
                 color: colors.textSecondary,
                 fontSize: 12,

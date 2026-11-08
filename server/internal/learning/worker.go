@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"hash/fnv"
 	"strings"
 	"sync"
 	"time"
@@ -14,23 +15,24 @@ import (
 )
 
 type executionJob struct {
-	AttemptID            string
-	TaskID               string
-	UserID               string
-	PlanRevisionID       string
-	TaskKind             string
-	Priority             int
-	FenceToken           int64
-	CourseExternal       string
-	ClassExternal        string
-	CPI                  string
-	CycleKey             string
-	ChapterExternal      string
-	ObjectID             string
-	CardIndex            int
-	TaskPointID          string
-	MediaDurationSeconds float64
-	QuestionPolicy       QuestionPolicy
+	AnswerRetryGeneration int
+	AttemptID             string
+	TaskID                string
+	UserID                string
+	PlanRevisionID        string
+	TaskKind              string
+	Priority              int
+	FenceToken            int64
+	CourseExternal        string
+	ClassExternal         string
+	CPI                   string
+	CycleKey              string
+	ChapterExternal       string
+	ObjectID              string
+	CardIndex             int
+	TaskPointID           string
+	MediaDurationSeconds  float64
+	QuestionPolicy        QuestionPolicy
 	// 已冻结的计费事实；重试时原样延续，避免重新报价或丢失预占。
 	BillingState    string
 	BillingHoldID   string
@@ -165,6 +167,8 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 			JOIN public.learning_courses course ON course.id = t.course_id AND course.user_id = t.user_id
 			JOIN public.learning_attachments att ON att.id = t.attachment_id
 				AND att.user_id = t.user_id AND att.course_id = t.course_id
+			JOIN public.learning_chapters current_chapter ON current_chapter.id=att.chapter_id
+				AND current_chapter.user_id=t.user_id AND current_chapter.availability<>'closed'
 			JOIN LATERAL (
 				SELECT max(r.priority) AS priority
 				FROM public.learning_plan_task_bindings b
@@ -190,6 +194,8 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 			  AND (a.blocked_until IS NULL OR a.blocked_until <= now())
 			  -- 最新完整快照中已不存在的附件不能再领取。
 			  AND att.snapshot_version = course.snapshot_version
+			  -- 平台已结束课程不再派发任务。
+			  AND course.platform_state <> 'closed'
 			ORDER BY COALESCE(a.last_claimed_at, '1970-01-01'::timestamptz),
 				matching_plan.priority DESC, COALESCE(t.next_attempt_at, t.created_at), t.created_at
 			LIMIT 100`, s.opts.MaxAttempts, s.accountLimit())
@@ -225,21 +231,23 @@ func (s *Service) claimNext(ctx context.Context) (*executionJob, error) {
 			err := tx.QueryRow(ctx, `SELECT t.course_external_id, t.class_external_id, c.external_cpi,
 				t.cycle_key, t.chapter_external_id, a.external_object_id, a.card_index, t.task_point_id,
 				t.task_kind, a.duration_seconds,
-				t.billing_state, t.billing_hold_id, t.billing_quote, COALESCE(t.price_version_id::text, '')
+				t.billing_state, t.billing_hold_id, t.billing_quote, COALESCE(t.price_version_id::text, ''), t.answer_retry_generation
 				FROM public.learning_tasks t
 				JOIN public.learning_courses c ON c.id = t.course_id AND c.user_id = t.user_id
 				JOIN public.learning_attachments a ON a.id = t.attachment_id AND a.user_id = t.user_id
 				JOIN public.learning_accounts ac ON ac.user_id = t.user_id
+				JOIN public.learning_chapters current_chapter ON current_chapter.id=a.chapter_id
+					AND current_chapter.user_id=t.user_id AND current_chapter.availability<>'closed'
 				WHERE t.id = $1 AND t.state IN ('pending', 'failed') AND t.desired_state = 'run'
 				  AND t.lease_attempt_id IS NULL AND (t.next_attempt_at IS NULL OR t.next_attempt_at <= now())
 				  AND ac.blocked_code = '' AND (ac.blocked_until IS NULL OR ac.blocked_until <= now())
 				  -- 二次加锁核对最新快照，避免候选读取后状态变化。
-				  AND a.snapshot_version = c.snapshot_version
+				  AND a.snapshot_version = c.snapshot_version AND c.platform_state<>'closed'
 				FOR UPDATE OF t SKIP LOCKED`, candidate.id).Scan(
 				&job.CourseExternal, &job.ClassExternal, &job.CPI, &job.CycleKey, &job.ChapterExternal,
 				&job.ObjectID, &job.CardIndex, &job.TaskPointID, &job.TaskKind,
 				&job.MediaDurationSeconds, &job.BillingState, &job.BillingHoldID, &job.BillingQuoteRaw,
-				&job.PriceVersion)
+				&job.PriceVersion, &job.AnswerRetryGeneration)
 			if errors.Is(err, pgx.ErrNoRows) {
 				continue
 			}
@@ -440,6 +448,13 @@ func (s *Service) execute(ctx context.Context, job executionJob) {
 	sessionCtx, cancelSession := context.WithTimeout(ctx, 15*time.Second)
 	session, err := s.resolveSession(sessionCtx, job.UserID)
 	cancelSession()
+	if err == nil {
+		var code string
+		code, err = closedTaskErrorCode(ctx, s.pool, job.TaskID)
+		if err == nil && (code == "chapter_closed" || code == "course_closed") {
+			err = Fail(FailurePlatformClosed, "平台已关闭当前章节或课程")
+		}
+	}
 	if err != nil {
 		if s.runCtx != nil && s.runCtx.Err() != nil {
 			return
@@ -462,6 +477,12 @@ func (s *Service) execute(ctx context.Context, job executionJob) {
 	if preflightCompleted {
 		return
 	}
+	if err := s.recordExecutionObservation(ctx, job, Observation{}); err != nil {
+		finishCtx, cancelFinish := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelFinish()
+		s.finish(finishCtx, job, ExecutionResult{}, err, capabilities)
+		return
+	}
 	var stopRequested bool
 	_ = s.pool.QueryRow(ctx, `SELECT cancel_requested FROM public.learning_task_attempts WHERE id = $1`, job.AttemptID).Scan(&stopRequested)
 	result, err := s.opts.Executor.Execute(ctx, ExecutionRequest{
@@ -473,7 +494,11 @@ func (s *Service) execute(ctx context.Context, job executionJob) {
 			CardIndex: job.CardIndex, ChapterExternalID: job.ChapterExternal, ObjectID: job.ObjectID,
 			TaskPointID: job.TaskPointID,
 		},
-		PlanRevision: job.PlanRevisionID, Priority: job.Priority, StopRequested: stopRequested,
+		ReportObservation: func(observeCtx context.Context, observation Observation) error {
+			return s.recordExecutionObservation(observeCtx, job, observation)
+		},
+		AnswerRetryGeneration: job.AnswerRetryGeneration,
+		PlanRevision:          job.PlanRevisionID, Priority: job.Priority, StopRequested: stopRequested,
 		QuestionPolicy: job.QuestionPolicy, MediaDurationSeconds: job.MediaDurationSeconds,
 	})
 	if ctx.Err() != nil {
@@ -500,6 +525,14 @@ func (s *Service) execute(ctx context.Context, job executionJob) {
 	finishCtx, cancelFinish := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelFinish()
 	s.finish(finishCtx, job, result, err, capabilities)
+	if err == nil && result.PlatformCompletion != nil {
+		// 平台在执行响应里直接给出完成事实时，仍走统一的确认路径写状态、账单和事件。
+		verifyCtx, cancelVerify := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelVerify()
+		if verifyErr := s.applyVerification(verifyCtx, job.TaskID, *result.PlatformCompletion, nil); verifyErr != nil {
+			s.opts.Logger.Warn("平台完成事实未写入", "task_id", job.TaskID, "code", describe(verifyErr))
+		}
+	}
 }
 
 // preflight 在执行器之前做一次有限时只读平台查询。返回 true 表示平台已确认完成，
@@ -535,9 +568,9 @@ func (s *Service) preflight(ctx context.Context, job executionJob, session []byt
 	if check.Status == CheckUnconfirmed && !check.Passed {
 		return false, nil
 	}
-	if check.Status == CheckUnknown && job.TaskKind == "quiz" {
-		// 测验卡片不提供完成字段；工作执行器会先重读试卷并确认是否已提交，
-		// 因此核验未知不能阻断做题，否则任何未作答测验都无法开始。
+	if check.Status == CheckUnknown && (job.TaskKind == "quiz" || job.TaskKind == "document" || job.TaskKind == "video" || job.TaskKind == "audio") {
+		// 卡片缺少完成字段仅表示当前未知；各原生执行器仍校验归属、必需协议字段和实际响应。
+		// 执行后保留独立平台核验，不把未知状态当成完成或身份异常。
 		return false, nil
 	}
 	return false, Fail(FailureCapabilityMissing, "执行前平台核验结果不明确，已停止外部执行")
@@ -705,6 +738,9 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 			default:
 				resultCode = "failed"
 				errorCode = string(failure.Class)
+				if failure.Code != "" {
+					errorCode = failure.Code
+				}
 			}
 		}
 		if _, err := tx.Exec(ctx, `UPDATE public.learning_task_attempts SET
@@ -747,21 +783,27 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 		case (failure.Class == FailureStopped || failure.Class == FailureCancelled) && cancelRequested &&
 			record.DesiredState == DesiredRun:
 			// 停止握手期间已恢复运行意图时保留原预占；已发送最终提交时只回到核验。
-			var present, submitted bool
+			var present, submitted, chapterClosed bool
 			if err := tx.QueryRow(ctx, `SELECT
 				EXISTS (SELECT 1 FROM public.learning_attachments a
 					JOIN public.learning_courses c ON c.id = a.course_id AND c.user_id = a.user_id
 					WHERE a.id = t.attachment_id AND a.user_id = t.user_id
 					  AND a.snapshot_version = c.snapshot_version),
 				EXISTS (SELECT 1 FROM public.learning_work_runs w WHERE w.task_id = t.id
-					AND w.state IN ('submitting', 'submitted', 'submission_unknown'))
-				FROM public.learning_tasks t WHERE t.id = $1`, job.TaskID).Scan(&present, &submitted); err != nil {
+					AND w.state IN ('submitting', 'submitted', 'submission_unknown')),
+				EXISTS (SELECT 1 FROM public.learning_chapters ch JOIN public.learning_courses c
+				  ON c.id=ch.course_id AND c.user_id=ch.user_id WHERE ch.course_id=t.course_id
+				  AND ch.user_id=t.user_id AND ch.external_id=t.chapter_external_id
+				  AND ch.snapshot_version=c.snapshot_version AND ch.availability='closed')
+				FROM public.learning_tasks t WHERE t.id = $1`, job.TaskID).Scan(&present, &submitted, &chapterClosed); err != nil {
 				return errServiceUnavailable
 			}
 			target, code, reason := StateNeedsAttention, snapshotMissingCode, ""
 			var nextVerify any
 			if submitted {
 				target, code, reason, nextVerify = StateWaitingVerification, "", "question_submission", now
+			} else if chapterClosed {
+				code = "chapter_closed"
 			} else if present {
 				// 停止握手结束且任务仍有效，沿用原报价及查询幂等键重新领取。
 				target, code = StatePending, ""
@@ -810,12 +852,30 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 			if err == nil {
 				err = s.blockAccount(ctx, tx, record.UserID, string(failure.Class), "平台要求重新登录或拒绝访问", nil)
 			}
+		case failure.Class == FailurePlatformClosed:
+			// 平台关闭不重试、不扣费；章节与课程关闭不改写独立测验可用性。
+			code, codeErr := closedTaskErrorCode(ctx, tx, job.TaskID)
+			if codeErr != nil {
+				return codeErr
+			}
+			if _, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
+				state = 'needs_attention', lease_attempt_id = NULL, lease_owner = '', lease_expires_at = NULL,
+				observation = $2, media_evidence = $3, last_error_code = $5,
+				last_error_scope = 'task', next_attempt_at = NULL, next_verify_at = NULL,
+				version = version + 1, updated_at = $4
+				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, now, code); err != nil {
+				return err
+			}
+			if err = recordClosedTaskPoint(ctx, tx, job.TaskID, now); err != nil {
+				return err
+			}
+			terminalBilling = true
 		case failure.Class == FailureCapabilityMissing || failure.Class == FailureAnswerUnavailable:
 			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
 				state = 'needs_attention', lease_attempt_id = NULL, lease_owner = '', lease_expires_at = NULL,
 				observation = $2, media_evidence = $3, last_error_code = $5,
 				last_error_scope = 'task', version = version + 1, updated_at = $4
-				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, now, string(failure.Class))
+				WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, now, errorCode)
 			terminalBilling = true
 		case failure.Class == FailureInvalidTask || failure.Class == FailurePermanent:
 			_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET
@@ -846,8 +906,30 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 			if failure.Class == FailureRateLimited {
 				code = FailureRateLimited
 			}
-			delay := s.retryDelay(failures, failure)
-			if failures >= s.opts.MaxAttempts {
+			delay := s.retryDelay(failures, failure, job.TaskID+job.AttemptID)
+			storedCode := string(code)
+			if failure != nil && failure.Code != "" {
+				storedCode = failure.Code
+			}
+			var submitted bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.learning_work_runs WHERE task_id=$1 AND state IN ('submitting','submitted','submission_unknown'))`, job.TaskID).Scan(&submitted); err != nil {
+				return errServiceUnavailable
+			}
+			if submitted {
+				_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET state='waiting_verification',lease_attempt_id=NULL,lease_owner='',lease_expires_at=NULL,
+                 last_error_code='submission_unknown',last_error_scope='platform',next_attempt_at=NULL,next_verify_at=$2,
+                 verification_reason='question_submission',version=version+1,updated_at=$2 WHERE id=$1`, job.TaskID, now)
+			} else if failures >= s.opts.MaxAttempts && record.RecoveryCycles < 2 {
+				cooldown := 5 * time.Minute * time.Duration(1<<record.RecoveryCycles)
+				if delay > cooldown {
+					cooldown = delay
+				}
+				_, err = tx.Exec(ctx, `UPDATE public.learning_tasks SET state='pending',lease_attempt_id=NULL,lease_owner='',lease_expires_at=NULL,
+                 observation=$2,media_evidence=$3,failure_count=0,recovery_cycles=recovery_cycles+1,
+                 last_error_code=$4,last_error_scope='task',next_attempt_at=$5,version=version+1,updated_at=$6 WHERE id=$1`,
+					job.TaskID, observationJSON, mediaJSON, storedCode, now.Add(cooldown), now)
+				delay = cooldown
+			} else if failures >= s.opts.MaxAttempts {
 				target := StateFailed
 				if code == FailureRateLimited {
 					target = StateNeedsAttention
@@ -857,7 +939,7 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 					observation = $3, media_evidence = $4, failure_count = $5,
 					last_error_code = $6, last_error_scope = 'account', next_attempt_at = NULL,
 					version = version + 1, updated_at = $7
-					WHERE id = $1`, job.TaskID, target, observationJSON, mediaJSON, failures, string(code), now)
+					WHERE id = $1`, job.TaskID, target, observationJSON, mediaJSON, failures, storedCode, now)
 				terminalBilling = true
 			} else {
 				next := now.Add(delay)
@@ -866,11 +948,11 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 					observation = $2, media_evidence = $3, failure_count = $4,
 					last_error_code = $5, last_error_scope = 'account', next_attempt_at = $6,
 					version = version + 1, updated_at = $7
-					WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, failures, string(code), next, now)
+					WHERE id = $1`, job.TaskID, observationJSON, mediaJSON, failures, storedCode, next, now)
 			}
 			if code == FailureRateLimited && err == nil {
 				next := now.Add(delay)
-				_, err = tx.Exec(ctx, `UPDATE public.learning_accounts SET blocked_until = $2, updated_at = $3
+				_, err = tx.Exec(ctx, `UPDATE public.learning_accounts SET blocked_until = GREATEST(COALESCE(blocked_until,$2),$2), updated_at = $3
 					WHERE user_id = $1`, record.UserID, next, now)
 			}
 		}
@@ -884,10 +966,16 @@ func (s *Service) applyExecutionResult(ctx context.Context, job executionJob, re
 				return errServiceUnavailable
 			}
 		}
+		var finalState string
+		var finalVersion int64
+		if err := tx.QueryRow(ctx, `SELECT state,version FROM public.learning_tasks WHERE id=$1`, job.TaskID).Scan(&finalState, &finalVersion); err != nil {
+			return errServiceUnavailable
+		}
 		return writeOutbox(ctx, tx, outboxEvent{
-			Topic: "task.attempt_finished", ResourceType: "task", ResourceID: job.TaskID, UserID: record.UserID,
+			ResourceVersion: finalVersion,
+			Topic:           "task.attempt_finished", ResourceType: "task", ResourceID: job.TaskID, UserID: record.UserID,
 			Payload: map[string]any{"attempt_id": job.AttemptID, "result": resultCode,
-				"state": record.State, "confirmed": false},
+				"state": finalState, "confirmed": false},
 		})
 	})
 }
@@ -965,14 +1053,11 @@ func billingQuoteState(quote BillingQuote) string {
 	return "unpriced"
 }
 
-func (s *Service) retryDelay(failures int, failure *Failure) time.Duration {
+func (s *Service) retryDelay(failures int, failure *Failure, salt ...string) time.Duration {
 	if failures < 1 {
 		failures = 1
 	}
 	base := s.opts.RetryBase
-	if failure != nil && failure.RetryAfter > 0 {
-		base = failure.RetryAfter
-	}
 	shift := failures - 1
 	if shift > 4 {
 		shift = 4
@@ -983,6 +1068,14 @@ func (s *Service) retryDelay(failures int, failure *Failure) time.Duration {
 	}
 	if delay < time.Second {
 		delay = time.Second
+	}
+	if failure != nil && failure.RetryAfter > delay {
+		delay = failure.RetryAfter
+	}
+	if len(salt) > 0 {
+		hash := fnv.New32a()
+		hash.Write([]byte(salt[0]))
+		delay += time.Duration(uint64(delay/5) * uint64(hash.Sum32()%1000) / 1000)
 	}
 	return delay
 }

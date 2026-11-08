@@ -273,12 +273,12 @@ func (s *Service) insertPendingQuery(ctx context.Context, queryID string, actorI
 	tag, err := s.pool.Exec(ctx, `INSERT INTO public.question_queries
 		(id, user_id, idempotency_key, request_fingerprint, offering_id, offering_public_id, offering_display_name,
 		 offering_provider_ref, mode, cache_scope, scope_key_hash, question_title, question_options, question_type,
-		 image_count, status, usage, pricing, billing_state, fork_request_id, fork_cache_policy)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending','{}','{}','pending',$1,$16)
+		 image_count, status, usage, pricing, billing_state, fork_request_id, fork_cache_policy,budget_output_tokens)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'pending','{}','{}','pending',$1,$16,$17)
 		ON CONFLICT (user_id, idempotency_key) DO NOTHING`,
 		queryID, actorID, idem, fp, offering.ID, offering.PublicID, offering.DisplayName,
 		offering.ProviderRef, input.Mode, input.CacheScope, scopeHash, input.Question.Title,
-		input.Question.Options, input.Question.Type, images.Count, string(cachePolicy))
+		input.Question.Options, input.Question.Type, images.Count, string(cachePolicy), input.Budget.MaxOutputTokens)
 	if err != nil {
 		return false, nil, err
 	}

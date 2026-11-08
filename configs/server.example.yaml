@@ -46,7 +46,7 @@ learning:
   execution_enabled: false
   execution_evidence_reference: ""
   global_concurrency: 4
-  account_concurrency: 1
+  account_concurrency: 4
 
 payments:
   enabled: false

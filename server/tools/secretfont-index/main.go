@@ -34,6 +34,7 @@ func main() {
 	minMargin := flag.Float64("min-margin", 3000, "单页标签的最小置信差距")
 	maxScore := flag.Float64("max-score", 8000, "低差距标签允许的最大绝对差距")
 	lowMargin := flag.Float64("low-margin", 800, "低于最小差距时仍可接受的下限")
+	keep := flag.Bool("keep", false, "保留 -out 已有条目，只追加新签名")
 	flag.Parse()
 	if *manifest == "" || *out == "" {
 		fmt.Fprintln(os.Stderr, "需要 -manifest 与 -out")
@@ -51,6 +52,30 @@ func main() {
 	}
 	votes := map[string]map[rune]int{}
 	accepted := map[string]int{}
+	if *keep {
+		// 保留已有索引作为基础票：补字形只增不减，避免旧课程因样本缺失回退。
+		if existing, readErr := os.Open(*out); readErr == nil {
+			scanner := bufio.NewScanner(existing)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			for scanner.Scan() {
+				line := strings.TrimSpace(scanner.Text())
+				if line == "" || strings.HasPrefix(line, "#") {
+					continue
+				}
+				signature, glyph, found := strings.Cut(line, "\t")
+				runes := []rune(strings.TrimSpace(glyph))
+				if !found || len(signature) != 32 || len(runes) != 1 {
+					continue
+				}
+				if votes[signature] == nil {
+					votes[signature] = map[rune]int{}
+				}
+				votes[signature][runes[0]]++
+				accepted[signature]++
+			}
+			existing.Close()
+		}
+	}
 	for _, page := range pages {
 		payload, err := os.ReadFile(page.HTML)
 		if err != nil {

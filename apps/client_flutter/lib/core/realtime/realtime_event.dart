@@ -1,3 +1,17 @@
+// 课程只投影平台核验与关闭事实，执行观察不触发平台完成率更新。
+bool isCourseProgressEvent(RealtimeEvent event) =>
+    event.type.startsWith('course.') ||
+    const {
+      'task.confirmed',
+      'task.precompleted',
+      'task.platform_checked',
+      'task.state_changed',
+      'task.attempt_finished',
+      'task.platform_confirmed_after_cancel',
+      'client.poll',
+      'client.resumed',
+    }.contains(event.type);
+
 class RealtimeEvent {
   const RealtimeEvent({
     required this.type,

@@ -188,6 +188,9 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 		if err != nil {
 			return errServiceUnavailable
 		}
+		if err := preserveClosedChapterAttachments(ctx, tx, account.UserID, courseID, version-1, &snapshot); err != nil {
+			return err
+		}
 		counts, err := writeCourseSnapshotContent(ctx, tx, account, courseID, cycle, version, snapshot, now)
 		if err != nil {
 			return err
@@ -202,6 +205,9 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 		if err != nil {
 			return errServiceUnavailable
 		}
+		if err := reconcileClosedChapterTasks(ctx, tx, account.UserID, courseID, now); err != nil {
+			return err
+		}
 		if err := requestStaleSnapshotStops(ctx, tx, account.UserID, courseID, now); err != nil {
 			return err
 		}
@@ -209,6 +215,30 @@ func (s *Service) applyCourseSnapshot(ctx context.Context, job *courseSyncJob, a
 		// 同类任务恢复为待执行，保留用户明确的暂停/取消意图。
 		if _, err := restoreSnapshotTasks(ctx, tx, account.UserID, courseID, version, now); err != nil {
 			return err
+		}
+		// 课程级状态：已结束课程不再保留待执行任务；重新开放时恢复。
+		var platformState string
+		if err := tx.QueryRow(ctx, `SELECT platform_state FROM public.learning_courses WHERE id = $1`,
+			courseID).Scan(&platformState); err != nil {
+			return errServiceUnavailable
+		}
+		if platformState == "closed" {
+			if _, err := tx.Exec(ctx, `UPDATE public.learning_tasks SET
+				state = 'needs_attention', last_error_code = 'course_closed', last_error_scope = 'course',
+				next_attempt_at = NULL, next_verify_at = NULL, version = version + 1, updated_at = $2
+				WHERE user_id = $1 AND course_id = $3 AND state IN ('pending', 'failed')`,
+				account.UserID, now, courseID); err != nil {
+				return errServiceUnavailable
+			}
+		} else if platformState == "active" {
+			if _, err := tx.Exec(ctx, `UPDATE public.learning_tasks SET
+				state = 'pending', last_error_code = '', last_error_scope = '',
+				next_attempt_at = $2, version = version + 1, updated_at = $2
+				WHERE user_id = $1 AND course_id = $3 AND state = 'needs_attention'
+				  AND last_error_code = 'course_closed' AND desired_state = 'run'`,
+				account.UserID, now, courseID); err != nil {
+				return errServiceUnavailable
+			}
 		}
 		for {
 			marked, err := markStaleSnapshotTasks(ctx, tx, account.UserID, courseID, now)
@@ -254,6 +284,10 @@ func bindMatchingTasks(ctx context.Context, tx pgx.Tx, userID string) error {
 		FROM public.learning_plans p
 		JOIN public.learning_plan_revisions r ON r.id = p.current_revision_id AND r.user_id = p.user_id
 		JOIN public.learning_tasks t ON t.user_id = p.user_id
+		JOIN public.learning_courses lc ON lc.id = t.course_id AND lc.user_id = t.user_id
+			AND lc.platform_state <> 'closed'
+		JOIN public.learning_chapters current_chapter ON current_chapter.id=t.chapter_id
+			AND current_chapter.user_id=t.user_id AND current_chapter.availability<>'closed'
 		WHERE p.user_id = $1 AND p.status = 'active'
 		  AND t.course_id = ANY(r.course_ids)
 		  AND (r.scope_kind = 'all' OR EXISTS (
@@ -261,6 +295,12 @@ func bindMatchingTasks(ctx context.Context, tx pgx.Tx, userID string) error {
 			WHERE sc.id = ANY(r.chapter_ids) AND sc.course_id = t.course_id
 			  AND sc.user_id = t.user_id AND sc.external_id = t.chapter_external_id))
 		  AND t.task_kind = ANY(r.task_types)
+		  AND NOT EXISTS (
+			SELECT 1 FROM public.learning_task_point_availability v
+			WHERE v.user_id = t.user_id AND v.course_id = t.course_id
+			  AND v.chapter_external_id = t.chapter_external_id
+			  AND v.task_point_id = t.task_point_id AND v.cycle_key = t.cycle_key
+			  AND v.availability = 'closed')
 		ON CONFLICT DO NOTHING`, userID)
 	if err != nil {
 		return errServiceUnavailable

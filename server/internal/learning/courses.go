@@ -269,11 +269,13 @@ type CourseSummary struct {
 	ExternalCourseID         string     `json:"external_course_id"`
 	ExternalClassID          string     `json:"external_class_id"`
 	SnapshotVersion          int64      `json:"snapshot_version"`
+	PlatformState            string     `json:"platform_state"`
 	SyncedAt                 *time.Time `json:"synced_at,omitempty"`
 	Stale                    bool       `json:"stale"`
 	ChapterCount             int        `json:"chapter_count"`
 	TaskPointCount           int        `json:"task_point_count"`
 	IncompleteTaskPointCount int        `json:"incomplete_task_point_count"`
+	ClosedTaskPointCount     int        `json:"closed_task_point_count"`
 	ResourceCount            int        `json:"resource_count"`
 }
 
@@ -291,9 +293,15 @@ func (s *Service) ListCourses(ctx context.Context, actor Actor, filter CourseFil
 		return Page[CourseSummary]{}, err
 	}
 	search := truncate(filter.Search, 80)
-	rows, err := s.pool.Query(ctx, `SELECT c.id::text, c.title, c.teacher, c.term, c.cover_source_url, c.external_course_id,
-		c.external_class_id, c.snapshot_version, c.synced_at, c.updated_at,
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return Page[CourseSummary]{}, errServiceUnavailable
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT c.id::text, c.title, c.teacher, c.term, c.cover_source_url, c.external_course_id,
+		c.external_class_id, c.snapshot_version, c.platform_state, c.synced_at, c.updated_at,
 		COALESCE(s.chapter_count, 0), COALESCE(s.task_point_count, 0), COALESCE(s.incomplete_task_point_count, 0),
+		0,
 		COALESCE(s.attachment_count - s.task_point_count, 0)
 		FROM public.learning_courses c
 		LEFT JOIN public.learning_course_snapshots s ON s.course_id = c.id AND s.user_id = c.user_id AND s.version = c.snapshot_version
@@ -314,9 +322,9 @@ func (s *Service) ListCourses(ctx context.Context, actor Actor, filter CourseFil
 		var coverSource string
 		var updated time.Time
 		if err := rows.Scan(&item.ID, &item.Title, &item.Teacher, &item.Term, &coverSource, &item.ExternalCourseID,
-			&item.ExternalClassID, &item.SnapshotVersion, &item.SyncedAt, &updated,
+			&item.ExternalClassID, &item.SnapshotVersion, &item.PlatformState, &item.SyncedAt, &updated,
 			&item.ChapterCount, &item.TaskPointCount, &item.IncompleteTaskPointCount,
-			&item.ResourceCount); err != nil {
+			&item.ClosedTaskPointCount, &item.ResourceCount); err != nil {
 			return Page[CourseSummary]{}, errServiceUnavailable
 		}
 		item.CoverURL = courseCoverURL(item.ID, coverSource)
@@ -332,6 +340,13 @@ func (s *Service) ListCourses(ctx context.Context, actor Actor, filter CourseFil
 		page.Items = items[:limit]
 		last := page.Items[len(page.Items)-1]
 		page.NextCursor = encodeCursor(times[limit-1], last.ID)
+	}
+	rows.Close()
+	if err := enrichCourseProgress(ctx, tx, actor.ID, page.Items); err != nil {
+		return Page[CourseSummary]{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Page[CourseSummary]{}, errServiceUnavailable
 	}
 	return page, nil
 }
@@ -356,6 +371,7 @@ type AttachmentView struct {
 	IsTaskPoint       bool       `json:"is_task_point"`
 	CountedIncomplete bool       `json:"counted_incomplete"`
 	ProgressCheckedAt *time.Time `json:"progress_checked_at,omitempty"`
+	Availability      string     `json:"availability"`
 }
 
 type ChapterView struct {
@@ -364,6 +380,7 @@ type ChapterView struct {
 	ParentExternalID string           `json:"parent_external_id"`
 	Number           string           `json:"number"`
 	IsGroup          bool             `json:"is_group"`
+	Availability     string           `json:"availability"`
 	Title            string           `json:"title"`
 	SortOrder        int              `json:"sort_order"`
 	Attachments      []AttachmentView `json:"attachments"`
@@ -387,15 +404,17 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 	defer tx.Rollback(ctx)
 	var coverSource string
 	err = tx.QueryRow(ctx, `SELECT c.id::text, c.title, c.teacher, c.term, c.cover_source_url, c.external_course_id,
-		c.external_class_id, c.snapshot_version, c.synced_at,
+		c.external_class_id, c.snapshot_version, c.platform_state, c.synced_at,
 		COALESCE(s.chapter_count, 0), COALESCE(s.task_point_count, 0), COALESCE(s.incomplete_task_point_count, 0),
+		0,
 		COALESCE(s.attachment_count - s.task_point_count, 0)
 		FROM public.learning_courses c
 		LEFT JOIN public.learning_course_snapshots s ON s.course_id = c.id AND s.user_id = c.user_id AND s.version = c.snapshot_version
 		WHERE c.id = $1 AND c.user_id = $2`, courseID, actor.ID).Scan(
 		&detail.ID, &detail.Title, &detail.Teacher, &detail.Term, &coverSource, &detail.ExternalCourseID,
-		&detail.ExternalClassID, &detail.SnapshotVersion, &detail.SyncedAt,
-		&detail.ChapterCount, &detail.TaskPointCount, &detail.IncompleteTaskPointCount, &detail.ResourceCount)
+		&detail.ExternalClassID, &detail.SnapshotVersion, &detail.PlatformState, &detail.SyncedAt,
+		&detail.ChapterCount, &detail.TaskPointCount, &detail.IncompleteTaskPointCount,
+		&detail.ClosedTaskPointCount, &detail.ResourceCount)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return detail, errNotFound
 	}
@@ -405,7 +424,7 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 	detail.CoverURL = courseCoverURL(detail.ID, coverSource)
 	now := s.now()
 	detail.Stale = detail.SyncedAt == nil || now.Sub(*detail.SyncedAt) > s.opts.CourseSnapshotTTL
-	rows, err := tx.Query(ctx, `SELECT id::text, external_id, parent_external_id, chapter_number, is_group, title, sort_order
+	rows, err := tx.Query(ctx, `SELECT id::text, external_id, parent_external_id, chapter_number, is_group, title, sort_order, availability
 		FROM public.learning_chapters
 		WHERE course_id = $1 AND user_id = $2 AND snapshot_version = $3
 		ORDER BY sort_order, external_id`, courseID, actor.ID, detail.SnapshotVersion)
@@ -417,7 +436,7 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 	index := map[string]int{}
 	for rows.Next() {
 		var item ChapterView
-		if err := rows.Scan(&item.ID, &item.ExternalID, &item.ParentExternalID, &item.Number, &item.IsGroup, &item.Title, &item.SortOrder); err != nil {
+		if err := rows.Scan(&item.ID, &item.ExternalID, &item.ParentExternalID, &item.Number, &item.IsGroup, &item.Title, &item.SortOrder, &item.Availability); err != nil {
 			return detail, errServiceUnavailable
 		}
 		item.Attachments = []AttachmentView{}
@@ -428,23 +447,34 @@ func (s *Service) GetCourse(ctx context.Context, actor Actor, courseID string) (
 		return detail, errServiceUnavailable
 	}
 	rows.Close()
-	attachmentRows, err := tx.Query(ctx, `SELECT chapter_id::text, id::text, external_object_id,
-		task_point_id, kind, title, duration_seconds, played_seconds, platform_passed, passed_known,
-		is_task_point, counted_incomplete, progress_checked_at
-		FROM public.learning_attachments
-		WHERE course_id = $1 AND user_id = $2 AND snapshot_version = $3
-		ORDER BY chapter_id, sort_order, external_object_id`, courseID, actor.ID, detail.SnapshotVersion)
+	attachmentRows, err := tx.Query(ctx, `SELECT a.chapter_id::text,a.id::text,a.external_object_id,
+		a.task_point_id,a.kind,a.title,a.duration_seconds,`+coursePlayedSQL+`,`+coursePassedSQL+`,`+coursePassedKnownSQL+`,
+		a.is_task_point,a.is_task_point AND NOT `+coursePassedSQL+`,`+courseCheckedAtSQL+`,`+courseAvailabilitySQL+`
+		`+courseProgressRelationsSQL+` WHERE a.course_id=$1 AND a.user_id=$2 AND a.snapshot_version=$3
+		ORDER BY a.chapter_id,a.sort_order,a.external_object_id`, courseID, actor.ID, detail.SnapshotVersion)
 	if err != nil {
 		return detail, errServiceUnavailable
 	}
 	defer attachmentRows.Close()
+	detail.TaskPointCount, detail.IncompleteTaskPointCount, detail.ClosedTaskPointCount, detail.ResourceCount = 0, 0, 0, 0
 	for attachmentRows.Next() {
 		var item AttachmentView
 		var chapterID string
 		if err := attachmentRows.Scan(&chapterID, &item.ID, &item.ObjectID, &item.TaskPointID, &item.Kind,
 			&item.Title, &item.DurationSeconds, &item.PlayedSeconds, &item.PlatformPassed, &item.PassedKnown,
-			&item.IsTaskPoint, &item.CountedIncomplete, &item.ProgressCheckedAt); err != nil {
+			&item.IsTaskPoint, &item.CountedIncomplete, &item.ProgressCheckedAt, &item.Availability); err != nil {
 			return detail, errServiceUnavailable
+		}
+		if item.IsTaskPoint {
+			detail.TaskPointCount++
+			if item.CountedIncomplete {
+				detail.IncompleteTaskPointCount++
+				if item.Availability == "closed" {
+					detail.ClosedTaskPointCount++
+				}
+			}
+		} else {
+			detail.ResourceCount++
 		}
 		if position, ok := index[chapterID]; ok {
 			chapters[position].Attachments = append(chapters[position].Attachments, item)

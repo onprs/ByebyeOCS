@@ -1,13 +1,17 @@
 package chaoxing
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -48,10 +52,11 @@ type workQuestion struct {
 }
 
 type workPage struct {
-	Sheet     learning.WorkSheet
-	Form      url.Values
-	Job       workJob
-	Questions []workQuestion
+	Sheet           learning.WorkSheet
+	Form            url.Values
+	Job             workJob
+	Questions       []workQuestion
+	SubmittedReason string
 }
 
 // ReadWork 重新读取当前卡片和测验页面，返回可作答题目与稳定试卷指纹。
@@ -70,7 +75,7 @@ func (p *Platform) ReadWork(ctx context.Context, sessionBytes []byte, task learn
 		return learning.WorkSheet{}, err
 	}
 	defer cleanup()
-	page, err := p.readWorkPage(ctx, session, task)
+	page, err := p.readWorkPage(ctx, session, task, true)
 	if err != nil {
 		return learning.WorkSheet{}, err
 	}
@@ -100,7 +105,7 @@ func (p *Platform) SubmitWork(ctx context.Context, sessionBytes []byte, task lea
 	}
 	defer cleanup()
 	// 提交前重新读取一次当前表单和题目，不能复用调用方缓存。
-	page, err := p.readWorkPage(ctx, session, task)
+	page, err := p.readWorkPage(ctx, session, task, true)
 	if err != nil {
 		return learning.WorkSubmission{}, err
 	}
@@ -122,38 +127,59 @@ func (p *Platform) SubmitWork(ctx context.Context, sessionBytes []byte, task lea
 }
 
 // checkWorkSubmitted 用工作页判断测验是否已提交；测验卡片本身没有完成字段。
-func (p *Platform) checkWorkSubmitted(ctx context.Context, session Session, task learning.PlatformTaskRef) (bool, error) {
-	job, err := p.readWorkJob(ctx, session, task)
+// checkWorkSubmitted 复用执行器的结构化页面判定，只有明确证据才算已提交。
+// 读不到可作答表单或页面结构无法确认时返回 false，交给执行器重新读取；
+// 不能把“没有表单”当成“已经完成”。
+func (p *Platform) checkWorkSubmitted(ctx context.Context, session Session, task learning.PlatformTaskRef) (bool, string, error) {
+	page, err := p.readWorkPage(ctx, session, task, false)
 	if err != nil {
-		return false, err
+		var failure *learning.Failure
+		if errors.As(err, &failure) {
+			switch failure.Class {
+			case learning.FailureVerificationNeeded, learning.FailureIdentityInvalid,
+				learning.FailureForbidden, learning.FailureRateLimited, learning.FailurePlatformClosed:
+				return false, "", err
+			}
+		}
+		return false, "", nil
 	}
-	payload, err := p.do(ctx, session, http.MethodGet, p.options.endpoints.Work, workReadQuery(job), "work_read")
-	if err != nil {
-		return false, err
-	}
-	// 核验只判断“是否已提交”，不要求页面仍是可作答表单；已提交页面通常没有提交字段。
-	visible := htmlNodeText(parseHTMLDocument(payload))
-	if already, failure := classifyWorkPageMessage(visible, payload); failure != nil {
-		return false, failure
-	} else if already {
-		return true, nil
-	}
-	return workPageConfirmedSubmitted(visible), nil
+	return page.Sheet.Submitted, page.SubmittedReason, nil
 }
 
-// workPageConfirmedSubmitted 只认明确的已提交/已批阅标志。
-// 未作答页面也会出现“重做”“作业详情”等模板文字，不能作为完成依据。
+// workPageConfirmedSubmitted 只认带具体结果值的提交或批阅证据。
+// 未作答页面常含“重做”“作业详情”“查看正确答案”“已完成章节”等模板文字，
+// 单独的“本次成绩/我的答案/正确答案/已批阅”标签也不构成提交事实。
 func workPageConfirmedSubmitted(visible string) bool {
+	return workSubmittedReason(visible) != ""
+}
+
+// workSubmittedReason 返回判定为已提交的依据，仅用于诊断日志，不包含页面文字。
+func workSubmittedReason(visible string) string {
 	visible = cleanWorkText(visible)
-	for _, marker := range []string{"已批阅", "本次成绩", "我的答案", "正确答案", "无需重复提交", "已提交过"} {
+	for _, marker := range []string{"无需重复提交", "已提交过", "提交成功", "已提交成功"} {
 		if strings.Contains(visible, marker) {
-			return true
+			return "marker"
 		}
 	}
-	return strings.Contains(visible, "已完成") && !strings.Contains(visible, "未完成")
+	if workReviewedScorePattern.MatchString(visible) {
+		return "reviewed"
+	}
+	// 批阅后的试卷同时给出我的答案和正确答案的具体取值。
+	// 单独的“本次成绩”可能出现在未作答页面的模板里，不能作为完成依据。
+	if workMyAnswerPattern.MatchString(visible) && workRightAnswerPattern.MatchString(visible) {
+		return "answers"
+	}
+	return ""
 }
 
-func (p *Platform) readWorkPage(ctx context.Context, session Session, task learning.PlatformTaskRef) (*workPage, error) {
+var (
+	workScorePattern         = regexp.MustCompile(`本次成绩[^0-9]{0,10}[0-9]`)
+	workReviewedScorePattern = regexp.MustCompile(`已批阅[^0-9]{0,10}[0-9]`)
+	workMyAnswerPattern      = regexp.MustCompile(`我的答案[^A-Za-z0-9对错√×]{0,6}[A-Za-z0-9对错√×]`)
+	workRightAnswerPattern   = regexp.MustCompile(`正确答案[^A-Za-z0-9对错√×]{0,6}[A-Za-z0-9对错√×]`)
+)
+
+func (p *Platform) readWorkPage(ctx context.Context, session Session, task learning.PlatformTaskRef, loadImages bool) (*workPage, error) {
 	job, err := p.readWorkJob(ctx, session, task)
 	if err != nil {
 		return nil, err
@@ -166,15 +192,25 @@ func (p *Platform) readWorkPage(ctx context.Context, session Session, task learn
 	if err != nil {
 		return nil, err
 	}
-	page, err := parseWorkPage(payload, pageURL, job)
+	hasFont := false
+	if base, parseErr := url.Parse(pageURL); parseErr == nil {
+		payload, hasFont = p.ensureSecretFont(ctx, payload, base)
+	}
+	// 只有拿到字体或文本仍含私用区码点时才按加密页处理；
+	// 单纯出现 font-cxsecret 类名的明文页面照常解析。
+	encrypted := hasFont || containsPrivateUse(htmlNodeText(parseHTMLDocument(payload)))
+	page, err := parseWorkPage(payload, pageURL, job, encrypted)
 	if err != nil {
 		return nil, err
 	}
 	if page.Sheet.Submitted {
 		return page, nil
 	}
-	if err := p.loadWorkImages(ctx, session, pageURL, page); err != nil {
-		return nil, err
+	// 仅判断是否已提交时不需要下载题目图片。
+	if loadImages {
+		if err := p.loadWorkImages(ctx, session, pageURL, page); err != nil {
+			return nil, err
+		}
 	}
 	page.Sheet.Fingerprint = workFingerprint(page.Job, page.Form, page.Questions)
 	return page, nil
@@ -301,21 +337,34 @@ func workReadQuery(job workJob) url.Values {
 	}
 }
 
-func parseWorkPage(payload []byte, baseURL string, job workJob) (*workPage, error) {
+func parseWorkPage(payload []byte, baseURL string, job workJob, encrypted bool) (*workPage, error) {
 	root := parseHTMLDocument(payload)
+	// 页面关闭状态不依赖题目字体；截止后保留的答题表单不能触发题库查询。
+	if failure := workControlFailure(root); failure != nil && failure.Class != learning.FailurePlatformClosed {
+		return nil, failure
+	}
+	if failure := workClosedControlFailure(root); failure != nil {
+		if reason := workSubmittedReason(htmlNodeText(root)); !hasWorkEditableControls(root) && reason != "" {
+			return &workPage{Sheet: learning.WorkSheet{Fingerprint: workFingerprint(job, nil, nil), Submitted: true}, Job: job, SubmittedReason: reason}, nil
+		}
+		return nil, failure
+	}
 	// 未作答测验的题干以随机码点渲染；先按字形签名还原，再按正常流程解析。
-	if workPageHasEncryptedFont(payload) {
+	if encrypted {
 		decoder, err := newSecretFontDecoder(payload)
 		if err != nil {
-			return nil, learning.Fail(learning.FailureCapabilityMissing, "测验题目使用字体加密，无法可信解码")
+			// 只透出解码阶段、结构计数与固定原因，便于定位课程差异；不包含题目或字体内容。
+			return nil, learning.Fail(learning.FailureCapabilityMissing,
+				"测验题目使用字体加密，无法可信解码（"+decodeStage(err)+"；"+secretFontDiagnostics(payload)+"）")
 		}
 		if err := rewriteSecretText(root, decoder); err != nil {
-			return nil, learning.Fail(learning.FailureCapabilityMissing, "测验题目使用字体加密，无法可信解码")
+			return nil, learning.Fail(learning.FailureCapabilityMissing,
+				"测验题目使用字体加密，无法可信解码（"+decodeStage(err)+"；"+secretFontDiagnostics(payload)+"）")
 		}
 	}
 	visible := htmlNodeText(root)
 	// 验证控件与错误通知在题目区域之外，必须优先于题目和表单判定识别。
-	if failure := workControlFailure(root); failure != nil {
+	if failure := workControlFailure(root); failure != nil && failure.Class != learning.FailurePlatformClosed {
 		return nil, failure
 	}
 	questionNodes := collectQuestionNodes(root)
@@ -334,15 +383,21 @@ func parseWorkPage(payload []byte, baseURL string, job workJob) (*workPage, erro
 			return nil, failure
 		} else if already {
 			return &workPage{Sheet: learning.WorkSheet{Fingerprint: workFingerprint(job, nil, nil), Submitted: true},
-				Job: job}, nil
+				Job: job, SubmittedReason: "message"}, nil
 		}
 	}
 	controls := form != nil && hasWorkEditableControls(form)
 	fields := form != nil && hasWorkSubmitFields(formValues)
+	if reason := workSubmittedReason(visible); !controls && reason != "" {
+		return &workPage{Sheet: learning.WorkSheet{Fingerprint: workFingerprint(job, nil, nil), Submitted: true}, Form: formValues, Job: job, SubmittedReason: reason}, nil
+	}
+	if failure := workClosedControlFailure(root); failure != nil {
+		return nil, failure
+	}
 	if !controls || !fields {
-		if !controls && workPageAppearsSubmitted(visible) {
+		if reason := workSubmittedReason(visible); !controls && reason != "" {
 			return &workPage{Sheet: learning.WorkSheet{Fingerprint: workFingerprint(job, nil, nil), Submitted: true},
-				Form: formValues, Job: job}, nil
+				Form: formValues, Job: job, SubmittedReason: reason}, nil
 		}
 		if controls && !fields {
 			return nil, learning.Fail(learning.FailureCapabilityMissing, "测验表单缺少必要提交字段")
@@ -350,7 +405,23 @@ func parseWorkPage(payload []byte, baseURL string, job workJob) (*workPage, erro
 		if len(questionNodes) == 0 {
 			return nil, learning.Fail(learning.FailureCapabilityMissing, "测验页面没有可作答题目")
 		}
-		return nil, learning.Fail(learning.FailureCapabilityMissing, "测验页面不是可作答表单")
+		stateWords := []string{"未作答", "未提交", "已结束", "已过期", "已关闭", "未开放", "已截止", "不允许作答"}
+		hits := make([]string, 0, 3)
+		for _, word := range stateWords {
+			if strings.Contains(visible, word) {
+				hits = append(hits, word)
+			}
+		}
+		// 有题目但没有答题控件与提交字段，说明平台已关闭或尚未开放该测验。
+		if len(questionNodes) > 0 && !controls && !fields {
+			return nil, learning.Fail(learning.FailurePlatformClosed,
+				fmt.Sprintf("测验已关闭或当前不可作答（questions=%d ktoken=%t state=%s）",
+					len(questionNodes), job.KToken != "", strings.Join(hits, ",")))
+		}
+		return nil, learning.Fail(learning.FailureCapabilityMissing,
+			fmt.Sprintf("测验页面不是可作答表单（form=%t controls=%t fields=%t questions=%d ktoken=%t enc=%t state=%s）",
+				form != nil, controls, fields, len(questionNodes),
+				job.KToken != "", job.Enc != "", strings.Join(hits, ",")))
 	}
 	if len(questionNodes) == 0 {
 		return nil, learning.Fail(learning.FailureCapabilityMissing, "测验页面没有可作答题目")
@@ -824,7 +895,7 @@ func (p *Platform) postWorkSubmission(ctx context.Context, session Session, page
 		return learning.WorkSubmission{}, learning.Fail(learning.FailureForbidden, "平台拒绝测验提交，已停止")
 	case http.StatusTooManyRequests:
 		return learning.WorkSubmission{}, &learning.Failure{Class: learning.FailureRateLimited,
-			RetryAfter: 30 * time.Second, Detail: "平台限流，已停止测验提交"}
+			RetryAfter: platformRetryAfter(response.Header.Get("Retry-After"), time.Now()), Detail: "平台限流，已停止测验提交"}
 	}
 	if response.StatusCode != http.StatusOK {
 		return learning.WorkSubmission{}, learning.Fail(learning.FailureSubmissionUnknown, "测验提交返回未知状态，请独立核验")
@@ -926,6 +997,8 @@ func workFailureForMessage(message string) *learning.Failure {
 		return nil
 	}
 	switch {
+	case workClosedMessage(message):
+		return learning.Fail(learning.FailurePlatformClosed, "测验已截止或当前不可作答")
 	case strings.Contains(message, "验证码") || strings.Contains(message, "安全验证") ||
 		strings.Contains(message, "请完成验证") || strings.Contains(message, "captcha") ||
 		strings.Contains(message, "请完成人脸识别") || strings.Contains(message, "人脸识别验证"):
@@ -961,12 +1034,55 @@ func workAlreadySubmittedMessage(message string) bool {
 }
 
 func workPageAppearsSubmitted(visible string) bool {
-	visible = cleanWorkText(visible)
-	for _, marker := range []string{"已批阅", "本次成绩", "我的答案", "正确答案", "重做", "作业详情",
-		"无需重复提交", "已提交过"} {
-		if strings.Contains(visible, marker) {
-			return true
+	return workPageConfirmedSubmitted(visible)
+}
+
+// decodeStage 把字形解码错误归类为可安全记录的阶段，避免把字体或题目内容写进日志。
+func decodeStage(err error) string {
+	detail := err.Error()
+	switch {
+	case strings.Contains(detail, "没有内嵌字体样式"):
+		return "未找到内嵌字体样式"
+	case strings.Contains(detail, "缺少声明"), strings.Contains(detail, "不是内联数据"):
+		return "内嵌字体声明无效"
+	case strings.Contains(detail, "内嵌字体数据无效"), strings.Contains(detail, "字体"):
+		return "字体结构无法解析"
+	case strings.Contains(detail, "字形未收录"):
+		return "字形未收录"
+	case len(detail) > 80:
+		return detail[:80]
+	default:
+		return detail
+	}
+}
+
+// secretFontDiagnostics 汇总加密字体相关结构计数，用于定位课程差异。
+// 只输出标签与关键字数量，不包含页面文字、字体数据或题目内容。
+func secretFontDiagnostics(payload []byte) string {
+	lower := bytes.ToLower(payload)
+	count := func(value string) int { return bytes.Count(lower, []byte(value)) }
+	kind := ""
+	if marker := bytes.Index(lower, []byte("secretfont:")); marker >= 0 {
+		end := marker + len("secretfont:")
+		if end+8 <= len(payload) {
+			kind = " kind=" + string(payload[end:end+8])
 		}
 	}
-	return strings.Contains(visible, "已完成") && !strings.Contains(visible, "未完成")
+	if marker := bytes.Index(lower, []byte("secretfont-candidates:")); marker >= 0 {
+		end := marker + len("secretfont-candidates:")
+		if end+3 <= len(payload) {
+			kind += " cand=" + string(payload[end:end+3])
+		}
+	}
+	fontLabel := count("fontlabel")
+	return fmt.Sprintf("style=%d face=%d secret=%d cx=%d b64=%d link=%d fontLabel=%d%s",
+		count("<style"), count("@font-face"), count("font-cxsecret"),
+		count("cxsecretstyle"), count("base64"), count("<link"), fontLabel, kind)
+}
+
+func clipText(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	return value[:limit] + "…"
 }

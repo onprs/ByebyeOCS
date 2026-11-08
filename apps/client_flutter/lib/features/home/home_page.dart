@@ -51,7 +51,7 @@ class HomePage extends ConsumerWidget {
     final sync = ref.watch(courseSyncControllerProvider);
     final pendingPoints = courses.fold<int>(
       0,
-      (sum, course) => sum + course.incompleteTaskPointCount,
+      (sum, course) => sum + course.pendingTaskPoints,
     );
     final featured = _featuredCourse(courses);
     final homeCourses = [...courses]..sort(_compareCourses);
@@ -159,11 +159,13 @@ class HomePage extends ConsumerWidget {
                 onCourses: () => openTab(context, 1, '/courses'),
                 onPlans: () => openTab(context, 2, '/plans'),
               ),
-              if (attention.isNotEmpty) ...[
+              if (attention.isNotEmpty &&
+                  (tasksAsync.valueOrNull?.attentionCount ?? 0) > 0) ...[
                 const SizedBox(height: 16),
                 _AttentionBanner(
                   task: attention.first,
-                  count: attention.length,
+                  count: tasksAsync.valueOrNull?.attentionCount ??
+                      attention.length,
                   onOpen: () => openTab(context, 2, '/plans'),
                 ),
               ],
@@ -307,15 +309,16 @@ class HomePage extends ConsumerWidget {
 // 首页课程按未完成、已完成、待同步、空课程排序，避免空卡片占首位。
 int _courseRank(CourseSummary course) {
   if (course.detailsPending) return 2;
-  if (course.taskPointCount == 0) return 3;
-  if (course.incompleteTaskPointCount > 0) return 0;
+  if (course.isClosed) return 4;
+  if (course.executableTaskPoints == 0) return 3;
+  if (course.pendingTaskPoints > 0) return 0;
   return 1;
 }
 
 int _compareCourses(CourseSummary a, CourseSummary b) {
   final rank = _courseRank(a).compareTo(_courseRank(b));
   if (rank != 0) return rank;
-  return b.incompleteTaskPointCount.compareTo(a.incompleteTaskPointCount);
+  return b.pendingTaskPoints.compareTo(a.pendingTaskPoints);
 }
 
 CourseSummary? _featuredCourse(List<CourseSummary> courses) {
@@ -324,10 +327,9 @@ CourseSummary? _featuredCourse(List<CourseSummary> courses) {
   for (final course in courses) {
     if (course.detailsPending) continue;
     detailed ??= course;
-    if (course.incompleteTaskPointCount > 0 &&
+    if (course.pendingTaskPoints > 0 &&
         (pending == null ||
-            course.incompleteTaskPointCount >
-                pending.incompleteTaskPointCount)) {
+            course.pendingTaskPoints > pending.pendingTaskPoints)) {
       pending = course;
     }
   }
@@ -522,9 +524,9 @@ class _LearningOverview extends StatelessWidget {
                       child: Text(
                         course!.detailsPending
                             ? '课程内容待同步'
-                            : course!.taskPointCount == 0
-                                ? '该课程暂无任务点'
-                                : '平台已确认 ${course!.confirmedTaskPoints} / ${course!.taskPointCount} 个任务点',
+                            : course!.executableTaskPoints == 0
+                                ? '该课程任务点均已关闭'
+                                : '平台已确认 ${course!.confirmedTaskPoints} / ${course!.executableTaskPoints} 个任务点${course!.closedTaskPointCount > 0 ? ' · ${course!.closedTaskPointCount} 个已关闭' : ''}',
                         style: TextStyle(
                           color: colors.text,
                           fontSize: 13,
@@ -533,9 +535,9 @@ class _LearningOverview extends StatelessWidget {
                       ),
                     ),
                     Text(
-                      course!.taskPointCount == 0
+                      course!.executableTaskPoints == 0
                           ? '—'
-                          : '${((course!.confirmedTaskPoints / course!.taskPointCount) * 100).round()}%',
+                          : '${((course!.confirmedTaskPoints / course!.executableTaskPoints) * 100).round()}%',
                       style: TextStyle(
                         color: colors.textSecondary,
                         fontSize: 12,
@@ -548,9 +550,10 @@ class _LearningOverview extends StatelessWidget {
                 ClipRRect(
                   borderRadius: BorderRadius.circular(4),
                   child: LinearProgressIndicator(
-                    value: course!.taskPointCount == 0
+                    value: course!.executableTaskPoints == 0
                         ? 0
-                        : course!.confirmedTaskPoints / course!.taskPointCount,
+                        : course!.confirmedTaskPoints /
+                            course!.executableTaskPoints,
                     minHeight: 6,
                     backgroundColor: colors.border,
                     valueColor: AlwaysStoppedAnimation<Color>(
@@ -950,9 +953,9 @@ class _CourseCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final ratio = course.taskPointCount == 0
+    final ratio = course.executableTaskPoints == 0
         ? 0.0
-        : course.confirmedTaskPoints / course.taskPointCount;
+        : course.confirmedTaskPoints / course.executableTaskPoints;
     return InkWell(
       onTap: onTap,
       borderRadius: colors.cardRadius,
@@ -1034,9 +1037,9 @@ class _CourseCard extends StatelessWidget {
                         child: Text(
                           course.detailsPending
                               ? '课程内容待同步'
-                              : course.taskPointCount == 0
-                                  ? '该课程暂无任务点'
-                                  : '平台已确认 ${course.confirmedTaskPoints} / ${course.taskPointCount}',
+                              : course.executableTaskPoints == 0
+                                  ? '该课程任务点均已关闭'
+                                  : '平台已确认 ${course.confirmedTaskPoints} / ${course.executableTaskPoints}',
                           style: TextStyle(
                             color: colors.textSecondary,
                             fontSize: 12,
@@ -1044,7 +1047,8 @@ class _CourseCard extends StatelessWidget {
                         ),
                       ),
                       Text(
-                        course.detailsPending || course.taskPointCount == 0
+                        course.detailsPending ||
+                                course.executableTaskPoints == 0
                             ? '—'
                             : '${(ratio * 100).round()}%',
                         style: TextStyle(
@@ -1084,7 +1088,7 @@ class _CourseCard extends StatelessWidget {
                         child: Text(
                           course.allConfirmed
                               ? '任务点已全部确认'
-                              : '${course.incompleteTaskPointCount} 个任务点待完成',
+                              : '${course.pendingTaskPoints} 个任务点待完成${course.closedTaskPointCount > 0 ? ' · ${course.closedTaskPointCount} 个已关闭' : ''}',
                           style: TextStyle(
                             color: course.allConfirmed
                                 ? colors.success

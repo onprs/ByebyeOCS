@@ -32,20 +32,27 @@ func (s *Service) saveCourseSummaries(ctx context.Context, job *courseSyncJob, a
 		}
 		batch := &pgx.Batch{}
 		for _, course := range courses {
+			platformState := course.PlatformState
+			if platformState != "active" && platformState != "closed" {
+				platformState = "unknown"
+			}
 			batch.Queue(`INSERT INTO public.learning_courses
 				(id,user_id,provider,identity_namespace,identity_fingerprint,external_course_id,
-				 external_class_id,external_cpi,cycle_key,title,teacher,term,updated_at,cover_source_url)
-				VALUES ($1,$2,'chaoxing',$3,$4,$5,$6,$7,'current',COALESCE(NULLIF($8,''),$5),$9,$10,$11,$12)
+				 external_class_id,external_cpi,cycle_key,title,teacher,term,updated_at,cover_source_url,
+				 platform_state,platform_state_checked_at)
+				VALUES ($1,$2,'chaoxing',$3,$4,$5,$6,$7,'current',COALESCE(NULLIF($8,''),$5),$9,$10,$11,$12,$14,$11)
 				ON CONFLICT (user_id,provider,external_course_id,external_class_id,cycle_key)
 				DO UPDATE SET title=COALESCE(NULLIF($8,''),learning_courses.title),
 				 teacher=COALESCE(NULLIF($9,''),learning_courses.teacher),
 				 term=COALESCE(NULLIF($10,''),learning_courses.term), external_cpi=EXCLUDED.external_cpi,
 				 cover_source_url=CASE WHEN $13 THEN EXCLUDED.cover_source_url ELSE learning_courses.cover_source_url END,
+				 platform_state=EXCLUDED.platform_state,
+				 platform_state_checked_at=EXCLUDED.platform_state_checked_at,
 				 updated_at=EXCLUDED.updated_at, version=learning_courses.version+1`,
 				newID(), account.UserID, account.Namespace, account.Fingerprint,
 				course.ExternalCourseID, course.ExternalClassID, course.CPI,
 				truncate(course.Title, 200), truncate(course.Teacher, 128), truncate(course.Term, 64), now,
-				truncate(course.CoverURL, 2048), course.CoverKnown)
+				truncate(course.CoverURL, 2048), course.CoverKnown, platformState)
 		}
 		if err := tx.SendBatch(ctx, batch).Close(); err != nil {
 			return errServiceUnavailable
@@ -79,7 +86,10 @@ func (s *Service) completedSyncCourses(ctx context.Context, job courseSyncJob) (
 		JOIN public.learning_course_snapshots snapshot ON snapshot.course_id=c.id AND snapshot.user_id=c.user_id
 			AND snapshot.version=c.snapshot_version
 		WHERE c.user_id=$1 AND c.cycle_key='current' AND c.snapshot_version>0 AND c.synced_at>=$2
-			AND ($3='' OR snapshot.adapter=$3)`, job.UserID, threshold, s.opts.Platform.Capabilities().Adapter)
+			AND ($3='' OR snapshot.adapter=$3)
+			AND NOT EXISTS (SELECT 1 FROM public.learning_chapters ch
+				WHERE ch.course_id=c.id AND ch.user_id=c.user_id
+				AND ch.snapshot_version=c.snapshot_version AND ch.availability='closed')`, job.UserID, threshold, s.opts.Platform.Capabilities().Adapter)
 	if err != nil {
 		return nil, errServiceUnavailable
 	}

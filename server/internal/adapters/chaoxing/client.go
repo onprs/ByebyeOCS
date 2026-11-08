@@ -424,7 +424,7 @@ func (p *Platform) CheckTask(ctx context.Context, sessionBytes []byte, ref learn
 		}
 		if attachment.Kind == "quiz" {
 			// 测验卡片没有完成字段时，只能以工作页是否已提交/已批阅为准。
-			submitted, err := p.checkWorkSubmitted(ctx, session, ref)
+			submitted, reason, err := p.checkWorkSubmitted(ctx, session, ref)
 			if err != nil {
 				return learning.PlatformCheck{Status: learning.CheckUnknown, CheckedAt: time.Now().UTC(),
 					Source: "chaoxing.work"}, err
@@ -434,6 +434,9 @@ func (p *Platform) CheckTask(ctx context.Context, sessionBytes []byte, ref learn
 				workCheck.Status = learning.CheckConfirmed
 				workCheck.Passed = true
 				workCheck.Note = "测验已提交或已批阅"
+				if reason != "" {
+					workCheck.Note += "(" + reason + ")"
+				}
 				return workCheck, nil
 			}
 			workCheck.Status = learning.CheckUnconfirmed

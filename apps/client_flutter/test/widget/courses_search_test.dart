@@ -40,4 +40,50 @@ void main() {
     await settle(tester);
     expect(find.text('设计思维与创新方法'), findsWidgets);
   });
+
+  testWidgets('课程卡片把已关闭任务点从待完成中排除并单独标注', (tester) async {
+    final course = <String, dynamic>{
+      ...coursesFixture.first,
+      'task_point_count': 10,
+      'incomplete_task_point_count': 4,
+      'closed_task_point_count': 2,
+    };
+    final server = TestServer(
+      overrides: {
+        'GET /api/v1/courses': (_) async => jsonResponse({
+              'items': [course],
+              'next_cursor': '',
+            }),
+      },
+    );
+
+    await pumpTestPage(tester, const CoursesPage(), handler: server.call);
+
+    expect(find.textContaining('2 个任务点待完成'), findsOneWidget);
+    expect(find.textContaining('2 个已关闭'), findsWidgets);
+  });
+
+  testWidgets('已结束课程显示独立状态且不计待完成', (tester) async {
+    final course = <String, dynamic>{
+      ...coursesFixture.first,
+      'task_point_count': 10,
+      'incomplete_task_point_count': 4,
+      'closed_task_point_count': 0,
+      'platform_state': 'closed',
+    };
+    final server = TestServer(
+      overrides: {
+        'GET /api/v1/courses': (_) async => jsonResponse({
+              'items': [course],
+              'next_cursor': '',
+            }),
+      },
+    );
+
+    await pumpTestPage(tester, const CoursesPage(), handler: server.call);
+
+    expect(find.text('已结束'), findsOneWidget);
+    expect(find.textContaining('课程已结束，不再派发任务'), findsOneWidget);
+    expect(find.textContaining('个任务点待完成'), findsNothing);
+  });
 }

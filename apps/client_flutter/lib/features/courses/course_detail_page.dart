@@ -60,9 +60,9 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
   Widget _buildDetail(BuildContext context, CourseDetail detail) {
     final colors = context.colors;
     final course = detail.summary;
-    final progress = course.taskPointCount == 0
+    final progress = course.executableTaskPoints == 0
         ? 0.0
-        : course.confirmedTaskPoints / course.taskPointCount;
+        : course.confirmedTaskPoints / course.executableTaskPoints;
     final allResources =
         detail.chapters.expand((chapter) => chapter.resources).toList();
     final body = Column(
@@ -111,11 +111,15 @@ class _CourseDetailPageState extends ConsumerState<CourseDetailPage> {
                         Text(
                           [
                             course.term,
+                            if (course.isClosed) '课程已结束',
                             course.detailsPending
                                 ? '章节待同步'
                                 : '${course.chapterCount} 章节',
                             if (!course.detailsPending)
                               '${course.taskPointCount} 个任务点',
+                            if (!course.detailsPending &&
+                                course.closedTaskPointCount > 0)
+                              '${course.closedTaskPointCount} 个已关闭',
                           ].whereType<String>().join(' · '),
                           style: TextStyle(
                             color: colors.textSecondary,
@@ -482,12 +486,17 @@ class _ChapterTileState extends State<_ChapterTile> {
                   ),
                   const SizedBox(width: 10),
                   Text(
-                    node.taskPointCount == 0
-                        ? '无任务点'
-                        : '${node.confirmedCount} / ${node.taskPointCount}',
+                    chapter.isClosed
+                        ? '已关闭'
+                        : node.taskPointCount == 0
+                            ? '无任务点'
+                            : node.executableTaskPointCount == 0
+                                ? '${node.closedCount} 个已关闭'
+                                : '${node.confirmedCount} / ${node.executableTaskPointCount}${node.closedCount > 0 ? ' · ${node.closedCount} 个已关闭' : ''}',
                     style: TextStyle(
-                      color: node.taskPointCount > 0 &&
-                              node.confirmedCount == node.taskPointCount
+                      color: node.executableTaskPointCount > 0 &&
+                              node.confirmedCount ==
+                                  node.executableTaskPointCount
                           ? colors.success
                           : colors.textSecondary,
                       fontSize: 12,
@@ -506,7 +515,7 @@ class _ChapterTileState extends State<_ChapterTile> {
                 child: Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    '本章没有内容条目',
+                    chapter.isClosed ? '本章已关闭，暂不可访问' : '本章没有内容条目',
                     style: TextStyle(
                       color: colors.textSecondary,
                       fontSize: 13,
@@ -565,24 +574,30 @@ class _AttachmentRow extends StatelessWidget {
             tone: StatusTone.neutral,
             compact: true,
           )
-        : confirmed
+        : attachment.isClosed
             ? const StatusPill(
-                label: '平台已确认',
-                tone: StatusTone.success,
+                label: '已关闭',
+                tone: StatusTone.neutral,
                 compact: true,
-                icon: Icons.check,
-              )
-            : attachment.countedIncomplete
+                icon: Icons.lock_outline)
+            : confirmed
                 ? const StatusPill(
-                    label: '待完成',
-                    tone: StatusTone.warning,
+                    label: '平台已确认',
+                    tone: StatusTone.success,
                     compact: true,
+                    icon: Icons.check,
                   )
-                : const StatusPill(
-                    label: '待确认',
-                    tone: StatusTone.neutral,
-                    compact: true,
-                  );
+                : attachment.countedIncomplete
+                    ? const StatusPill(
+                        label: '待完成',
+                        tone: StatusTone.warning,
+                        compact: true,
+                      )
+                    : const StatusPill(
+                        label: '待确认',
+                        tone: StatusTone.neutral,
+                        compact: true,
+                      );
     return InkWell(
       onTap: onTap,
       child: Padding(
@@ -656,7 +671,11 @@ class _TaskPointFacts extends StatelessWidget {
           _fact(
             context,
             '平台确认',
-            confirmed ? '已确认通过' : '尚未确认',
+            attachment.isClosed
+                ? '已关闭'
+                : confirmed
+                    ? '已确认通过'
+                    : '尚未确认',
           ),
           const SizedBox(height: 8),
           _fact(
@@ -749,7 +768,7 @@ class _CourseSummaryCard extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      course.detailsPending || course.taskPointCount == 0
+                      course.detailsPending || course.executableTaskPoints == 0
                           ? '—'
                           : '${(progress * 100).round()}%',
                       style: TextStyle(
@@ -762,8 +781,8 @@ class _CourseSummaryCard extends StatelessWidget {
                     Text(
                       course.detailsPending
                           ? '待同步'
-                          : course.taskPointCount == 0
-                              ? '暂无任务点'
+                          : course.executableTaskPoints == 0
+                              ? '任务点均已关闭'
                               : '平台已确认',
                       style: TextStyle(
                         color: colors.textSecondary,
@@ -781,17 +800,23 @@ class _CourseSummaryCard extends StatelessWidget {
               _stat(
                   context,
                   '已确认',
-                  course.detailsPending
+                  course.detailsPending || course.isClosed
                       ? '—'
                       : '${course.confirmedTaskPoints}'),
               _stat(
                   context,
                   '待完成',
-                  course.detailsPending
+                  course.detailsPending || course.isClosed
                       ? '—'
-                      : '${course.incompleteTaskPointCount}'),
-              _stat(context, '任务点',
-                  course.detailsPending ? '—' : '${course.taskPointCount}'),
+                      : '${course.pendingTaskPoints}'),
+              _stat(
+                  context,
+                  '任务点',
+                  course.detailsPending || course.isClosed
+                      ? '—'
+                      : '${course.executableTaskPoints}'),
+              if (course.closedTaskPointCount > 0)
+                _stat(context, '已关闭', '${course.closedTaskPointCount}'),
             ],
           ),
           const SizedBox(height: 12),

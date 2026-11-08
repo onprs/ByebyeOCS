@@ -1,10 +1,13 @@
 import '../api/json.dart';
 
 class Page<T> {
-  const Page({required this.items, this.nextCursor});
+  const Page(
+      {required this.items, this.nextCursor, this.totalCount, this.taskMeta});
 
   final List<T> items;
   final String? nextCursor;
+  final int? totalCount;
+  final Map<String, dynamic>? taskMeta;
 
   bool get hasMore => nextCursor != null && nextCursor!.isNotEmpty;
 }
@@ -31,5 +34,7 @@ Page<T> parsePage<T>(
   return Page<T>(
     items: items,
     nextCursor: readString(map, 'next_cursor'),
+    totalCount: readInt(map, 'total_count'),
+    taskMeta: asObject(map['task_meta']),
   );
 }

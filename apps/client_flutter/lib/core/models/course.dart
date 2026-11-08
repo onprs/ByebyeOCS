@@ -9,11 +9,13 @@ class CourseSummary {
     this.chapterCount = 0,
     this.taskPointCount = 0,
     this.incompleteTaskPointCount = 0,
+    this.closedTaskPointCount = 0,
     this.resourceCount = 0,
     this.snapshotVersion,
     this.syncedAt,
     this.stale = false,
     this.coverUrl,
+    this.platformState = 'unknown',
   });
 
   final String id;
@@ -23,10 +25,14 @@ class CourseSummary {
   final int chapterCount;
   final int taskPointCount;
   final int incompleteTaskPointCount;
+  final int closedTaskPointCount;
   final int resourceCount;
   final int? snapshotVersion;
   final DateTime? syncedAt;
   final bool stale;
+
+  /// 平台课程状态：active / closed / unknown。closed 表示课程已结束。
+  final String platformState;
 
   /// API 根目录相对的封面地址；缺失或为空表示没有可用来源。
   final String? coverUrl;
@@ -34,10 +40,33 @@ class CourseSummary {
   int get confirmedTaskPoints =>
       (taskPointCount - incompleteTaskPointCount).clamp(0, taskPointCount);
 
+  /// 可执行任务点：已结束课程和已关闭任务点都不再派发。
+  int get executableTaskPoints {
+    if (isClosed) return 0;
+    final value = taskPointCount - closedTaskPointCount;
+    return value > 0 ? value : 0;
+  }
+
+  /// 待完成任务点：已关闭任务点和已结束课程都不算待完成。
+  int get pendingTaskPoints {
+    if (isClosed) return 0;
+    final value = incompleteTaskPointCount - closedTaskPointCount;
+    return value > 0 ? value : 0;
+  }
+
+  bool get isClosed => platformState == 'closed';
+
+  /// 平台已关闭或未开放的任务点；这类任务不能当作可执行内容。
+  bool get hasClosedTaskPoints => closedTaskPointCount > 0;
+
   /// 课程概要已发布，但章节和个人进度尚未完整读取。
   bool get detailsPending => snapshotVersion == 0;
 
-  bool get allConfirmed => taskPointCount > 0 && incompleteTaskPointCount == 0;
+  bool get allConfirmed =>
+      !isClosed &&
+      taskPointCount > 0 &&
+      incompleteTaskPointCount == 0 &&
+      closedTaskPointCount == 0;
 
   static CourseSummary parse(Map<String, dynamic> map) {
     return CourseSummary(
@@ -49,11 +78,13 @@ class CourseSummary {
       taskPointCount: readInt(map, 'task_point_count') ?? 0,
       incompleteTaskPointCount:
           readInt(map, 'incomplete_task_point_count') ?? 0,
+      closedTaskPointCount: readInt(map, 'closed_task_point_count') ?? 0,
       resourceCount: readInt(map, 'resource_count') ?? 0,
       snapshotVersion: readInt(map, 'snapshot_version'),
       syncedAt: readDateTime(map, 'synced_at'),
       stale: readBool(map, 'stale') ?? false,
       coverUrl: readString(map, 'cover_url'),
+      platformState: readString(map, 'platform_state') ?? 'unknown',
     );
   }
 }
@@ -103,6 +134,7 @@ class CourseAttachment {
     this.isTaskPoint = false,
     this.countedIncomplete = false,
     this.progressCheckedAt,
+    this.availability = 'unknown',
   });
 
   final String id;
@@ -111,6 +143,7 @@ class CourseAttachment {
   final String title;
   final String? kind;
   final double? durationSeconds;
+
   /// 平台卡片返回的学习时长，不构成真实播放证据。
   final double? playedSeconds;
   final bool platformPassed;
@@ -118,6 +151,12 @@ class CourseAttachment {
   final bool isTaskPoint;
   final bool countedIncomplete;
   final DateTime? progressCheckedAt;
+  final String availability;
+
+  bool get isClosed =>
+      isTaskPoint &&
+      availability == 'closed' &&
+      !(passedKnown && platformPassed);
 
   String get kindLabel {
     return switch (kind) {
@@ -150,6 +189,7 @@ class CourseAttachment {
       isTaskPoint: readBool(map, 'is_task_point') ?? false,
       countedIncomplete: readBool(map, 'counted_incomplete') ?? false,
       progressCheckedAt: readDateTime(map, 'progress_checked_at'),
+      availability: readString(map, 'availability') ?? 'unknown',
     );
   }
 }
@@ -162,6 +202,7 @@ class CourseChapter {
     this.parentExternalId,
     this.number = '',
     this.isGroup = false,
+    this.availability = 'unknown',
     this.sortOrder = 0,
     this.attachments = const <CourseAttachment>[],
   });
@@ -171,6 +212,8 @@ class CourseChapter {
   final String? parentExternalId;
   final String number;
   final bool isGroup;
+  final String availability;
+  bool get isClosed => availability == 'closed';
   final String title;
 
   String get displayTitle => number.isEmpty ? title : '$number $title';
@@ -187,8 +230,11 @@ class CourseChapter {
       .where((item) => item.passedKnown && item.platformPassed)
       .length;
 
-  int get incompleteCount =>
-      taskPoints.where((item) => item.countedIncomplete).length;
+  int get incompleteCount => taskPoints
+      .where((item) => item.countedIncomplete && !item.isClosed)
+      .length;
+
+  int get closedCount => taskPoints.where((item) => item.isClosed).length;
 
   static CourseChapter parse(Map<String, dynamic> map) {
     return CourseChapter(
@@ -197,6 +243,7 @@ class CourseChapter {
       parentExternalId: readString(map, 'parent_external_id'),
       number: readString(map, 'number') ?? '',
       isGroup: readBool(map, 'is_group') ?? false,
+      availability: readString(map, 'availability') ?? 'unknown',
       title: readString(map, 'title') ?? '未命名章节',
       sortOrder: readInt(map, 'sort_order') ?? 0,
       attachments: asList(map['attachments'])
@@ -222,13 +269,18 @@ class CourseChapterNode {
                 .where((item) =>
                     item.isTaskPoint && item.passedKnown && item.platformPassed)
                 .length +
-            children.fold(0, (total, child) => total + child.confirmedCount);
+            children.fold(0, (total, child) => total + child.confirmedCount),
+        closedCount = chapter.closedCount +
+            children.fold(0, (total, child) => total + child.closedCount);
 
   final CourseChapter chapter;
   final int depth;
   final List<CourseChapterNode> children;
   final int taskPointCount;
   final int confirmedCount;
+  final int closedCount;
+
+  int get executableTaskPointCount => taskPointCount - closedCount;
 
   Iterable<CourseChapterNode> get subtree sync* {
     yield this;

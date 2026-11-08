@@ -64,20 +64,8 @@ func (r *httpExecution) prepare(ctx context.Context) error {
 	if !protocolID(text(r.defaults["userid"])) || !protocolID(text(r.defaults["fid"])) {
 		return learning.Fail(learning.FailureCapabilityMissing, "任务缺少平台下发的用户或机构上下文")
 	}
-	for _, key := range []string{"chapterCapture", "state", "isFiled"} {
-		if value, exists := r.defaults[key]; exists {
-			limit, valid := protocolNumber(value)
-			if !valid || limit != 0 {
-				return learning.Fail(learning.FailureVerificationNeeded, "任务含尚未支持的验证或执行限制")
-			}
-		}
-	}
-	if value, exists := r.task["jumpTimePointList"]; exists && value != nil {
-		list, known := value.([]any)
-		if !known || len(list) != 0 {
-			return learning.Fail(learning.FailureVerificationNeeded, "任务包含交互时间点，需要本人完成")
-		}
-	}
+	// 播放器抓拍、归档和跳转配置不参与 HTTP 进度协议，不构成服务端验证拒绝。
+	// 实际验证码、身份失效与进度响应中的强制校验仍按真实响应处理。
 	// 平台会在卡片里下发 randomFaceCaptureTimeList（抓拍时间点），2026-11 实测该字段
 	// 只驱动播放器前端弹窗，进度上报与完成判定都不校验 videoFaceCaptureEnc，
 	// 因此不因该字段停止任务；真正要求本人验证时由平台响应转人工。
@@ -162,9 +150,7 @@ func (r *httpExecution) prepare(ctx context.Context) error {
 		}
 		r.engine = &engine
 	}
-	if err := r.checkTimeline(ctx); err != nil {
-		return err
-	}
+	// 交互时间轴只服务播放器，不属于原生进度协议的前置条件。
 	return nil
 }
 
@@ -183,51 +169,6 @@ func protocolNumber(value any) (float64, bool) {
 		return 0, false
 	}
 	return parsed, !math.IsNaN(parsed) && !math.IsInf(parsed, 0)
-}
-
-func (r *httpExecution) checkTimeline(ctx context.Context) error {
-	mid := text(r.task["mid"])
-	if mid == "" {
-		mid = text(mapValue(r.task["property"])["mid"])
-	}
-	if mid == "" {
-		return nil
-	}
-	if !protocolID(mid) {
-		return learning.Fail(learning.FailureCapabilityMissing, "视频交互标识无效")
-	}
-	target, err := url.Parse(text(r.defaults["initdataUrl"]))
-	if err != nil || target.RawQuery != "" || target.Fragment != "" || !r.executor.platform.factory.allowedURL(target) {
-		return learning.Fail(learning.FailureCapabilityMissing, "平台未提供可信的视频交互查询入口")
-	}
-	target.RawQuery = url.Values{"mid": {mid}, "cpi": {r.request.Task.Course.CPI}, "classid": {r.request.Task.Course.ExternalClassID}, "courseid": {r.request.Task.Course.ExternalCourseID}}.Encode()
-	body, err := r.get(ctx, target.String(), "timeline")
-	if err != nil {
-		return err
-	}
-	var payload any
-	if json.Unmarshal(body, &payload) != nil {
-		return learning.Fail(learning.FailureCapabilityMissing, "视频交互响应不可用")
-	}
-	count, recognized := 0, false
-	switch value := payload.(type) {
-	case []any:
-		count, recognized = len(value), true
-	case map[string]any:
-		for _, key := range []string{"data", "objects", "events"} {
-			if list, ok := value[key].([]any); ok {
-				count += len(list)
-				recognized = true
-			}
-		}
-	}
-	if !recognized {
-		return learning.Fail(learning.FailureCapabilityMissing, "视频交互结构未确认")
-	}
-	if count > 0 {
-		return learning.Fail(learning.FailureVerificationNeeded, "视频含交互任务，需要人工处理")
-	}
-	return nil
 }
 
 func (r *httpExecution) report(ctx context.Context, position, event int) (bool, error) {

@@ -15,12 +15,12 @@ extension AnswerModeValue on AnswerMode {
       };
 
   String get shortLabel => switch (this) {
-        AnswerMode.cacheFirst => '精确缓存优先',
+        AnswerMode.cacheFirst => '优先复用答案',
         AnswerMode.alwaysLlm => '每次调用模型',
       };
 
   String get description => switch (this) {
-        AnswerMode.cacheFirst => '仅复用完全一致的精确缓存；命中时不会调用模型，token 为 0。',
+        AnswerMode.cacheFirst => '遇到完全相同的原题时直接复用已有答案，不调用模型，token 记为 0。',
         AnswerMode.alwaysLlm => '忽略已有答案，每次都调用所选模型，按实际 token 记录用量。',
       };
 
@@ -128,6 +128,51 @@ class PlanScope {
   }
 }
 
+/// 安排级任务汇总；计数来自服务端绑定任务，不受列表分页影响。
+class PlanProgress {
+  const PlanProgress({
+    this.total = 0,
+    this.completed = 0,
+    this.active = 0,
+    this.attention = 0,
+    this.closed = 0,
+    this.cancelled = 0,
+    this.percent = 0,
+  });
+
+  final int total;
+  final int completed;
+  final int active;
+  final int attention;
+  final int closed;
+  final int cancelled;
+  final int percent;
+
+  bool get hasTasks => total > 0;
+  int get history => completed + cancelled;
+
+  /// 取消与已关闭的任务不参与完成率分母。
+  int get executableTotal {
+    final excluded = cancelled + closed;
+    return total > excluded ? total - excluded : 0;
+  }
+  double get value => (percent / 100).clamp(0.0, 1.0).toDouble();
+
+  static PlanProgress parse(Object? raw) {
+    final map = asObject(raw);
+    if (map == null) return const PlanProgress();
+    return PlanProgress(
+      total: readInt(map, 'total') ?? 0,
+      completed: readInt(map, 'completed') ?? 0,
+      active: readInt(map, 'active') ?? 0,
+      attention: readInt(map, 'attention') ?? 0,
+      closed: readInt(map, 'closed') ?? 0,
+      cancelled: readInt(map, 'cancelled') ?? 0,
+      percent: readInt(map, 'percent') ?? 0,
+    );
+  }
+}
+
 class LearningPlan {
   const LearningPlan({
     required this.id,
@@ -142,6 +187,7 @@ class LearningPlan {
     this.createdAt,
     this.updatedAt,
     this.questionPolicy = const QuestionPolicy(),
+    this.progress = const PlanProgress(),
   });
 
   final String id;
@@ -156,6 +202,7 @@ class LearningPlan {
   final DateTime? createdAt;
   final DateTime? updatedAt;
   final QuestionPolicy questionPolicy;
+  final PlanProgress progress;
 
   bool get isActive => status == 'active';
   bool get isPaused => status == 'paused';
@@ -189,6 +236,7 @@ class LearningPlan {
       createdAt: readDateTime(map, 'created_at'),
       updatedAt: readDateTime(map, 'updated_at'),
       questionPolicy: QuestionPolicy.parse(map['question_policy']),
+      progress: PlanProgress.parse(map['progress']),
     );
   }
 }

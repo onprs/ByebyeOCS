@@ -120,13 +120,14 @@ func writeCourseSnapshotContent(ctx context.Context, tx pgx.Tx, account accountR
 			chapterID = newID()
 		}
 		batch.Queue(`INSERT INTO public.learning_chapters
-			(id,course_id,user_id,snapshot_version,external_id,parent_external_id,title,sort_order,chapter_number,is_group)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+			(id,course_id,user_id,snapshot_version,external_id,parent_external_id,title,sort_order,chapter_number,is_group,availability)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
 			ON CONFLICT (id) DO UPDATE SET snapshot_version=EXCLUDED.snapshot_version,
 				parent_external_id=EXCLUDED.parent_external_id,title=EXCLUDED.title,
-				sort_order=EXCLUDED.sort_order,chapter_number=EXCLUDED.chapter_number,is_group=EXCLUDED.is_group`,
+				sort_order=EXCLUDED.sort_order,chapter_number=EXCLUDED.chapter_number,is_group=EXCLUDED.is_group,
+				availability=EXCLUDED.availability`,
 			chapterID, courseID, account.UserID, version, chapter.ExternalID, chapter.ParentExternalID,
-			truncate(chapter.Title, 200), position, chapter.Number, chapter.IsGroup)
+			truncate(chapter.Title, 200), position, chapter.Number, chapter.IsGroup, chapterAvailability(chapter))
 		for index, attachment := range dedupeSnapshotAttachments(chapter.Attachments) {
 			// 有界批次避免大课程在内存中积攒全部 SQL 和参数。
 			if batch.Len() >= 256 {
@@ -146,6 +147,11 @@ func writeCourseSnapshotContent(ctx context.Context, tx pgx.Tx, account accountR
 				return counts, Fail(FailureInvalidTask, "课程快照附件卡片页码无效")
 			}
 			attachmentID, played := newID(), nonNegative(attachment.PlayedSeconds)
+			progressAt := checkedAt(attachment.PassedKnown, now)
+			if chapter.Closed {
+				// 历史附件只保留原核验时间，不把本次目录读取当成新的进度事实。
+				progressAt = attachment.ProgressCheckedAt
+			}
 			batch.Queue(`INSERT INTO public.learning_attachments
 				(id,course_id,chapter_id,user_id,snapshot_version,external_object_id,task_point_id,
 				 kind,title,duration_seconds,played_seconds,platform_passed,passed_known,
@@ -154,7 +160,7 @@ func writeCourseSnapshotContent(ctx context.Context, tx pgx.Tx, account accountR
 				attachmentID, courseID, chapterID, account.UserID, version, attachment.ObjectID, attachment.TaskPointID,
 				truncate(attachment.Kind, 32), truncate(attachment.Title, 200), nonNegative(attachment.DurationSeconds),
 				played, attachment.Passed, attachment.PassedKnown, taskPoint, taskPoint && !attachment.Passed,
-				index, attachment.CardIndex, checkedAt(attachment.PassedKnown, now))
+				index, attachment.CardIndex, progressAt)
 			if !taskPoint {
 				continue
 			}

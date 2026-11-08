@@ -57,6 +57,12 @@ func workImageReference(source string) (workImageRef, error) {
 	if !target.IsAbs() {
 		return workImageRef{}, nil
 	}
+	// 平台历史题图仍可能给出 HTTP 地址；仅将自有可信域升级到 HTTPS。
+	host := strings.ToLower(target.Hostname())
+	if target.Scheme == "http" && (host == "chaoxing.com" || strings.HasSuffix(host, ".chaoxing.com")) && target.User == nil && (target.Port() == "" || target.Port() == "80") {
+		target.Scheme = "https"
+		target.Host = host
+	}
 	if target.Scheme != "https" || target.User != nil || target.Fragment != "" {
 		return workImageRef{}, learning.Fail(learning.FailureCapabilityMissing, "测验图片地址不在允许范围")
 	}

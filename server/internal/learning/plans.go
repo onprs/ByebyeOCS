@@ -51,6 +51,18 @@ type PlanScopeView struct {
 	Chapters  []PlanChapter `json:"chapters,omitempty"`
 }
 
+// PlanProgressView 汇总当前安排版本绑定任务的状态，供用户端显示总进度。
+// 计数不受任务列表分页影响；取消的任务不参与完成率计算。
+type PlanProgressView struct {
+	Total     int `json:"total"`
+	Completed int `json:"completed"`
+	Active    int `json:"active"`
+	Attention int `json:"attention"`
+	Closed    int `json:"closed"`
+	Cancelled int `json:"cancelled"`
+	Percent   int `json:"percent"`
+}
+
 type PlanView struct {
 	ID                string             `json:"id"`
 	Name              string             `json:"name"`
@@ -60,6 +72,7 @@ type PlanView struct {
 	TaskTypes         []string           `json:"task_types"`
 	Scope             PlanScopeView      `json:"scope"`
 	QuestionPolicy    QuestionPolicyView `json:"question_policy"`
+	Progress          PlanProgressView   `json:"progress"`
 	CurrentRevisionID string             `json:"current_revision_id"`
 	CreatedAt         time.Time          `json:"created_at"`
 	UpdatedAt         time.Time          `json:"updated_at"`
@@ -171,6 +184,16 @@ func (s *Service) validatePlanOwnership(ctx context.Context, tx pgx.Tx, userID s
 	}
 	if courseCount != len(input.CourseIDs) {
 		return validation("课程不存在或不属于当前用户")
+	}
+	// 已结束课程不能再加入安排，避免安排创建后无法派发任何任务。
+	var closedCount int
+	if err := tx.QueryRow(ctx, `SELECT count(*) FROM public.learning_courses
+		WHERE user_id = $1 AND id = ANY($2::uuid[]) AND platform_state = 'closed'`,
+		userID, input.CourseIDs).Scan(&closedCount); err != nil {
+		return errServiceUnavailable
+	}
+	if closedCount > 0 {
+		return validation("所选课程已结束，请移除后再保存安排")
 	}
 	if input.Scope.Kind == "selected" {
 		courseIDs, chapterIDs := make([]string, 0, len(input.Scope.Chapters)), make([]string, 0, len(input.Scope.Chapters))
@@ -320,6 +343,9 @@ func (s *Service) readPlanTx(ctx context.Context, tx pgx.Tx, planID, userID stri
 	if err := populatePlanChapters(ctx, tx, userID, items); err != nil {
 		return PlanView{}, err
 	}
+	if err := populatePlanProgress(ctx, tx, userID, items); err != nil {
+		return PlanView{}, err
+	}
 	return items[0], nil
 }
 
@@ -330,7 +356,8 @@ func (s *Service) ListPlans(ctx context.Context, actor Actor, filter PlanFilter)
 		return Page[PlanView]{}, err
 	}
 	rows, err := s.pool.Query(ctx, planViewSelect+`
-		WHERE p.user_id=$1 AND ($2::timestamptz IS NULL OR (p.created_at,p.id)<($2::timestamptz,$3::uuid))
+		WHERE p.user_id=$1 AND p.status <> 'archived'
+		  AND ($2::timestamptz IS NULL OR (p.created_at,p.id)<($2::timestamptz,$3::uuid))
 		ORDER BY p.created_at DESC,p.id DESC LIMIT $4`, actor.ID, nullableTime(position.Time), nullableID(position.ID), limit+1)
 	if err != nil {
 		return Page[PlanView]{}, errServiceUnavailable
@@ -354,6 +381,9 @@ func (s *Service) ListPlans(ctx context.Context, actor Actor, filter PlanFilter)
 		page.NextCursor = encodeCursor(last.CreatedAt, last.ID)
 	}
 	if err := populatePlanChapters(ctx, s.pool, actor.ID, page.Items); err != nil {
+		return Page[PlanView]{}, err
+	}
+	if err := populatePlanProgress(ctx, s.pool, actor.ID, page.Items); err != nil {
 		return Page[PlanView]{}, err
 	}
 	return page, nil
@@ -475,6 +505,87 @@ func (s *Service) ControlPlan(ctx context.Context, actor Actor, planID, idempote
 			}
 		}
 		result = PlanControlResult{PlanID: planID, Status: status, Applied: true}
+		return nil
+	})
+	if err != nil {
+		return PlanControlResult{}, err
+	}
+	return result, nil
+}
+
+// DeletePlan 按归档删除安排：安排从用户列表移除，后续不再派发新任务，
+// 已有任务、绑定与账本保留，避免破坏历史引用。
+func (s *Service) DeletePlan(ctx context.Context, actor Actor, planID, idempotencyKey string) (PlanControlResult, error) {
+	if !web.ValidID(planID) {
+		return PlanControlResult{}, errNotFound
+	}
+	if !validIdempotencyKey(idempotencyKey) {
+		return PlanControlResult{}, validation("必须提供有效的 Idempotency-Key")
+	}
+	hash := requestHash("delete", planID)
+	var result PlanControlResult
+	err := s.withTx(ctx, func(tx pgx.Tx) error {
+		var planUser string
+		if err := tx.QueryRow(ctx, `SELECT user_id::text FROM public.learning_plans WHERE id = $1`, planID).Scan(&planUser); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotFound
+			}
+			return errServiceUnavailable
+		}
+		if actor.Kind == "user" && planUser != actor.ID {
+			return errNotFound
+		}
+		var commandID, storedStatus, storedHash string
+		err := tx.QueryRow(ctx, `SELECT id::text, status, request_hash FROM public.learning_plan_commands
+			WHERE plan_id = $1 AND actor_kind = $2 AND actor_id = $3 AND idempotency_key = $4
+			FOR UPDATE`, planID, actor.Kind, actor.ID, idempotencyKey).
+			Scan(&commandID, &storedStatus, &storedHash)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return errServiceUnavailable
+		}
+		if commandID != "" {
+			if storedHash != hash {
+				return errIdempotency
+			}
+			result = PlanControlResult{PlanID: planID, Status: "archived",
+				Applied: storedStatus == "applied"}
+			return nil
+		}
+		if _, err := tx.Exec(ctx, `SELECT 1 FROM public.learning_plans WHERE id = $1 FOR UPDATE`, planID); err != nil {
+			return errServiceUnavailable
+		}
+		now := s.now()
+		tag, err := tx.Exec(ctx, `UPDATE public.learning_plans SET status = 'archived', updated_at = $2
+			WHERE id = $1 AND status <> 'archived'`, planID, now)
+		if err != nil {
+			return errServiceUnavailable
+		}
+		if tag.RowsAffected() == 0 {
+			// 已归档安排不重复记录命令；重复删除返回同一结果。
+			result = PlanControlResult{PlanID: planID, Status: "archived", Applied: false}
+			return nil
+		}
+		commandID = newID()
+		if _, err := tx.Exec(ctx, `INSERT INTO public.learning_plan_commands
+			(id, plan_id, user_id, actor_kind, actor_id, kind, idempotency_key, request_hash,
+			 status, result_code, reason, applied_at)
+			VALUES ($1, $2, $3, $4, $5, 'delete', $6, $7, 'applied', 'ok', '', $8)`,
+			commandID, planID, planUser, actor.Kind, actor.ID, idempotencyKey, hash, now); err != nil {
+			return errServiceUnavailable
+		}
+		if err := writeOutbox(ctx, tx, outboxEvent{
+			Topic: "plan.deleted", ResourceType: "plan", ResourceID: planID, UserID: planUser,
+			Payload: map[string]any{"status": "archived"},
+		}); err != nil {
+			return err
+		}
+		if actor.Kind == "admin" {
+			if err := writeAudit(ctx, tx, AuditEvent{Actor: actor, Action: "learning.plan.delete",
+				ResourceType: "plan", ResourceID: planID, Reason: "管理员删除安排"}); err != nil {
+				return err
+			}
+		}
+		result = PlanControlResult{PlanID: planID, Status: "archived", Applied: true}
 		return nil
 	})
 	if err != nil {

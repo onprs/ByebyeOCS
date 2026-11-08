@@ -572,7 +572,7 @@ function RuntimePanel() {
       setError(new Error('请填写整数并发和毫秒值。'))
       return
     }
-    if (input.global_concurrency < 1 || input.global_concurrency > 64) { setError(new Error('全局执行名额必须在 1 到 64 之间。')); return }
+    if (input.global_concurrency < 1 || input.global_concurrency > 256) { setError(new Error('全局执行名额必须在 1 到 256 之间。')); return }
     if (input.account_concurrency < 1 || input.account_concurrency > input.global_concurrency) { setError(new Error('账号默认并发必须在 1 到全局名额之间。')); return }
     if (input.chapter_concurrency < 1 || input.chapter_concurrency > 64) { setError(new Error('单课同步并发必须在 1 到 64 之间。')); return }
     if (input.request_interval_ms < 50 || input.request_interval_ms > 2000) { setError(new Error('请求间隔必须在 50 到 2000 毫秒之间。')); return }
@@ -619,10 +619,10 @@ function RuntimePanel() {
                     <p>保存后立即更新运行中的执行与同步参数，并持久化到服务配置。</p>
                   </div>
                   <div className="field-row">
-                    <Field label="全局执行名额" hint="同一进程最多同时执行的任务数，1–64。">
+                    <Field label="全局执行名额" hint="同一进程最多同时执行的任务数，1–256。">
                       <input value={form.global_concurrency} onChange={event => update('global_concurrency', event.target.value)} inputMode="numeric" disabled={saving} />
                     </Field>
-                    <Field label="账号默认并发" hint="同一账号最多同时执行的不同任务数，不能超过全局名额。">
+                    <Field label="账号默认并发" hint="同一账号最多同时执行的不同任务数，不能超过全局名额；实际并发取两者较小值，单账号部署时请把它设为期望并发。">
                       <input value={form.account_concurrency} onChange={event => update('account_concurrency', event.target.value)} inputMode="numeric" disabled={saving} />
                     </Field>
                   </div>

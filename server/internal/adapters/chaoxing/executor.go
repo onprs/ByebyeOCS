@@ -54,7 +54,7 @@ func NewHTTPExecutor(options HTTPExecutorOptions) (*HTTPExecutor, error) {
 	if options.ConfirmGrace == 0 {
 		options.ConfirmGrace = 10 * time.Minute
 	}
-	if options.Concurrency < 1 || options.Concurrency > 64 || options.MaxDuration < time.Minute || options.MaxDuration > 24*time.Hour || options.ConfirmGrace < time.Second || options.ConfirmGrace > 30*time.Minute {
+	if options.Concurrency < 1 || options.Concurrency > 256 || options.MaxDuration < time.Minute || options.MaxDuration > 24*time.Hour || options.ConfirmGrace < time.Second || options.ConfirmGrace > 30*time.Minute {
 		return nil, errors.New("原生请求执行预算无效")
 	}
 	if options.now == nil {
@@ -273,6 +273,11 @@ func (r *httpExecution) execute(ctx context.Context) (learning.ExecutionResult, 
 	if err != nil {
 		return result, err
 	}
+	if r.request.ReportObservation != nil {
+		if err := r.request.ReportObservation(ctx, result.Observation); err != nil {
+			return result, err
+		}
+	}
 	if passed {
 		result.Completed = true
 		return result, nil
@@ -301,6 +306,11 @@ func (r *httpExecution) execute(ctx context.Context) (learning.ExecutionResult, 
 			return result, err
 		}
 		result = r.observation(position)
+		if r.request.ReportObservation != nil {
+			if err := r.request.ReportObservation(ctx, result.Observation); err != nil {
+				return result, err
+			}
+		}
 		if passed {
 			if position == r.duration {
 				if _, err := r.report(ctx, position, 4); err != nil {

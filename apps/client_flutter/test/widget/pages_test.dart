@@ -239,10 +239,138 @@ void main() {
 
     await pumpTestPage(tester, const PlansPage(), handler: server.call);
 
-    expect(find.text('题库策略已开启'), findsOneWidget);
+    expect(find.text('自动答题已开启'), findsOneWidget);
     expect(find.textContaining('开启后自动查询并提交测验答案'), findsOneWidget);
     expect(find.textContaining('人工确认'), findsNothing);
     expect(find.textContaining('不会自动执行答题'), findsNothing);
+  });
+
+  testWidgets('安排显示后端汇总的总进度，每个任务都有进度条', (tester) async {
+    final planMap = <String, dynamic>{
+      ...planFixture,
+      'progress': {
+        'total': 6,
+        'completed': 2,
+        'active': 2,
+        'attention': 1,
+        'closed': 1,
+        'cancelled': 0,
+        'percent': 40,
+      },
+    };
+    final server = TestServer(
+      overrides: {
+        'GET /api/v1/tasks': (request) async {
+          final page = taskPageFixture(request, taskFixtures);
+          (page['task_meta'] as Map<String, dynamic>)['progress'] =
+              planMap['progress'];
+          return jsonResponse(page);
+        },
+        'GET /api/v1/plans': (_) async => jsonResponse({
+              'items': [planMap],
+              'next_cursor': '',
+            }),
+      },
+    );
+
+    await pumpTestPage(tester, const PlansPage(), handler: server.call);
+
+    expect(find.text('总进度'), findsOneWidget);
+    expect(find.text('已完成 2 / 5 · 40%'), findsOneWidget);
+    expect(find.textContaining('待执行 2 项'), findsOneWidget);
+    expect(find.textContaining('需要处理 1 项'), findsOneWidget);
+    expect(find.textContaining('已关闭 1 项'), findsOneWidget);
+
+    final bars = tester
+        .widgetList<LinearProgressIndicator>(
+          find.byType(LinearProgressIndicator),
+        )
+        .toList(growable: false);
+    expect(bars.any((bar) => bar.value == 0.4), isTrue);
+    expect(bars.length, greaterThanOrEqualTo(3));
+
+    expect(find.text('平台确认完成'), findsNothing);
+    expect(find.text('64%'), findsOneWidget);
+    expect(find.text('等待平台确认'), findsOneWidget);
+  });
+
+  testWidgets('已关闭的测验在任务列表显示明确状态并可重新检查', (tester) async {
+    final taskMap = <String, dynamic>{
+      ...taskFixtures.first,
+      'task_kind': 'quiz',
+      'state': 'needs_attention',
+      'last_error_code': 'quiz_closed',
+    };
+    String? commandBody;
+    final server = TestServer(
+      overrides: {
+        'GET /api/v1/tasks': (request) async =>
+            jsonResponse(taskPageFixture(request, [taskMap])),
+        'POST /api/v1/tasks/t1/controls': (request) async {
+          commandBody = request.body;
+          return jsonResponse({
+            'task_id': 't1',
+            'state': 'pending',
+            'applied': true,
+          });
+        },
+      },
+    );
+
+    await pumpTestPage(tester, const PlansPage(), handler: server.call);
+    await tester.tap(find.text('已关闭 1'));
+    await settle(tester);
+
+    expect(find.text('已关闭'), findsNothing);
+    expect(find.textContaining('测验已关闭或当前不可作答'), findsWidgets);
+    await tester.tap(find.byTooltip('重新调度任务'));
+    await settle(tester);
+    expect(find.text('重新检查测验可用性？'), findsOneWidget);
+    await tester.tap(find.widgetWithText(FilledButton, '重新检查'));
+    await settle(tester);
+
+    expect(commandBody, contains('"action":"redispatch"'));
+  });
+
+  testWidgets('任务安排可从页面删除，删除后保留历史任务记录', (tester) async {
+    var plans = <Map<String, dynamic>>[planFixture];
+    Map<String, String>? deleteHeaders;
+    final server = TestServer(
+      overrides: {
+        'GET /api/v1/plans': (_) async => jsonResponse({
+              'items': plans,
+              'next_cursor': '',
+            }),
+        'DELETE /api/v1/plans/p1': (request) async {
+          deleteHeaders = request.headers;
+          plans = <Map<String, dynamic>>[];
+          return jsonResponse({
+            'plan_id': 'p1',
+            'status': 'archived',
+            'applied': true,
+          });
+        },
+      },
+    );
+
+    await pumpTestPage(tester, const PlansPage(), handler: server.call);
+
+    expect(find.text('删除安排'), findsOneWidget);
+    await tester.tap(find.text('删除安排'));
+    await settle(tester);
+    expect(find.text('删除这条安排？'), findsOneWidget);
+    expect(
+      find.textContaining('已产生的任务、进度和记录都会保留'),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.widgetWithText(FilledButton, '删除安排'));
+    await settle(tester);
+
+    expect(deleteHeaders?['Idempotency-Key'], isNotNull);
+    expect(find.text('安排已删除，已有任务和历史记录保留'), findsOneWidget);
+    expect(find.text('还没有任务安排'), findsOneWidget);
+    expect(find.text('本周学习安排'), findsNothing);
   });
 
   testWidgets('钱包区分待支付、支付成功待入账与已到账', (tester) async {

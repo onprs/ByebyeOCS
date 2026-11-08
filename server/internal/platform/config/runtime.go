@@ -97,7 +97,7 @@ func runtimeDefaults(cfg *Config) {
 	// 回环代理，使登录限流与客户端标识读取真实客户端地址；不信任其他来源。
 	cfg.Server.TrustedProxies = []string{"127.0.0.1/32", "::1/128"}
 	cfg.Storage = Storage{DataDir: "data"}
-	cfg.Learning = Learning{GlobalConcurrency: 4, AccountConcurrency: 1, RequestInterval: 300 * time.Millisecond, ChapterConcurrency: 4}
+	cfg.Learning = Learning{GlobalConcurrency: 4, AccountConcurrency: 4, RequestInterval: 300 * time.Millisecond, ChapterConcurrency: 4}
 	cfg.Questions = Questions{Timeout: 330 * time.Second, Concurrency: 2}
 	cfg.Operations = Operations{DiskProtection: true, RetentionInterval: 24 * time.Hour, ExportMaxBytes: 8 << 20, MaxEventStreams: 64, RequireFreshBackup: true, BackupMaxAge: 15 * time.Minute}
 }
@@ -256,8 +256,8 @@ func validateRuntime(cfg *Config) error {
 	if cfg.Storage.DataDir == "" {
 		return invalid("必须配置数据目录")
 	}
-	if cfg.Learning.GlobalConcurrency < 1 || cfg.Learning.GlobalConcurrency > 64 || cfg.Learning.AccountConcurrency < 1 || cfg.Learning.AccountConcurrency > cfg.Learning.GlobalConcurrency {
-		return invalid("学习并发限额无效")
+	if cfg.Learning.GlobalConcurrency < 1 || cfg.Learning.GlobalConcurrency > 256 || cfg.Learning.AccountConcurrency < 1 || cfg.Learning.AccountConcurrency > cfg.Learning.GlobalConcurrency {
+		return invalid("学习并发限额无效（全局与单账号上限 1–256）")
 	}
 	if cfg.Learning.RequestInterval <= 0 {
 		cfg.Learning.RequestInterval = 300 * time.Millisecond

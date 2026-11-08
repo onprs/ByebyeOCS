@@ -19,10 +19,22 @@ import 'package:byebyeocs_client/features/plans/plans_controller.dart';
 
 import '../helpers.dart';
 
+Page<LearningTask> _page(
+        {required List<LearningTask> items, String? nextCursor}) =>
+    Page<LearningTask>(
+        items: items,
+        nextCursor: nextCursor,
+        totalCount: 11,
+        taskMeta: const {
+          'category': 'current',
+          'progress': {'total': 11, 'active': 11}
+        });
+
 LearningTask _task(String id) {
   return LearningTask.parse(<String, dynamic>{
     ...taskFixtures[0],
     'id': id,
+    'category': 'current',
   });
 }
 
@@ -30,6 +42,7 @@ LearningPlan _plan(String id, String name) {
   return LearningPlan.parse(<String, dynamic>{
     ...planFixture,
     'id': id,
+    'category': 'current',
     'name': name,
   });
 }
@@ -69,6 +82,8 @@ class _PagedPlansRepository extends LearningRepository {
     String? planId,
     String? courseId,
     List<String> states = const <String>[],
+    bool actionable = false,
+    String? category,
     int limit = 50,
   }) {
     taskRequests.add((planId, cursor));
@@ -77,11 +92,11 @@ class _PagedPlansRepository extends LearningRepository {
     }
     if (planId == 'p2') {
       return Future<Page<LearningTask>>.value(
-        Page<LearningTask>(items: <LearningTask>[_task('task-p2')]),
+        _page(items: <LearningTask>[_task('task-p2')]),
       );
     }
     return Future<Page<LearningTask>>.value(
-      Page<LearningTask>(
+      _page(
         items: <LearningTask>[_task('task-p1')],
         nextCursor: 'p1-next',
       ),
@@ -90,7 +105,7 @@ class _PagedPlansRepository extends LearningRepository {
 }
 
 void main() {
-  test('加载更多追加下一页，并在切换安排后丢弃旧游标结果', () async {
+  test('下一页在切换安排后丢弃旧游标结果', () async {
     final repository = _PagedPlansRepository();
     final config =
         const AppConfig(apiBaseUri: null, channel: ClientChannel.web);
@@ -129,7 +144,7 @@ void main() {
         isFalse);
 
     repository.stalePage.complete(
-      Page<LearningTask>(
+      _page(
         items: <LearningTask>[_task('task-p1-stale')],
         nextCursor: 'p1-stale-next',
       ),
@@ -172,7 +187,7 @@ void main() {
 
     await notifier.refresh(silent: true);
     repository.stalePage.complete(
-      Page<LearningTask>(
+      _page(
         items: <LearningTask>[_task('task-p1-stale')],
         nextCursor: 'p1-stale-next',
       ),
@@ -214,7 +229,7 @@ void main() {
 
     container.dispose();
     repository.stalePage.complete(
-      Page<LearningTask>(
+      _page(
         items: <LearningTask>[_task('task-p1-stale')],
         nextCursor: 'p1-stale-next',
       ),
@@ -222,7 +237,7 @@ void main() {
     await loading;
   });
 
-  test('加载更多成功后按游标追加并保留分组所需的任务事实', () async {
+  test('下一页替换当前页并保留任务事实', () async {
     final repository = _PagedPlansRepository();
     final config =
         const AppConfig(apiBaseUri: null, channel: ClientChannel.web);
@@ -247,7 +262,7 @@ void main() {
     await container.read(plansControllerProvider.future);
     // 让翻页立即返回，验证正常追加路径。
     repository.stalePage.complete(
-      Page<LearningTask>(
+      _page(
         items: <LearningTask>[_task('task-p1-older')],
         nextCursor: null,
       ),
@@ -257,7 +272,7 @@ void main() {
     final state = container.read(plansControllerProvider).valueOrNull;
     expect(
       state?.tasks.map((task) => task.id),
-      <String>['task-p1', 'task-p1-older'],
+      <String>['task-p1-older'],
     );
     expect(state?.tasksHasMore, isFalse);
     expect(state?.loadingMoreTasks, isFalse);

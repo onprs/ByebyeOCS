@@ -6,33 +6,39 @@ import '../../app/providers.dart';
 import '../../core/api/api_error.dart';
 import '../../core/models/task.dart';
 import '../../core/realtime/realtime_event.dart';
+import '../../core/repositories/learning_repository.dart';
 
 class HomeTasksState {
   const HomeTasksState({
     this.tasks = const <LearningTask>[],
+    this.attentionCount = 0,
     this.refreshing = false,
     this.error,
   });
 
   final List<LearningTask> tasks;
+  final int attentionCount;
   final bool refreshing;
   final String? error;
 
   HomeTasksState copyWith({
     List<LearningTask>? tasks,
+    int? attentionCount,
     bool? refreshing,
     String? error,
-  }) {
-    return HomeTasksState(
-      tasks: tasks ?? this.tasks,
-      refreshing: refreshing ?? this.refreshing,
-      error: error,
-    );
-  }
+  }) =>
+      HomeTasksState(
+        tasks: tasks ?? this.tasks,
+        attentionCount: attentionCount ?? this.attentionCount,
+        refreshing: refreshing ?? this.refreshing,
+        error: error,
+      );
 }
 
 class HomeTasksController extends AsyncNotifier<HomeTasksState> {
   StreamSubscription<RealtimeEvent>? _events;
+  Timer? _refreshTimer;
+  bool _refreshQueued = false;
 
   /// 账户代次：重建后旧账户的在途刷新不得写入新用户状态。
   int _accountEpoch = 0;
@@ -42,36 +48,53 @@ class HomeTasksController extends AsyncNotifier<HomeTasksState> {
     ++_accountEpoch;
     ref.watch(sessionEpochProvider);
     final user = ref.watch(currentUserProvider);
+    final repository = ref.watch(learningRepositoryProvider);
     _events = ref.watch(realtimeServiceProvider).events.listen(_onEvent);
     ref.onDispose(() {
+      ++_accountEpoch;
+      _refreshTimer?.cancel();
       _events?.cancel();
       _events = null;
+      _refreshQueued = false;
     });
     if (user == null) return const HomeTasksState();
-    final page =
-        await ref.watch(learningRepositoryProvider).fetchTasks(limit: 30);
-    return HomeTasksState(tasks: page.items);
+    return _fetch(repository);
+  }
+
+  Future<HomeTasksState> _fetch(LearningRepository repository) async {
+    final pages = await Future.wait([
+      repository.fetchTasks(actionable: true, limit: 1),
+      repository.fetchTasks(states: const ['confirmed'], limit: 10),
+    ]);
+    final attention = pages.first.items.where((task) =>
+        (task.state == LearningTaskState.needsAttention ||
+            task.state == LearningTaskState.failed) &&
+        !task.isClosed);
+    final byId = <String, LearningTask>{
+      for (final task in [
+        ...attention,
+        ...pages.last.items
+            .where((task) => task.state == LearningTaskState.confirmed),
+      ])
+        task.id: task,
+    };
+    return HomeTasksState(
+      tasks: byId.values.toList(growable: false),
+      attentionCount: pages.first.totalCount ?? attention.length,
+    );
   }
 
   void _onEvent(RealtimeEvent event) {
-    final current = state.valueOrNull;
-    if (current == null) return;
-    if (event.type == 'client.resume') {
-      unawaited(refresh(silent: true));
-      return;
-    }
-    if (event.type == 'client.poll') {
-      if (current.tasks.any((task) =>
-          task.state.isActive ||
-          task.state == LearningTaskState.waitingVerification)) {
-        unawaited(refresh(silent: true));
-      }
-      return;
-    }
-    if (event.type.startsWith('task.') ||
+    if (event.type == 'task.observation') return;
+    if (event.type == 'client.resumed' ||
+        event.type == 'client.poll' ||
+        event.type.startsWith('task.') ||
         event.type.startsWith('plan.') ||
         event.type.startsWith('course.')) {
-      unawaited(refresh(silent: true));
+      _refreshTimer ??= Timer(const Duration(milliseconds: 400), () {
+        _refreshTimer = null;
+        unawaited(refresh(silent: true));
+      });
     }
   }
 
@@ -81,29 +104,29 @@ class HomeTasksController extends AsyncNotifier<HomeTasksState> {
       ref.invalidateSelf();
       return;
     }
-    if (current.refreshing) return;
+    if (current.refreshing) {
+      _refreshQueued = true;
+      return;
+    }
     final epoch = _accountEpoch;
     state = AsyncData(current.copyWith(refreshing: true, error: null));
     try {
-      final page =
-          await ref.read(learningRepositoryProvider).fetchTasks(limit: 30);
+      final loaded = await _fetch(ref.read(learningRepositoryProvider));
       if (epoch != _accountEpoch) return;
-      final latest = state.valueOrNull ?? current;
-      state = AsyncData(
-        latest.copyWith(tasks: page.items, refreshing: false, error: null),
-      );
+      state = AsyncData(loaded);
     } on ApiException catch (error) {
       if (epoch != _accountEpoch) return;
-      final latest = state.valueOrNull ?? current;
       state = AsyncData(
-        latest.copyWith(refreshing: false, error: error.userMessage),
-      );
+          current.copyWith(refreshing: false, error: error.userMessage));
     } catch (_) {
       if (epoch != _accountEpoch) return;
-      final latest = state.valueOrNull ?? current;
-      state = AsyncData(
-        latest.copyWith(refreshing: false, error: '任务摘要暂时无法刷新'),
-      );
+      state =
+          AsyncData(current.copyWith(refreshing: false, error: '任务摘要暂时无法刷新'));
+    } finally {
+      if (epoch == _accountEpoch && _refreshQueued) {
+        _refreshQueued = false;
+        unawaited(refresh(silent: true));
+      }
     }
   }
 }

@@ -290,6 +290,8 @@ class LearningTask {
     this.failureCount = 0,
     this.verificationAttempts = 0,
     this.lastErrorCode,
+    this.availability = 'unknown',
+    this.category,
     this.nextAttemptAt,
     this.confirmedAt,
     this.platform = const PlatformFact(),
@@ -320,6 +322,15 @@ class LearningTask {
   final int failureCount;
   final int verificationAttempts;
   final String? lastErrorCode;
+  final String availability;
+  final String? category;
+
+  bool get isClosed =>
+      state != LearningTaskState.confirmed &&
+      state != LearningTaskState.cancelled &&
+      (availability == 'closed' ||
+          const ['quiz_closed', 'course_closed', 'chapter_closed']
+              .contains(lastErrorCode));
   final DateTime? nextAttemptAt;
   final DateTime? confirmedAt;
   final PlatformFact platform;
@@ -382,6 +393,8 @@ class LearningTask {
       failureCount: readInt(map, 'failure_count') ?? 0,
       verificationAttempts: readInt(map, 'verification_attempts') ?? 0,
       lastErrorCode: readString(map, 'last_error_code'),
+      availability: readString(map, 'availability') ?? 'unknown',
+      category: readString(map, 'category'),
       nextAttemptAt: readDateTime(map, 'next_attempt_at'),
       confirmedAt: readDateTime(map, 'confirmed_at'),
       platform: PlatformFact.parse(map['platform']),

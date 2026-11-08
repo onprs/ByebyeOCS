@@ -209,7 +209,7 @@ func New(pool *pgxpool.Pool, options Options) (*Service, error) {
 	}
 	maxOut := options.MaxOutputTokens
 	if maxOut == 0 {
-		maxOut = 2048
+		maxOut = 32768
 	}
 	maxImages := options.MaxImages
 	if maxImages == 0 {

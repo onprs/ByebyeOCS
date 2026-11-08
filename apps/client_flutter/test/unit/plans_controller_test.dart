@@ -19,6 +19,17 @@ import 'package:byebyeocs_client/features/plans/plans_controller.dart';
 
 import '../helpers.dart';
 
+Page<LearningTask> _page(
+        {required List<LearningTask> items, String? nextCursor}) =>
+    Page<LearningTask>(
+        items: items,
+        nextCursor: nextCursor,
+        totalCount: 11,
+        taskMeta: const {
+          'category': 'current',
+          'progress': {'total': 11, 'active': 11}
+        });
+
 class _ControlledLearningRepository extends LearningRepository {
   _ControlledLearningRepository()
       : super(
@@ -62,6 +73,8 @@ class _ControlledLearningRepository extends LearningRepository {
     String? planId,
     String? courseId,
     List<String> states = const <String>[],
+    bool actionable = false,
+    String? category,
     int limit = 50,
   }) {
     requestedPlanIds.add(planId);
@@ -73,9 +86,10 @@ class _ControlledLearningRepository extends LearningRepository {
     final task = LearningTask.parse(<String, dynamic>{
       ...fixture,
       'id': planId == 'p2' ? 'task-p2' : 'task-p1',
+      'category': 'current',
     });
     return Future<Page<LearningTask>>.value(
-      Page<LearningTask>(items: <LearningTask>[task]),
+      _page(items: <LearningTask>[task]),
     );
   }
 }
@@ -126,11 +140,12 @@ void main() {
 
     // p1 的旧响应此时才返回，不能写入 p2 的界面。
     repository.p1Refresh.complete(
-      Page<LearningTask>(
+      _page(
         items: <LearningTask>[
           LearningTask.parse(<String, dynamic>{
             ...taskFixtures[0],
             'id': 'task-p1-stale',
+            'category': 'current',
           }),
         ],
       ),
@@ -180,11 +195,12 @@ void main() {
     expect(repository.requestedPlanIds.where((id) => id == 'p1').length, 3);
 
     repository.p1Refresh.complete(
-      Page<LearningTask>(
+      _page(
         items: <LearningTask>[
           LearningTask.parse(<String, dynamic>{
             ...taskFixtures[0],
             'id': 'task-p1-reloaded',
+            'category': 'current',
           }),
         ],
       ),

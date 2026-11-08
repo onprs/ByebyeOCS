@@ -37,6 +37,7 @@ func (s *Service) Register(mux *http.ServeMux) {
 	user("POST /api/v1/plans", s.handleCreatePlan)
 	user("GET /api/v1/plans/{id}", s.handleGetPlan)
 	user("PATCH /api/v1/plans/{id}", s.handleUpdatePlan)
+	user("DELETE /api/v1/plans/{id}", s.handleDeletePlan)
 	user("POST /api/v1/plans/{id}/controls", s.handleControlPlan)
 	user("GET /api/v1/tasks", s.handleListTasks)
 	user("GET /api/v1/tasks/{id}", s.handleGetTask)
@@ -46,6 +47,7 @@ func (s *Service) Register(mux *http.ServeMux) {
 	admin("GET /admin/api/v1/users", PermissionRead, s.handleAdminListUsers)
 	admin("GET /admin/api/v1/users/{id}", PermissionRead, s.handleAdminGetUser)
 	admin("GET /admin/api/v1/tasks", PermissionRead, s.handleAdminListTasks)
+	admin("GET /admin/api/v1/tasks/{id}", PermissionRead, s.handleAdminGetTask)
 	admin("POST /admin/api/v1/account-operations", PermissionAccounts, s.handleAdminAccountOperations)
 	admin("POST /admin/api/v1/task-operations", PermissionTasks, s.handleAdminTaskOperations)
 }
@@ -237,6 +239,16 @@ func (s *Service) handleUpdatePlan(w http.ResponseWriter, r *http.Request, actor
 	web.JSON(w, r, http.StatusOK, plan)
 }
 
+func (s *Service) handleDeletePlan(w http.ResponseWriter, r *http.Request, actor Actor) {
+	result, err := s.DeletePlan(r.Context(), actor, r.PathValue("id"),
+		r.Header.Get("Idempotency-Key"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	web.JSON(w, r, http.StatusOK, result)
+}
+
 func (s *Service) handleControlPlan(w http.ResponseWriter, r *http.Request, actor Actor) {
 	var body struct {
 		Action string `json:"action"`
@@ -280,7 +292,7 @@ func taskFilterFromQuery(r *http.Request, limit int) TaskFilter {
 		}
 	}
 	return TaskFilter{States: states, CourseID: query.Get("course_id"), PlanID: query.Get("plan_id"),
-		UserID: query.Get("user_id"), Limit: limit, Cursor: query.Get("cursor")}
+		UserID: query.Get("user_id"), Limit: limit, Cursor: query.Get("cursor"), Actionable: query.Get("actionable") == "true", Category: query.Get("category")}
 }
 
 func (s *Service) handleGetTask(w http.ResponseWriter, r *http.Request, actor Actor) {
@@ -358,6 +370,15 @@ func (s *Service) handleAdminListTasks(w http.ResponseWriter, r *http.Request, a
 		return
 	}
 	web.JSON(w, r, http.StatusOK, page)
+}
+
+func (s *Service) handleAdminGetTask(w http.ResponseWriter, r *http.Request, actor Actor) {
+	detail, err := s.AdminGetTask(r.Context(), actor, r.PathValue("id"))
+	if err != nil {
+		writeError(w, r, err)
+		return
+	}
+	web.JSON(w, r, http.StatusOK, detail)
 }
 
 func (s *Service) handleAdminTaskOperations(w http.ResponseWriter, r *http.Request, actor Actor) {

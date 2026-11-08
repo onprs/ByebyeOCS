@@ -122,6 +122,7 @@ class _TaskDetailBodyState extends ConsumerState<_TaskDetailBody> {
     final platform = widget.state.detail.latestPlatform;
     final media = widget.state.detail.latestMedia;
     final colors = context.colors;
+    final closed = taskIsClosed(task);
     return Column(
       children: [
         Flexible(
@@ -140,9 +141,15 @@ class _TaskDetailBodyState extends ConsumerState<_TaskDetailBody> {
                         crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
                           StatusPill(
-                            label: task.state.label,
-                            tone: taskStateTone(task.state),
-                            icon: taskStateIcon(task.state),
+                            label: closed
+                                ? taskClosedLabel(task)
+                                : task.state.label,
+                            tone: closed
+                                ? StatusTone.neutral
+                                : taskStateTone(task.state),
+                            icon: closed
+                                ? Icons.event_busy_outlined
+                                : taskStateIcon(task.state),
                           ),
                           if (task.estimate.hasValue)
                             const StatusPill(
@@ -184,9 +191,13 @@ class _TaskDetailBodyState extends ConsumerState<_TaskDetailBody> {
                     task.state == LearningTaskState.failed) ...[
                   const SizedBox(height: 14),
                   InlineNotice(
-                    tone: StatusTone.danger,
-                    icon: Icons.report_problem_outlined,
-                    message: '${taskFailureLabel(task)}。相关操作已停止，不会自动重试。',
+                    tone: closed ? StatusTone.neutral : StatusTone.danger,
+                    icon: closed
+                        ? Icons.event_busy_outlined
+                        : Icons.report_problem_outlined,
+                    message: closed
+                        ? '${taskFailureLabel(task)}。平台重新开放后可用重新调度再试。'
+                        : '${taskFailureLabel(task)}。相关操作已停止，不会自动重试。',
                   ),
                 ],
                 if (widget.state.error != null) ...[
@@ -320,13 +331,25 @@ class _TaskDetailBodyState extends ConsumerState<_TaskDetailBody> {
   Future<void> _command(String action) async {
     if (_sending) return;
     if (action == 'cancel' || action == 'redispatch') {
+      final closed =
+          action == 'redispatch' && widget.state.detail.task.isClosed;
       final confirmed = await showConfirmDialog(
         context,
-        title: action == 'cancel' ? '取消这个任务？' : '重新调度这个任务？',
+        title: action == 'cancel'
+            ? '取消这个任务？'
+            : closed
+                ? '重新检查可用性？'
+                : '重新调度这个任务？',
         message: action == 'cancel'
             ? '取消后任务会进入已取消状态；尚未消费的预占费用会自动释放。'
-            : '重新调度会让任务重新进入队列，不会重复创建任务或直接产生新扣款。',
-        confirmLabel: action == 'cancel' ? '取消任务' : '重新调度',
+            : closed
+                ? '会重新检查平台状态；仍然关闭时保持已关闭状态，不会执行或扣费。'
+                : '重新调度会让任务重新进入队列，不会重复创建任务或直接产生新扣款。',
+        confirmLabel: action == 'cancel'
+            ? '取消任务'
+            : closed
+                ? '重新检查'
+                : '重新调度',
         danger: action == 'cancel',
       );
       if (!confirmed || !mounted) return;
@@ -742,7 +765,7 @@ class _Actions extends StatelessWidget {
             task.state == LearningTaskState.cancelled)) {
       actions.add(
         AsyncButton(
-          label: '重新调度',
+          label: task.isClosed ? '重新检查可用性' : '重新调度',
           icon: Icons.refresh,
           busy: busy,
           variant: AsyncButtonVariant.outline,
@@ -980,6 +1003,7 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
         ),
         DropdownButtonFormField<String>(
           initialValue: selected?.id,
+          style: TextStyle(fontSize: 14, color: colors.text),
           decoration: const InputDecoration(
             labelText: '查询模型',
             isDense: true,
@@ -989,9 +1013,12 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
               DropdownMenuItem(
                 value: offering.id,
                 child: Text(
-                  '${offering.displayName} · ${offering.capabilityLabel} · ${offering.priceLabel}',
+                  offering.supportsImages
+                      ? '${offering.displayName} · 支持图片题'
+                      : offering.displayName,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
+                  style: TextStyle(fontSize: 14, color: colors.text),
                 ),
               ),
           ],
@@ -1023,12 +1050,12 @@ class _QuestionPanelState extends ConsumerState<_QuestionPanel> {
           segments: [
             ButtonSegment(
               value: AnswerMode.cacheFirst,
-              label: const Text('优先使用已有答案'),
+              label: const Text('优先复用答案'),
               enabled: cacheAllowed,
             ),
             const ButtonSegment(
               value: AnswerMode.alwaysLlm,
-              label: Text('每次都使用模型'),
+              label: Text('每次调用模型'),
             ),
           ],
           selected: {mode},

@@ -77,3 +77,56 @@ func populatePlanChapters(ctx context.Context, q interface {
 	}
 	return nil
 }
+
+// populatePlanProgress 批量汇总当前版本绑定任务的状态，避免任务列表分页造成计数偏差。
+func populatePlanProgress(ctx context.Context, q interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}, user string, items []PlanView) error {
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(items))
+	index := make(map[string]int, len(items))
+	for i := range items {
+		items[i].Progress = PlanProgressView{}
+		ids = append(ids, items[i].ID)
+		index[items[i].ID] = i
+	}
+	rows, err := q.Query(ctx, `SELECT b.plan_id::text,`+taskProgressTotalsSQL+`
+		FROM public.learning_plan_task_bindings b
+		JOIN public.learning_tasks t ON t.id = b.task_id AND t.user_id = b.user_id
+		JOIN public.learning_plans p ON p.id = b.plan_id AND p.user_id = b.user_id
+			AND p.current_revision_id = b.plan_revision_id
+		JOIN public.learning_plan_revisions r ON r.id=p.current_revision_id AND r.user_id=p.user_id
+		WHERE p.user_id = $1 AND p.id = ANY($2::uuid[]) AND `+taskMatchesRevisionSQL+`
+		GROUP BY b.plan_id`, user, ids)
+	if err != nil {
+		return errServiceUnavailable
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var progress PlanProgressView
+		if err := rows.Scan(&id, &progress.Total, &progress.Completed, &progress.Active,
+			&progress.Attention, &progress.Closed, &progress.Cancelled); err != nil {
+			return errServiceUnavailable
+		}
+		progress.Percent = planProgressPercent(progress)
+		if i, ok := index[id]; ok {
+			items[i].Progress = progress
+		}
+	}
+	if rows.Err() != nil {
+		return errServiceUnavailable
+	}
+	return nil
+}
+
+// planProgressPercent 按可执行任务计算完成率，取消和平台已关闭的任务不计入分母。
+func planProgressPercent(progress PlanProgressView) int {
+	denominator := progress.Total - progress.Cancelled - progress.Closed
+	if denominator <= 0 {
+		return 0
+	}
+	return (progress.Completed*100 + denominator/2) / denominator
+}

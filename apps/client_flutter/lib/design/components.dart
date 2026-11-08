@@ -297,45 +297,60 @@ class SectionCardHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    return Padding(
-      padding: padding,
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Semantics(
-                  header: true,
-                  child: Text(
-                    title,
-                    style: TextStyle(
-                      color: colors.text,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                if (subtitle != null) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    subtitle!,
-                    style: TextStyle(
-                      color: colors.textSecondary,
-                      fontSize: 13,
-                      height: 1.5,
-                    ),
-                  ),
-                ],
-              ],
+    final header = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Semantics(
+          header: true,
+          child: Text(
+            title,
+            style: TextStyle(
+              color: colors.text,
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
             ),
           ),
-          if (action != null) ...[
-            const SizedBox(width: 12),
-            action!,
-          ],
+        ),
+        if (subtitle != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            subtitle!,
+            style: TextStyle(
+              color: colors.textSecondary,
+              fontSize: 13,
+              height: 1.5,
+            ),
+          ),
         ],
+      ],
+    );
+    return Padding(
+      padding: padding,
+      child: Builder(
+        builder: (context) {
+          if (action == null) {
+            return header;
+          }
+          // 窄屏把操作区放到标题下方，避免多枚筛选按钮撑破标题行。
+          if (context.isNarrow) {
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                header,
+                const SizedBox(height: 12),
+                action!,
+              ],
+            );
+          }
+          return Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(child: header),
+              const SizedBox(width: 12),
+              action!,
+            ],
+          );
+        },
       ),
     );
   }

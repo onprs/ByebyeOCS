@@ -80,7 +80,7 @@ func buildExecutor(cfg config.Config, settings *runtimeconfig.Learning) (learnin
 	if !cfg.Learning.ExecutionEnabled {
 		return nil, nil
 	}
-	executor, err := chaoxing.NewHTTPExecutor(chaoxing.HTTPExecutorOptions{Enabled: true, Authorized: cfg.Learning.ExecutionEvidenceReference != "", Concurrency: 64, RequestInterval: cfg.Learning.RequestInterval, Runtime: settings})
+	executor, err := chaoxing.NewHTTPExecutor(chaoxing.HTTPExecutorOptions{Enabled: true, Authorized: cfg.Learning.ExecutionEvidenceReference != "", Concurrency: 256, RequestInterval: cfg.Learning.RequestInterval, Runtime: settings})
 	if err != nil {
 		return nil, fault.New("not_configured", "原生请求执行配置无效")
 	}

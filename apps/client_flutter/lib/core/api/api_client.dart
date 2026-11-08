@@ -93,6 +93,19 @@ class ApiClient {
     );
   }
 
+  Future<ApiResponse> delete(
+    String path, {
+    bool authenticated = true,
+    String? idempotencyKey,
+  }) {
+    return _send(
+      'DELETE',
+      path,
+      authenticated: authenticated,
+      idempotencyKey: idempotencyKey,
+    );
+  }
+
   Future<ApiResponse> _send(
     String method,
     String path, {

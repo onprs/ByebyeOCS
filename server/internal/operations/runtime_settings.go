@@ -111,8 +111,8 @@ func (s *Service) updateRuntimeSettings(w http.ResponseWriter, r *http.Request) 
 	if input.RequestIntervalFloorMS != nil {
 		floor = *input.RequestIntervalFloorMS
 	}
-	if global < 1 || global > 64 {
-		web.Error(w, r, 422, "validation_failed", "全局执行名额必须在 1 到 64 之间")
+	if global < 1 || global > 256 {
+		web.Error(w, r, 422, "validation_failed", "全局执行名额必须在 1 到 256 之间")
 		return
 	}
 	if account < 1 || account > global {

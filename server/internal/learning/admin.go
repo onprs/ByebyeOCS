@@ -85,6 +85,9 @@ type Dashboard struct {
 		ActiveAttempts int            `json:"active_attempts"`
 		MediaEvidence  int            `json:"media_evidence_available"`
 		AwaitingVerify int            `json:"awaiting_verification"`
+		// Closed 是因平台关闭或课程结束而停止的任务；Actionable 才是真正需要人工处理的数量。
+		Closed     int `json:"closed"`
+		Actionable int `json:"actionable_attention"`
 	} `json:"tasks"`
 	Courses struct {
 		Total int `json:"total"`
@@ -141,13 +144,18 @@ func (s *Service) AdminDashboard(ctx context.Context, actor Actor) (Dashboard, e
 		(SELECT count(*) FROM public.learning_course_syncs WHERE status = 'needs_attention'),
 		(SELECT count(*) FROM public.users),
 		(SELECT count(*) FROM public.learning_accounts),
-		(SELECT count(*) FROM public.learning_accounts WHERE blocked_code <> '' OR (blocked_until IS NOT NULL AND blocked_until > now()))`,
+		(SELECT count(*) FROM public.learning_accounts WHERE blocked_code <> '' OR (blocked_until IS NOT NULL AND blocked_until > now())),
+		(SELECT count(*) FROM public.learning_tasks WHERE state = 'needs_attention'
+			AND last_error_code IN ('course_closed', 'quiz_closed', 'chapter_closed')),
+		(SELECT count(*) FROM public.learning_tasks WHERE state = 'needs_attention'
+			AND last_error_code NOT IN ('course_closed', 'quiz_closed', 'chapter_closed'))`,
 		result.GeneratedAt.Add(-s.opts.CourseSnapshotTTL)).Scan(
 		&result.Tasks.ActiveAttempts, &result.Tasks.MediaEvidence,
 		&result.Courses.Total, &result.Courses.Stale,
 		&result.Plans.Active, &result.Plans.Paused,
 		&result.Syncs.Queued, &result.Syncs.Running, &result.Syncs.NeedsAttention,
-		&result.Accounts.Total, &result.Accounts.Bound, &result.Accounts.Blocked); err != nil {
+		&result.Accounts.Total, &result.Accounts.Bound, &result.Accounts.Blocked,
+		&result.Tasks.Closed, &result.Tasks.Actionable); err != nil {
 		return result, errServiceUnavailable
 	}
 	result.Capabilities = s.Capabilities()

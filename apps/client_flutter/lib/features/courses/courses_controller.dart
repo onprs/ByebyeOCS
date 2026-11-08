@@ -47,27 +47,42 @@ class CourseListState {
 
 class CoursesController extends AsyncNotifier<CourseListState> {
   Page<CourseSummary>? _page;
-  StreamSubscription<RealtimeEvent>? _events;
+  Timer? _refreshTimer;
+  bool _refreshQueued = false;
+  bool _disposed = false;
+  int _epoch = 0;
 
   /// 搜索、刷新与翻页共享同一请求序号；只允许最新一次结果写入界面。
   int _requestSeq = 0;
 
   @override
   Future<CourseListState> build() async {
+    final epoch = ++_epoch;
+    _disposed = false;
     _requestSeq++;
+    _refreshTimer?.cancel();
+    _refreshTimer = null;
+    _refreshQueued = false;
     ref.watch(sessionEpochProvider);
     final user = ref.watch(currentUserProvider);
-    _events = ref.watch(realtimeServiceProvider).events.listen(_onEvent);
+    final events = ref.watch(realtimeServiceProvider).events.listen(_onEvent);
     ref.onDispose(() {
+      events.cancel();
+      if (epoch != _epoch) return;
+      _disposed = true;
       _requestSeq++;
-      _events?.cancel();
-      _events = null;
+      _refreshTimer?.cancel();
+      _refreshTimer = null;
+      _refreshQueued = false;
     });
     if (user == null) {
+      _page = null;
       return const CourseListState();
     }
     final page = await ref.watch(learningRepositoryProvider).fetchCourses();
+    if (epoch != _epoch || _disposed) return const CourseListState();
     _page = page;
+    if (_refreshQueued) _armRefresh();
     return CourseListState(
       courses: page.items,
       nextCursor: page.nextCursor,
@@ -75,9 +90,21 @@ class CoursesController extends AsyncNotifier<CourseListState> {
   }
 
   void _onEvent(RealtimeEvent event) {
-    if (event.type.startsWith('course.')) {
+    if (!isCourseProgressEvent(event) || _disposed) return;
+    _refreshQueued = true;
+    final current = state.valueOrNull;
+    if (current != null && !current.refreshing) _armRefresh();
+  }
+
+  // 合并任务事件；在途请求结束后仍保留一次刷新，避免漏掉请求期间的新核验。
+  void _armRefresh() {
+    if (_disposed || !_refreshQueued || _refreshTimer != null) return;
+    _refreshTimer = Timer(const Duration(milliseconds: 800), () {
+      _refreshTimer = null;
+      if (_disposed || state.valueOrNull?.refreshing == true) return;
+      _refreshQueued = false;
       unawaited(refresh(silent: true));
-    }
+    });
   }
 
   Future<void> setSearch(String value) async {
@@ -125,6 +152,8 @@ class CoursesController extends AsyncNotifier<CourseListState> {
           refreshError: '课程搜索未完成，请稍后重试',
         ),
       );
+    } finally {
+      if (seq == _requestSeq && _refreshQueued) _armRefresh();
     }
   }
 
@@ -134,7 +163,10 @@ class CoursesController extends AsyncNotifier<CourseListState> {
       ref.invalidateSelf();
       return;
     }
-    if (current.refreshing) return;
+    if (current.refreshing) {
+      _refreshQueued = true;
+      return;
+    }
     final seq = ++_requestSeq;
     state = AsyncData(
       current.copyWith(
@@ -143,10 +175,24 @@ class CoursesController extends AsyncNotifier<CourseListState> {
       ),
     );
     try {
-      final page = await ref
-          .read(learningRepositoryProvider)
-          .fetchCourses(search: current.search);
+      final repository = ref.read(learningRepositoryProvider);
+      var page = await repository.fetchCourses(search: current.search);
+      final items = [...page.items];
+      final cursors = <String>{};
+      // 静默刷新覆盖已经加载的范围，保留搜索与分页位置。
+      while (silent && items.length < current.courses.length && page.hasMore) {
+        if (seq != _requestSeq) return;
+        if (!cursors.add(page.nextCursor!)) throw StateError('课程分页游标重复');
+        page = await repository.fetchCourses(
+            cursor: page.nextCursor, search: current.search);
+        for (final item in page.items) {
+          if (items.every((existing) => existing.id != item.id)) {
+            items.add(item);
+          }
+        }
+      }
       if (seq != _requestSeq) return;
+      page = Page<CourseSummary>(items: items, nextCursor: page.nextCursor);
       _page = page;
       state = AsyncData(
         current.copyWith(
@@ -173,6 +219,8 @@ class CoursesController extends AsyncNotifier<CourseListState> {
           refreshError: '课程刷新未完成，请稍后重试',
         ),
       );
+    } finally {
+      if (seq == _requestSeq && _refreshQueued) _armRefresh();
     }
   }
 
@@ -221,6 +269,8 @@ class CoursesController extends AsyncNotifier<CourseListState> {
           refreshError: error is ApiException ? error.userMessage : '加载更多课程未完成',
         ),
       );
+    } finally {
+      if (seq == _requestSeq && _refreshQueued) _armRefresh();
     }
   }
 }
@@ -240,6 +290,15 @@ final courseDetailProvider =
     }
     return null;
   }));
+  Timer? refreshTimer;
+  final events = ref.watch(realtimeServiceProvider).events.listen((event) {
+    if (!isCourseProgressEvent(event) || refreshTimer != null) return;
+    refreshTimer = Timer(const Duration(milliseconds: 800), ref.invalidateSelf);
+  });
+  ref.onDispose(() {
+    events.cancel();
+    refreshTimer?.cancel();
+  });
   if (id.isEmpty) throw StateError('课程编号为空');
   return ref.watch(learningRepositoryProvider).fetchCourse(id);
 });

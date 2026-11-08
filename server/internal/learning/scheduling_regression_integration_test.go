@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strconv"
 	"testing"
 	"time"
 
@@ -985,5 +986,205 @@ func TestMissingSnapshotTaskResumeWithSubmissionOnlyVerifies(t *testing.T) {
 	}
 	if platform.posts != 1 || answers.modelCalls != 2 {
 		t.Fatalf("恢复后重新做题或提交: posts=%d calls=%d", platform.posts, answers.modelCalls)
+	}
+}
+
+// TestPlanDeleteArchivesPlanAndStopsScheduling 验证用户删除安排后，
+// 安排从列表移除、不再派发新任务，已有任务绑定与记录保留，重复删除保持幂等。
+func TestPlanDeleteArchivesPlanAndStopsScheduling(t *testing.T) {
+	pool := testPool(t)
+	platform := defaultFakePlatform()
+	service := newVideoLearningService(t, pool, platform)
+	userID := seedUser(t, pool)
+	bindTestAccount(t, service, userID)
+	syncAll(t, service, userID)
+	courseID := courseIDForUser(t, pool, userID)
+	plan := createVideoPlan(t, service, userID, courseID)
+	actor := Actor{ID: userID, Kind: "user"}
+
+	before, err := service.ListPlans(context.Background(), actor, PlanFilter{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before.Items) != 1 {
+		t.Fatalf("安排数量错误: %d", len(before.Items))
+	}
+	if progress := before.Items[0].Progress; progress.Total != 1 || progress.Active != 1 ||
+		progress.Completed != 0 || progress.Percent != 0 {
+		t.Fatalf("安排汇总进度错误: %+v", progress)
+	}
+
+	result, err := service.DeletePlan(context.Background(), actor, plan.ID, "delete-plan-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Applied || result.Status != "archived" {
+		t.Fatalf("删除结果错误: %+v", result)
+	}
+
+	page, err := service.ListPlans(context.Background(), actor, PlanFilter{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range page.Items {
+		if item.ID == plan.ID {
+			t.Fatal("已删除安排仍出现在用户列表")
+		}
+	}
+
+	if job, err := service.claimNext(context.Background()); err != nil || job != nil {
+		t.Fatalf("已删除安排仍在派发任务: %+v %v", job, err)
+	}
+	if got := currentRevisionBindings(t, pool, plan.CurrentRevisionID); got != 1 {
+		t.Fatalf("删除应保留已有任务绑定: %d", got)
+	}
+
+	again, err := service.DeletePlan(context.Background(), actor, plan.ID, "delete-plan-0001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Applied {
+		t.Fatalf("同一幂等键重复删除应返回已应用: %+v", again)
+	}
+}
+
+// TestPlanProgressSeparatesClosedTasks 验证平台已关闭的任务不计入待处理，
+// 也不进入完成率分母，避免安排进度被关闭内容拖低。
+func TestPlanProgressSeparatesClosedTasks(t *testing.T) {
+	pool := testPool(t)
+	platform := defaultFakePlatform()
+	service := newVideoLearningService(t, pool, platform)
+	userID := seedUser(t, pool)
+	bindTestAccount(t, service, userID)
+	syncAll(t, service, userID)
+	courseID := courseIDForUser(t, pool, userID)
+	plan := createVideoPlan(t, service, userID, courseID)
+	if _, err := pool.Exec(context.Background(), `UPDATE public.learning_tasks t SET
+		state = 'needs_attention', last_error_code = 'quiz_closed',
+		next_attempt_at = NULL, updated_at = now()
+		FROM public.learning_plan_task_bindings b
+		WHERE b.task_id = t.id AND b.plan_revision_id = $1`, plan.CurrentRevisionID); err != nil {
+		t.Fatal(err)
+	}
+	page, err := service.ListPlans(context.Background(), Actor{ID: userID, Kind: "user"}, PlanFilter{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("安排数量错误: %d", len(page.Items))
+	}
+	progress := page.Items[0].Progress
+	if progress.Total != 1 || progress.Closed != 1 || progress.Attention != 0 ||
+		progress.Active != 0 || progress.Percent != 0 {
+		t.Fatalf("关闭任务未从进度中分离: %+v", progress)
+	}
+}
+
+// TestPlanBindingSkipsClosedTaskPoints 验证新安排不会绑定已关闭的任务点，
+// 避免用户在安排里再次选中无法作答的测验。
+func TestPlanBindingSkipsClosedTaskPoints(t *testing.T) {
+	pool := testPool(t)
+	service := newVideoLearningService(t, pool, defaultFakePlatform())
+	userID := seedUser(t, pool)
+	bindTestAccount(t, service, userID)
+	syncAll(t, service, userID)
+	courseID := courseIDForUser(t, pool, userID)
+	createVideoPlan(t, service, userID, courseID)
+	if _, err := pool.Exec(context.Background(), `INSERT INTO public.learning_task_point_availability
+		(user_id, course_id, chapter_external_id, task_point_id, cycle_key, availability, checked_at)
+		SELECT DISTINCT t.user_id, t.course_id, t.chapter_external_id, t.task_point_id, t.cycle_key,
+		       'closed', now()
+		FROM public.learning_tasks t WHERE t.user_id = $1
+		ON CONFLICT (user_id, course_id, chapter_external_id, task_point_id, cycle_key)
+		DO UPDATE SET availability = 'closed', checked_at = now()`, userID); err != nil {
+		t.Fatal(err)
+	}
+	second := createVideoPlan(t, service, userID, courseID)
+	if got := currentRevisionBindings(t, pool, second.CurrentRevisionID); got != 0 {
+		t.Fatalf("新安排绑定了已关闭任务点: %d", got)
+	}
+}
+
+// TestClosedCourseRejectsPlanAndStopsScheduling 验证平台已结束课程不能再创建安排，
+// 也不再派发已有绑定任务。
+func TestClosedCourseRejectsPlanAndStopsScheduling(t *testing.T) {
+	pool := testPool(t)
+	service := newVideoLearningService(t, pool, defaultFakePlatform())
+	userID := seedUser(t, pool)
+	bindTestAccount(t, service, userID)
+	syncAll(t, service, userID)
+	courseID := courseIDForUser(t, pool, userID)
+	createVideoPlan(t, service, userID, courseID)
+	if _, err := pool.Exec(context.Background(), `UPDATE public.learning_courses
+		SET platform_state = 'closed' WHERE id = $1`, courseID); err != nil {
+		t.Fatal(err)
+	}
+	actor := Actor{ID: userID, Kind: "user"}
+	if _, err := service.CreatePlan(context.Background(), actor, PlanInput{
+		Name: "已结束课程", CourseIDs: []string{courseID},
+		Scope: PlanScopeInput{Kind: "all"}, TaskTypes: []string{"video"}, Priority: 10,
+	}); err == nil {
+		t.Fatal("已结束课程仍可创建安排")
+	}
+	if job, err := service.claimNext(context.Background()); err != nil || job != nil {
+		t.Fatalf("已结束课程仍在派发任务: %+v %v", job, err)
+	}
+}
+
+// TestDispatchFillsConfiguredConcurrency 验证调度器能把并发槽位填满到配置值，
+// 而不是只跑一个或被账号上限压住。
+func TestDispatchFillsConfiguredConcurrency(t *testing.T) {
+	pool := testPool(t)
+	platform := defaultFakePlatform()
+	release := make(chan struct{})
+	entered := make(chan struct{}, 8)
+	executor := &executorFunc{capabilities: ExecutorCapabilities{Name: "fake", Enabled: true,
+		TaskKinds: []string{"video"}}, run: func(ctx context.Context, request ExecutionRequest) (ExecutionResult, error) {
+		entered <- struct{}{}
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		return ExecutionResult{Completed: true}, nil
+	}}
+	options := fastOptions(platform, executor)
+	options.GlobalConcurrency = 6
+	options.AccountConcurrency = 6
+	options.PollInterval = 20 * time.Millisecond
+	service, err := New(pool, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userID := seedUser(t, pool)
+	bindTestAccount(t, service, userID)
+	syncAll(t, service, userID)
+	courseID := courseIDForUser(t, pool, userID)
+	for index := 0; index < 5; index++ {
+		addVideoTaskToSnapshot(platform, "burst-"+strconv.Itoa(index), "burst-point-"+strconv.Itoa(index))
+	}
+	syncAll(t, service, userID)
+	createVideoPlan(t, service, userID, courseID)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- service.Run(ctx) }()
+	waitFor(t, 3*time.Second, func() bool { return service.localRunning() >= 6 })
+	if running := service.localRunning(); running != 6 {
+		t.Fatalf("并发未填满配置值: %d", running)
+	}
+	close(release)
+	waitFor(t, 5*time.Second, func() bool { return service.localRunning() == 0 })
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("服务未退出")
+	}
+	if len(entered) < 6 {
+		t.Fatalf("实际进入执行的数量不足: %d", len(entered))
 	}
 }

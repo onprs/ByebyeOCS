@@ -94,7 +94,7 @@ func TestDocumentAndReadingRequireIndependentTaskConfirmation(t *testing.T) {
 					t.Fatalf("请求没有正常结束: %+v / %v", result, err)
 				}
 				after, err := executor.platform.CheckTask(context.Background(), request.Session, request.Task)
-				if err != nil || after.Passed != confirm || calls != 1 {
+				if err != nil || after.Passed != confirm || calls != 2 || result.PlatformCompletion != nil {
 					t.Fatalf("请求受理替代了平台确认: %+v / %v / %d", after, err, calls)
 				}
 			})

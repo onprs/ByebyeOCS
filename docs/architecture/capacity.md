@@ -30,8 +30,8 @@
 | 题库控制组 | `MemoryHigh=128M`、`MemoryMax=192M` |
 | 主服务数据库池 | `database.max_connections: 4` |
 | 题库数据库池 | `database_max_connections: 2` |
-| 学习执行并发 | `learning.global_concurrency: 1`、`learning.account_concurrency: 1` |
-| 主平台与题库查询并发 | 主配置`questions.concurrency: 1`，题库`limits.concurrency: 1` |
+| 学习执行并发 | `learning.global_concurrency: 1`、`learning.account_concurrency: 1`（兼容上限 1–256） |
+| 主平台与题库查询并发 | 主配置`questions.concurrency: 1`，题库`limits.concurrency: 1`（两侧上限均为 16，本地均为 16） |
 | 题库请求与图片 | 请求8 MiB，最多2张图，每张2 MiB |
 | PostgreSQL | `shared_buffers=64MB`、`work_mem=1MB`、`maintenance_work_mem=16MB`、`max_connections=20` |
 

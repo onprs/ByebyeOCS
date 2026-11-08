@@ -58,7 +58,7 @@ class CourseSyncState {
   bool get visible =>
       hasNotice && noticeKey != null && noticeKey != dismissedKey;
 
-  /// 只对可以再次请求的情况展示重试；身份、结构适配和批量上限等问题需要其他处理。
+  /// 部分课程读取失败可以手动重试；身份与批量上限保留明确限制。
   bool get canRetry {
     if (busy) return false;
     if (error != null) return true;
@@ -85,7 +85,7 @@ class CourseSyncState {
     final count = value.courseCount;
     switch (value.errorCode) {
       case 'course_structure_partial':
-        return '部分课程结构待适配，已同步可用课程。';
+        return '部分课程未能同步，已保留原有进度。';
       case 'course_transient_partial':
         return '部分课程暂时未读取，已同步可用课程。';
       case 'external_disabled':
@@ -114,7 +114,6 @@ class CourseSyncState {
   }
 
   static const _blockedRetryCodes = <String>{
-    'course_structure_partial',
     'external_disabled',
     'sync_batch_exceeded',
     'identity_invalid',

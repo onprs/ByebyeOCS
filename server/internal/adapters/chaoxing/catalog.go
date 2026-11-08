@@ -50,10 +50,14 @@ func parseCourseCatalog(payload []byte, course learning.PlatformCourseRef, maxCh
 	root := parseHTMLDocument(payload)
 	var matches [][]string
 	contextInvalid := false
+	contextKnown := map[string]bool{}
 	expected := map[string]string{"courseId": course.ExternalCourseID, "clazzId": course.ExternalClassID, "cpi": course.CPI}
 	root.walk(func(node *htmlNode) bool {
-		if value, exists := expected[node.attr("id")]; exists && node.tag == "input" && node.attr("value") != value {
-			contextInvalid = true
+		if value, exists := expected[node.attr("id")]; exists && node.tag == "input" {
+			contextKnown[node.attr("id")] = true
+			if node.attr("value") != value {
+				contextInvalid = true
+			}
 		}
 		// onclick 已由 HTML 解析器解码，兼容属性内的引号实体；旧布局保留文本/脚本入口。
 		source := node.attr("onclick")
@@ -77,6 +81,7 @@ func parseCourseCatalog(payload []byte, course learning.PlatformCourseRef, maxCh
 	var parseErr error
 	add := func(row *htmlNode, parent string, group bool) string {
 		id := strings.TrimPrefix(row.attr("id"), "cur")
+		closed := catalogRowClosed(row)
 		number, title := catalogRowText(row)
 		if group {
 			if number == "" || title == "" {
@@ -85,7 +90,8 @@ func parseCourseCatalog(payload []byte, course learning.PlatformCourseRef, maxCh
 			}
 			// 平台分组没有 knowledgeid；该标识仅供目录关联，永远不用于卡片读取或任务执行。
 			id = fmt.Sprintf("catalog-group:%x", sha256.Sum256([]byte(number+"\x00"+title)))
-		} else if !strings.HasPrefix(row.attr("id"), "cur") || !isDigits(id) || !linked[id] {
+		} else if !strings.HasPrefix(row.attr("id"), "cur") || !isDigits(id) ||
+			(!linked[id] && !(closed && contextKnown["courseId"] && contextKnown["clazzId"] && contextKnown["cpi"])) {
 			parseErr = learning.Fail(learning.FailureCapabilityMissing, "课程目录小节缺少可核对的平台标识")
 			return ""
 		}
@@ -94,20 +100,33 @@ func parseCourseCatalog(payload []byte, course learning.PlatformCourseRef, maxCh
 			return ""
 		}
 		if !group {
-			for _, match := range knowledgePattern.FindAllStringSubmatch(row.attr("onclick"), -1) {
-				if match[2] != id {
-					parseErr = learning.Fail(learning.FailureCapabilityMissing, "课程目录节点与入口标识不一致")
-					return ""
+			row.walk(func(node *htmlNode) bool {
+				if node != row && strings.HasPrefix(node.attr("id"), "cur") {
+					return false
 				}
+				source := node.attr("onclick")
+				if node.tag == "#text" {
+					source = node.text
+				}
+				for _, match := range knowledgePattern.FindAllStringSubmatch(source, -1) {
+					if match[2] != id {
+						parseErr = learning.Fail(learning.FailureCapabilityMissing, "课程目录节点与入口标识不一致")
+						return false
+					}
+				}
+				return true
+			})
+			if parseErr != nil {
+				return ""
 			}
-			if value, known := catalogPendingCount(row); known {
+			if value, known := catalogPendingCount(row); known && !closed {
 				result.Pending[id] = value
 			}
 		}
 		seen[id] = true
 		result.Chapters = append(result.Chapters, learning.PlatformChapter{
 			ExternalID: id, ParentExternalID: parent, Number: number, Title: title,
-			IsGroup: group, SortOrder: len(result.Chapters),
+			IsGroup: group, Closed: closed, SortOrder: len(result.Chapters),
 		})
 		return id
 	}
@@ -171,6 +190,22 @@ func parseCourseCatalog(payload []byte, course learning.PlatformCourseRef, maxCh
 		return courseCatalog{}, learning.Fail(learning.FailureCapabilityMissing, "课程目录结构未识别")
 	}
 	return result, nil
+}
+
+// catalogRowClosed 只识别当前目录行的明确关闭标志，不把缺少链接或子章节关闭推断为关闭。
+func catalogRowClosed(row *htmlNode) bool {
+	closed := false
+	row.walk(func(node *htmlNode) bool {
+		if node != row && strings.HasPrefix(node.attr("id"), "cur") {
+			return false
+		}
+		if node.hasClass("catalog_state") && node.hasClass("icon-bukaifang") &&
+			strings.Contains(htmlNodeText(node), "已关闭") {
+			closed = true
+		}
+		return true
+	})
+	return closed
 }
 
 func catalogRowText(row *htmlNode) (number, title string) {

@@ -27,7 +27,11 @@ func (a *workAnswerer) AnswerWorkQuestion(ctx context.Context, userID, key strin
 	for _, item := range question.Images {
 		input.Question.Images = append(input.Question.Images, "data:"+item.MIMEType+";base64,"+item.Base64)
 	}
-	input.Budget.MaxOutputTokens = 2048
+	budget, budgetErr := a.questions.WorkOutputBudget(ctx, userID, key, policy.ModelOfferingID)
+	if budgetErr != nil {
+		return learning.WorkQueryResult{}, learning.Fail(learning.FailureTransient, "题库模型预算暂不可用")
+	}
+	input.Budget.MaxOutputTokens = budget
 	view, err := a.questions.Answer(ctx, userID, key, input)
 	if err != nil {
 		if queryErr, ok := questions.AsQueryError(err); ok {
@@ -39,6 +43,8 @@ func (a *workAnswerer) AnswerWorkQuestion(ctx context.Context, userID, key strin
 				}
 				return learning.WorkQueryResult{}, &learning.Failure{Class: learning.FailureRateLimited,
 					RetryAfter: delay, Detail: "题库查询正在等待恢复，稍后继续"}
+			case "request_unknown", "upstream_timeout":
+				return learning.WorkQueryResult{}, &learning.Failure{Class: learning.FailureAnswerUnavailable, Code: "answer_result_unknown", Detail: "题库前次请求的结果或用量尚未明确"}
 			case "insufficient_balance":
 				return learning.WorkQueryResult{}, learning.Fail(learning.FailureAnswerUnavailable, "余额不足，本次尚未取得全部答案")
 			case "service_unavailable", "charging_setting_unavailable":
@@ -52,7 +58,7 @@ func (a *workAnswerer) AnswerWorkQuestion(ctx context.Context, userID, key strin
 	// token/计费异常与答案可用性分开；用量不完整时由题库模块保留事实并停止扣费。
 	if view.ContentExpired || strings.TrimSpace(view.Answer) == "" ||
 		(view.Status != "answered" && view.Status != "cache_hit" && view.Status != "needs_review") {
-		return learning.WorkQueryResult{}, learning.Fail(learning.FailureAnswerUnavailable, "题库结果没有可填写的答案")
+		return learning.WorkQueryResult{}, &learning.Failure{Class: learning.FailureAnswerUnavailable, Code: "answer_empty", Detail: "题库结果没有可填写的答案"}
 	}
 	return learning.WorkQueryResult{QueryID: view.ID, Answer: view.Answer}, nil
 }

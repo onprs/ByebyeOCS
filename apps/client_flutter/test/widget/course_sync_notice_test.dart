@@ -94,7 +94,7 @@ void main() {
     expect(find.text('课程同步已完成，共 3 门课程。'), findsNothing);
   });
 
-  testWidgets('部分课程结构不兼容只提示关闭，不提供无意义重试', (tester) async {
+  testWidgets('部分课程读取失败可重试且保留已有进度', (tester) async {
     await tester.pumpWidget(build(
       const CourseSyncState(
         phase: CourseSyncPhase.partial,
@@ -106,8 +106,8 @@ void main() {
       ),
     ));
 
-    expect(find.text('部分课程结构待适配，已同步可用课程。'), findsOneWidget);
-    expect(find.text('重试'), findsNothing);
+    expect(find.text('部分课程未能同步，已保留原有进度。'), findsOneWidget);
+    expect(find.text('重试'), findsOneWidget);
     expect(find.byTooltip('关闭'), findsOneWidget);
   });
 

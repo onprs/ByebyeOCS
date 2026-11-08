@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -122,11 +123,28 @@ func (e *AutomaticExecutor) Execute(ctx context.Context, req ExecutionRequest) (
 		questionHash := sha256.Sum256([]byte(question.ID))
 		key := "learning-quiz/" + run.ID + "/" + hex.EncodeToString(questionHash[:])
 		response, err := e.queryQuestion(ctx, req, key, question)
-		if err != nil {
-			return ExecutionResult{}, err
+		var answer WorkAnswer
+		mappingFailed := false
+		if err == nil {
+			answer, err = MapWorkAnswer(question, response.Answer)
+			mappingFailed = err != nil
 		}
-		answer, err := MapWorkAnswer(question, response.Answer)
+		var failure *Failure
+		explicitRecovery := req.AnswerRetryGeneration > 0 && req.AnswerRetryGeneration <= 3 &&
+			(mappingFailed || errors.As(err, &failure) && (failure.Code == "answer_result_unknown" || failure.Code == "answer_empty"))
+		if err != nil && explicitRecovery {
+			// 只有持久化的显式重查代次允许发起新请求，原未知请求与用量事实不覆盖。
+			response, err = e.queryQuestion(ctx, req, key+"/recovery/"+strconv.Itoa(req.AnswerRetryGeneration), question)
+			mappingFailed = false
+			if err == nil {
+				answer, err = MapWorkAnswer(question, response.Answer)
+				mappingFailed = err != nil
+			}
+		}
 		if err != nil {
+			if mappingFailed {
+				return ExecutionResult{}, &Failure{Class: FailureAnswerUnavailable, Code: "answer_mapping_failed", Detail: "题库已返回答案，但未能唯一映射到平台选项"}
+			}
 			return ExecutionResult{}, err
 		}
 		if response.QueryID == "" || len(response.QueryID) > 128 {

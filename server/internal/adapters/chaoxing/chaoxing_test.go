@@ -557,3 +557,26 @@ func TestPlatformAppliesConfiguredRequestPacingAndChapterConcurrency(t *testing.
 		t.Fatal("平台运行参数没有实时更新")
 	}
 }
+
+// 课程列表用 not-open-tip 标记已结束课程；解析必须保留该状态。
+func TestParseCourseMetadataDetectsClosedCourse(t *testing.T) {
+	platform := testAdapter(t, testPlatformServer(t))
+	page := `<html><body>
+		<div class="course">
+			<a class="not-open-tip">课程已结束</a>
+			<a href="https://mooc1.chaoxing.com/visit/stucoursemiddle?courseid=101&clazzid=202&cpi=303">x</a>
+			<span class="course-name" title="已结束课程"></span>
+		</div>
+		<div class="course">
+			<a href="https://mooc1.chaoxing.com/visit/stucoursemiddle?courseid=102&clazzid=203&cpi=304">x</a>
+			<span class="course-name" title="进行中课程"></span>
+		</div>
+	</body></html>`
+	metadata := platform.parseCourseMetadata(parseHTMLDocument([]byte(page)))
+	if item, ok := metadata["101/202/303"]; !ok || !item.Closed {
+		t.Fatalf("已结束课程未标记: %+v", metadata["101/202/303"])
+	}
+	if item, ok := metadata["102/203/304"]; !ok || item.Closed {
+		t.Fatalf("进行中课程被误标: %+v", metadata["102/203/304"])
+	}
+}

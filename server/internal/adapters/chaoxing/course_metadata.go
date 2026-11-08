@@ -10,6 +10,8 @@ type courseListMetadata struct {
 	Title    string
 	Teacher  string
 	CoverURL string
+	// Closed 表示平台课程列表把该课程标记为“课程已结束”。
+	Closed bool
 }
 
 // parseCourseMetadata 以单门课程容器中的稳定入口关联封面，避免重复链接或缺图造成位置错配。
@@ -29,6 +31,9 @@ func (p *Platform) parseCourseMetadata(root *htmlNode) map[string]courseListMeta
 						keys[query.Get("courseid")+"/"+query.Get("clazzid")+"/"+query.Get("cpi")] = true
 					}
 				}
+			}
+			if node.hasClass("not-open-tip") {
+				item.Closed = true
 			}
 			for _, class := range strings.Fields(node.attr("class")) {
 				if strings.HasPrefix(class, "course-name") && item.Title == "" {

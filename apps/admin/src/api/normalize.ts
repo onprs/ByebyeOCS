@@ -780,6 +780,9 @@ function normalizeMetrics(object: JsonObject): DashboardMetric[] {
     const attention =
       pickNumber(byState, ['needs_attention']) ??
       0
+    // 平台关闭或课程结束的任务不算需要人工处理；后端把它们单独计数。
+    const closedTasks = pickNumber(tasks, ['closed']) ?? 0
+    const actionableAttention = pickNumber(tasks, ['actionable_attention']) ?? attention
     const syncAttention = pickNumber(syncs, ['needs_attention']) ?? 0
     return [
       {
@@ -809,9 +812,9 @@ function normalizeMetrics(object: JsonObject): DashboardMetric[] {
       {
         key: 'needs_attention',
         label: '需要关注',
-        value: String(attention),
+        value: String(actionableAttention),
         unit: null,
-        hint: `同步异常 ${syncAttention} · 课程 ${pickNumber(courses, ['total']) ?? 0} · 安排 ${pickNumber(plans, ['active']) ?? 0}`,
+        hint: `平台关闭 ${closedTasks} · 同步异常 ${syncAttention} · 课程 ${pickNumber(courses, ['total']) ?? 0} · 安排 ${pickNumber(plans, ['active']) ?? 0}`,
       },
     ]
   }

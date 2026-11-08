@@ -77,8 +77,8 @@ func TestFailureClassificationDefaults(t *testing.T) {
 	if !(second > first) || first < time.Second {
 		t.Fatalf("退避未增长或过小: %v %v", first, second)
 	}
-	if service.retryDelay(100, &Failure{RetryAfter: time.Hour}) != 15*time.Minute {
-		t.Fatal("退避上限未生效")
+	if service.retryDelay(100, &Failure{RetryAfter: time.Hour}) < time.Hour {
+		t.Fatal("服务端指定的等待时间被缩短")
 	}
 }
 

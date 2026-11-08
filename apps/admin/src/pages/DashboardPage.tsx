@@ -85,7 +85,7 @@ export function DashboardPage() {
   const tasksPreview = useAsync(
     () =>
       listTasks({
-        states: ['preparing', 'running', 'waiting_verification', 'needs_attention'],
+        states: ['preparing', 'running', 'waiting_verification'],
         limit: 5,
       }).then(response => response.data),
     [],

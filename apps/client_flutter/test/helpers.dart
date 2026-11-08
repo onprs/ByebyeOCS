@@ -91,6 +91,60 @@ class FakeAuthController extends AuthController {
   AuthState build() => initial;
 }
 
+Map<String, dynamic> taskPageFixture(
+    http.Request request, List<Map<String, dynamic>> input) {
+  String classify(Map<String, dynamic> item) {
+    if (item['category'] is String) return item['category'] as String;
+    if (const ['confirmed', 'cancelled'].contains(item['state'])) {
+      return 'history';
+    }
+    if (item['availability'] == 'closed' ||
+        const ['course_closed', 'chapter_closed', 'quiz_closed']
+            .contains(item['last_error_code'])) {
+      return 'closed';
+    }
+    return const ['failed', 'needs_attention'].contains(item['state'])
+        ? 'attention'
+        : 'current';
+  }
+
+  final all = [
+    for (final item in input) {...item, 'category': classify(item)}
+  ];
+  final progress = <String, dynamic>{
+    'total': all.length,
+    'completed': all.where((item) => item['state'] == 'confirmed').length,
+    'cancelled': all.where((item) => item['state'] == 'cancelled').length,
+    'active': all.where((item) => item['category'] == 'current').length,
+    'attention': all.where((item) => item['category'] == 'attention').length,
+    'closed': all.where((item) => item['category'] == 'closed').length,
+    'percent': 0
+  };
+  final category = request.url.queryParameters['category'];
+  final actionable = request.url.queryParameters['actionable'] == 'true';
+  final items = all
+      .where((item) => category == null || item['category'] == category)
+      .where((item) => !actionable || item['category'] == 'attention')
+      .toList();
+  final limit = int.tryParse(request.url.queryParameters['limit'] ?? '') ?? 50;
+  final cursor = request.url.queryParameters['cursor'] ?? '';
+  final start = cursor.startsWith('fixture:')
+      ? (int.tryParse(cursor.substring(8)) ?? 0)
+      : 0;
+  return {
+    'items': items.skip(start).take(limit).toList(),
+    'total_count': items.length,
+    'next_cursor':
+        start + limit < items.length ? 'fixture:${start + limit}' : '',
+    if (category != null)
+      'task_meta': {
+        'plan_revision_id': 'r1',
+        'category': category,
+        'progress': progress
+      }
+  };
+}
+
 class TestServer {
   TestServer({Map<String, RequestHandler>? overrides})
       : _overrides = overrides ?? const {};
@@ -122,10 +176,7 @@ class TestServer {
           planFixture,
           headers: {'etag': '"v3"'},
         ),
-      '/api/v1/tasks' => jsonResponse({
-          'items': taskFixtures,
-          'next_cursor': '',
-        }),
+      '/api/v1/tasks' => jsonResponse(taskPageFixture(request, taskFixtures)),
       '/api/v1/wallet' => jsonResponse(walletFixture),
       '/api/v1/pricing' => jsonResponse(pricingFixture),
       '/api/v1/wallet/entries' => jsonResponse({
@@ -217,6 +268,7 @@ Future<void> pumpTestPage(
   AuthState? auth,
   RequestHandler? handler,
   Size size = const Size(1200, 1600),
+  ThemeMode themeMode = ThemeMode.light,
 }) async {
   SharedPreferences.setMockInitialValues({});
   tester.view.physicalSize = size;
@@ -246,7 +298,7 @@ Future<void> pumpTestPage(
       child: MaterialApp(
         theme: AppTheme.build(ColorSchemeId.graphite, Brightness.light),
         darkTheme: AppTheme.build(ColorSchemeId.graphite, Brightness.dark),
-        themeMode: ThemeMode.light,
+        themeMode: themeMode,
         home: Scaffold(
           body: SafeArea(child: page),
         ),

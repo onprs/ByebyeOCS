@@ -260,11 +260,7 @@ func TestHTTPExecutorRejectsUnsafeTaskContexts(t *testing.T) {
 		{"课程参数注入", func(d, a map[string]any) { a["otherInfo"] = "node-rt_d&courseId=100&playingTime=90" }},
 		{"跨域请求入口", func(d, a map[string]any) { d["reportUrl"] = "https://metadata.example.invalid/multimedia/log/a/300" }},
 		{"错误协议路径", func(d, a map[string]any) { d["reportUrl"] = "https://mooc1.chaoxing.com/other/300" }},
-		{"抓拍限制", func(d, a map[string]any) { d["chapterCapture"] = 1 }},
-		{"未知限制类型", func(d, a map[string]any) { d["chapterCapture"] = true }},
 		{"未知引擎上下文", func(d, a map[string]any) { d["courseEngineInfo"] = "unknown" }},
-		{"未知交互结构", func(d, a map[string]any) { a["jumpTimePointList"] = "unknown" }},
-		{"交互时间点", func(d, a map[string]any) { a["jumpTimePointList"] = []any{1} }},
 	} {
 		t.Run(item.name, func(t *testing.T) {
 			f := newHTTPExecutionFixture(t)
@@ -277,14 +273,14 @@ func TestHTTPExecutorRejectsUnsafeTaskContexts(t *testing.T) {
 	}
 }
 
-func TestHTTPExecutorRequiresManualInteractions(t *testing.T) {
-	for _, body := range []string{`[{"type":"question"}]`, `{"unexpected":true}`} {
+func TestHTTPExecutorSeparatesPlayerInteractions(t *testing.T) {
+	for _, body := range []string{`[{"type":"question"}]`, `{"objects":[{"style":"InteractiveQuiz","datas":[{}]}]}`, `{"unexpected":true}`} {
 		f := newHTTPExecutionFixture(t)
 		f.timeline = body
 		f.mutate = func(d, a map[string]any) { a["mid"] = "fixture-mid" }
-		_, err := f.executor.Execute(context.Background(), f.request)
-		if err == nil || len(f.reports) != 0 {
-			t.Fatal("交互任务或未知结构被跳过")
+		result, err := f.executor.Execute(context.Background(), f.request)
+		if err != nil || !result.Completed || len(f.reports) == 0 {
+			t.Fatalf("前端嵌题被误判成人脸阻断：%+v/%v", result, err)
 		}
 	}
 	f := newHTTPExecutionFixture(t)
@@ -355,7 +351,7 @@ func TestHTTPExecutorAuthorizationCancellationAndLimits(t *testing.T) {
 	if err == nil || !result.StopAcknowledged || result.Completed || len(f.reports) != 1 {
 		t.Fatal("执行取消后仍请求平台或误报完成")
 	}
-	for _, options := range []HTTPExecutorOptions{{Concurrency: 65}, {MaxDuration: 25 * time.Hour}, {ConfirmGrace: time.Hour}} {
+	for _, options := range []HTTPExecutorOptions{{Concurrency: 257}, {MaxDuration: 25 * time.Hour}, {ConfirmGrace: time.Hour}} {
 		if _, err := NewHTTPExecutor(options); err == nil {
 			t.Fatal("无界执行预算被接受")
 		}

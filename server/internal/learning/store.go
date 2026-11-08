@@ -75,8 +75,10 @@ type txFunc func(pgx.Tx) error
 
 // Page 是有界列表响应。
 type Page[T any] struct {
-	Items      []T    `json:"items"`
-	NextCursor string `json:"next_cursor,omitempty"`
+	Items      []T               `json:"items"`
+	NextCursor string            `json:"next_cursor,omitempty"`
+	TotalCount *int              `json:"total_count,omitempty"`
+	TaskMeta   *TaskPageMetadata `json:"task_meta,omitempty"`
 }
 
 func clampLimit(value int) int {

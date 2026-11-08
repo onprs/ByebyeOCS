@@ -6,6 +6,7 @@ import '../../core/format/formatters.dart';
 import '../../core/models/course.dart';
 import '../../core/models/plan.dart';
 import '../../core/models/task.dart';
+import '../../app/providers.dart';
 import '../../app/scroll_controllers.dart';
 import '../../design/components.dart';
 import '../../design/page_layout.dart';
@@ -16,7 +17,7 @@ import 'plans_controller.dart';
 import 'task_detail_sheet.dart';
 import 'task_visuals.dart';
 
-enum _PlanTaskFilter { current, attention, history }
+enum _PlanTaskFilter { current, attention, closed, history }
 
 class PlansPage extends ConsumerStatefulWidget {
   const PlansPage({
@@ -33,7 +34,6 @@ class PlansPage extends ConsumerStatefulWidget {
 }
 
 class _PlansPageState extends ConsumerState<PlansPage> {
-  _PlanTaskFilter _filter = _PlanTaskFilter.current;
   bool _handledInitial = false;
   bool _planConfigExpanded = false;
 
@@ -133,7 +133,7 @@ class _PlansPageState extends ConsumerState<PlansPage> {
             child: EmptyState(
               icon: Icons.calendar_month_outlined,
               title: '还没有任务安排',
-              message: '选择课程与章节范围，建立第一条学习安排。',
+              message: '选择课程与任务类型，建立第一条学习安排。',
             ),
           )
         else
@@ -191,8 +191,11 @@ class _PlansPageState extends ConsumerState<PlansPage> {
   }) {
     final plan = data.selectedPlan;
     if (plan == null) return const SizedBox.shrink();
-    final activeCount = data.activeTasks.length;
-    final attentionCount = data.attentionTasks.length;
+    final progress = data.taskProgress;
+    final activeCount = progress.active;
+    final attentionCount = progress.attention;
+    final historyCount = progress.history;
+    final closedCount = progress.closed;
     final hasRunning = data.activeTasks.any((task) => task.state.isActive);
     final courseNames = plan.courseIds
         .map((id) => courses.where((course) => course.id == id))
@@ -235,7 +238,7 @@ class _PlansPageState extends ConsumerState<PlansPage> {
                             ),
                             if (plan.questionPolicy.enabled)
                               const StatusPill(
-                                label: '题库策略已开启',
+                                label: '自动答题已开启',
                                 tone: StatusTone.info,
                                 compact: true,
                               ),
@@ -279,6 +282,8 @@ class _PlansPageState extends ConsumerState<PlansPage> {
                   ),
                 ],
               ),
+              const SizedBox(height: 14),
+              _PlanProgressBar(progress: progress),
               if (wide || _planConfigExpanded) ...[
                 const SizedBox(height: 14),
                 Wrap(
@@ -298,7 +303,7 @@ class _PlansPageState extends ConsumerState<PlansPage> {
                       value: '${activeCount + attentionCount} 项',
                     ),
                     _MetaChip(
-                      label: '题库策略',
+                      label: '自动答题',
                       value: plan.questionPolicy.enabled
                           ? plan.questionPolicy.answerMode.shortLabel
                           : '关闭',
@@ -309,7 +314,7 @@ class _PlansPageState extends ConsumerState<PlansPage> {
                   const SizedBox(height: 12),
                   const InlineNotice(
                     icon: Icons.quiz_outlined,
-                    message: '题库策略随安排版本冻结；开启后自动查询并提交测验答案。',
+                    message: '自动答题随安排版本冻结；开启后自动查询并提交测验答案。',
                   ),
                 ],
                 if (hasRunning) ...[
@@ -342,6 +347,17 @@ class _PlansPageState extends ConsumerState<PlansPage> {
                           .refresh(silent: true),
                       icon: const Icon(Icons.refresh, size: 16),
                       label: const Text('刷新状态'),
+                    ),
+                    TextButton.icon(
+                      style: TextButton.styleFrom(
+                        foregroundColor: context.colors.danger,
+                      ),
+                      onPressed:
+                          plan.isArchived || data.controlPendingPlanId != null
+                              ? null
+                              : () => _deletePlan(plan),
+                      icon: const Icon(Icons.delete_outline, size: 16),
+                      label: const Text('删除安排'),
                     ),
                   ],
                 ),
@@ -376,152 +392,119 @@ class _PlansPageState extends ConsumerState<PlansPage> {
             children: [
               _TaskFilterChip(
                 label: '当前 $activeCount',
-                selected: _filter == _PlanTaskFilter.current,
-                onTap: () => setState(() => _filter = _PlanTaskFilter.current),
+                selected: data.taskCategory == 'current',
+                onTap: () => ref
+                    .read(plansControllerProvider.notifier)
+                    .selectTaskCategory('current'),
               ),
               _TaskFilterChip(
                 label: '需要处理 $attentionCount',
-                selected: _filter == _PlanTaskFilter.attention,
+                selected: data.taskCategory == 'attention',
                 danger: attentionCount > 0,
-                onTap: () =>
-                    setState(() => _filter = _PlanTaskFilter.attention),
+                onTap: () => ref
+                    .read(plansControllerProvider.notifier)
+                    .selectTaskCategory('attention'),
               ),
               _TaskFilterChip(
-                label: '历史',
-                selected: _filter == _PlanTaskFilter.history,
-                onTap: () => setState(() => _filter = _PlanTaskFilter.history),
+                label: '已关闭 $closedCount',
+                selected: data.taskCategory == 'closed',
+                onTap: () => ref
+                    .read(plansControllerProvider.notifier)
+                    .selectTaskCategory('closed'),
+              ),
+              _TaskFilterChip(
+                label: '历史 $historyCount',
+                selected: data.taskCategory == 'history',
+                onTap: () => ref
+                    .read(plansControllerProvider.notifier)
+                    .selectTaskCategory('history'),
               ),
             ],
           ),
           child: _buildTaskList(context, data),
-        ),
-        const SizedBox(height: 16),
-        const InlineNotice(
-          icon: Icons.schedule_outlined,
-          message: '预计剩余时间为估算值。执行结束后仍需查询学习通，平台确认前不会计为完成。',
         ),
       ],
     );
   }
 
   Widget _buildTaskList(BuildContext context, PlansState data) {
-    final tasks = switch (_filter) {
-      _PlanTaskFilter.current => data.activeTasks,
-      _PlanTaskFilter.attention => data.attentionTasks,
-      _PlanTaskFilter.history => data.historyTasks,
-    };
-    if (data.refreshingTasks && tasks.isEmpty) {
+    final filter = _PlanTaskFilter.values.byName(data.taskCategory);
+    if (data.tasksRefreshing && data.tasks.isEmpty) {
       return const LoadingList(rows: 2, height: 92);
     }
-    if (tasks.isEmpty) {
-      final (title, message) = switch (_filter) {
+    if (data.tasks.isEmpty) {
+      final (title, message) = switch (filter) {
         _PlanTaskFilter.current => ('当前没有进行中的任务', '安排保存后，任务会在下一轮调度中生成。'),
-        _PlanTaskFilter.attention => ('没有需要人工处理的任务', '身份过期、平台限制或资源不可用时会在这里提示。'),
+        _PlanTaskFilter.attention => ('没有需要处理的任务', '暂时无法自动恢复的任务会在这里提示。'),
+        _PlanTaskFilter.closed => ('没有已关闭的任务', '平台关闭的任务会显示在这里。'),
         _PlanTaskFilter.history => ('暂无历史任务', '平台确认或取消后的任务会保留在这里。'),
       };
-      return _withTaskPager(
-        data,
-        EmptyState(
-          icon: _filter == _PlanTaskFilter.attention
+      return EmptyState(
+          icon: filter == _PlanTaskFilter.attention
               ? Icons.check_circle_outline
               : Icons.inbox_outlined,
           title: title,
           message: message,
-          compact: true,
-        ),
-      );
+          compact: true);
     }
-    if (_filter == _PlanTaskFilter.current) {
-      final groups = <_TaskGroup>[
-        _TaskGroup(
-          title: '执行中',
-          tasks: tasks
-              .where((task) =>
-                  task.state == LearningTaskState.running ||
-                  task.state == LearningTaskState.preparing)
-              .toList(growable: false),
-        ),
-        _TaskGroup(
-          title: '等待平台确认',
-          tasks: tasks
-              .where(
-                  (task) => task.state == LearningTaskState.waitingVerification)
-              .toList(growable: false),
-        ),
-        _TaskGroup(
-          title: '接下来',
-          tasks: tasks
-              .where((task) => task.state == LearningTaskState.pending)
-              .toList(growable: false),
-        ),
-        _TaskGroup(
-          title: '已暂停',
-          tasks: tasks
-              .where((task) => task.state == LearningTaskState.paused)
-              .toList(growable: false),
-        ),
-      ];
-      return _withTaskPager(
-        data,
-        Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            for (final group in groups)
-              if (group.tasks.isNotEmpty) ...[
-                Padding(
-                  padding: const EdgeInsets.only(top: 6, bottom: 7),
-                  child: Text(
-                    '${group.title} · ${group.tasks.length}',
-                    style: TextStyle(
-                      color: context.colors.textSecondary,
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.4,
-                    ),
-                  ),
-                ),
-                for (final task in group.tasks)
-                  _TaskRow(task: task, onTap: () => _openTask(task)),
-              ],
-          ],
-        ),
-      );
-    }
-    return _withTaskPager(
-      data,
-      Column(
-        children: [
-          for (final task in tasks)
-            _TaskRow(task: task, onTap: () => _openTask(task)),
-        ],
-      ),
-    );
+    final list = _TaskListPage(
+        tasks: data.tasks,
+        onTap: _openTask,
+        onRedispatch: _redispatchTask,
+        grouped: filter == _PlanTaskFilter.current);
+    final totalPages = (data.taskTotal / planTasksPageSize).ceil();
+    if (totalPages <= 1) return list;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      list,
+      Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Row(children: [
+            Expanded(
+                child: Text('共 ${data.taskTotal} 条',
+                    style:
+                        TextStyle(color: context.colors.muted, fontSize: 12))),
+            _TaskPagerControls(
+                page: data.taskPage + 1,
+                totalPages: totalPages,
+                busy: data.tasksRefreshing,
+                hasPrevious: data.hasPreviousTasks,
+                hasNext: data.hasMoreTasks,
+                onPrevious: data.hasPreviousTasks
+                    ? () => ref
+                        .read(plansControllerProvider.notifier)
+                        .previousTasksPage()
+                    : null,
+                onNext: () =>
+                    ref.read(plansControllerProvider.notifier).loadMoreTasks()),
+          ])),
+    ]);
   }
 
-  Widget _withTaskPager(PlansState data, Widget content) {
-    if (data.refreshingTasks ||
-        (!data.tasksHasMore && !data.loadingMoreTasks)) {
-      return content;
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        content,
-        Padding(
-          padding: const EdgeInsets.only(top: 6),
-          child: Center(
-            child: TextButton(
-              onPressed: data.loadingMoreTasks
-                  ? null
-                  : () => ref
-                      .read(plansControllerProvider.notifier)
-                      .loadMoreTasks(),
-              child: Text(data.loadingMoreTasks ? '加载中…' : '加载更多'),
-            ),
-          ),
-        ),
-      ],
+  Future<void> _redispatchTask(LearningTask task) async {
+    final closed = taskIsClosed(task);
+    final confirmed = await showConfirmDialog(
+      context,
+      title: closed ? '重新检查测验可用性？' : '重新调度这个任务？',
+      message: closed
+          ? '会重新读取平台页面；课程或测验仍然关闭时保持当前状态，不会提交或扣费。'
+          : '任务会重新进入队列，不会重复创建任务或直接产生新扣款。',
+      confirmLabel: closed ? '重新检查' : '重新调度',
     );
+    if (!confirmed || !mounted) return;
+    try {
+      await ref.read(learningRepositoryProvider).controlTask(
+            id: task.id,
+            action: 'redispatch',
+          );
+      if (!mounted) return;
+      await ref.read(plansControllerProvider.notifier).refresh(silent: true);
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      showAppMessage(context, error.userMessage);
+    } catch (_) {
+      if (!mounted) return;
+      showAppMessage(context, '重新调度未完成，请稍后重试');
+    }
   }
 
   Future<void> _openTask(LearningTask task) async {
@@ -561,6 +544,20 @@ class _PlansPageState extends ConsumerState<PlansPage> {
     await ref.read(plansControllerProvider.notifier).controlPlan(
           planId: plan.id,
           action: pausing ? 'pause' : 'resume',
+        );
+  }
+
+  Future<void> _deletePlan(LearningPlan plan) async {
+    final confirmed = await showConfirmDialog(
+      context,
+      title: '删除这条安排？',
+      message: '安排会从列表移除，后续不再派发新任务。已产生的任务、进度和记录都会保留。',
+      confirmLabel: '删除安排',
+      danger: true,
+    );
+    if (!confirmed || !mounted) return;
+    await ref.read(plansControllerProvider.notifier).deletePlan(
+          planId: plan.id,
         );
   }
 
@@ -736,7 +733,7 @@ class _PlanList extends StatelessWidget {
                           ),
                           const SizedBox(height: 3),
                           Text(
-                            '${plan.scopeLabel} · ${plan.priorityLabel}${plan.questionPolicy.enabled ? ' · 题库策略已开启' : ''}',
+                            '${plan.scopeLabel} · ${plan.priorityLabel}${plan.questionPolicy.enabled ? ' · 自动答题已开启' : ''}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -837,20 +834,23 @@ class _MetaChip extends StatelessWidget {
 }
 
 class _TaskRow extends StatelessWidget {
-  const _TaskRow({required this.task, required this.onTap});
+  const _TaskRow({required this.task, required this.onTap, this.onRedispatch});
 
   final LearningTask task;
   final VoidCallback onTap;
+  final VoidCallback? onRedispatch;
 
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
     final observation = task.observation?.effectiveFraction;
+    final closed = taskIsClosed(task);
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Semantics(
         button: true,
-        label: '${task.title}，${task.state.label}',
+        label:
+            '${task.title}，${closed ? taskClosedLabel(task) : task.state.label}',
         child: InkWell(
           onTap: onTap,
           borderRadius: BorderRadius.circular(colors.radius - 2),
@@ -881,15 +881,19 @@ class _TaskRow extends StatelessWidget {
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Icon(
-                        taskStateIcon(task.state),
+                        closed
+                            ? Icons.event_busy_outlined
+                            : taskStateIcon(task.state),
                         size: 17,
-                        color: switch (taskStateTone(task.state)) {
-                          StatusTone.success => colors.success,
-                          StatusTone.danger => colors.danger,
-                          StatusTone.warning => colors.warning,
-                          StatusTone.accent => colors.accent,
-                          _ => colors.textSecondary,
-                        },
+                        color: closed
+                            ? colors.muted
+                            : switch (taskStateTone(task.state)) {
+                                StatusTone.success => colors.success,
+                                StatusTone.danger => colors.danger,
+                                StatusTone.warning => colors.warning,
+                                StatusTone.accent => colors.accent,
+                                _ => colors.textSecondary,
+                              },
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -926,11 +930,18 @@ class _TaskRow extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(width: 8),
-                    StatusPill(
-                      label: task.state.label,
-                      tone: taskStateTone(task.state),
-                      compact: true,
-                    ),
+                    if (onRedispatch != null &&
+                        (closed ||
+                            task.state == LearningTaskState.needsAttention ||
+                            task.state == LearningTaskState.failed)) ...[
+                      const SizedBox(width: 2),
+                      IconButton(
+                        tooltip: '重新调度任务',
+                        onPressed: onRedispatch,
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.refresh, size: 18),
+                      ),
+                    ],
                   ],
                 ),
                 const SizedBox(height: 10),
@@ -977,21 +988,176 @@ class _TaskRow extends StatelessWidget {
                     ),
                   ),
                 ],
-                if (observation != null) ...[
-                  const SizedBox(height: 8),
-                  ProgressBar(
-                    value: observation,
-                    height: 4,
-                    color: task.platform.isConfirmed
-                        ? colors.success
-                        : colors.accent,
-                  ),
-                ],
+                const SizedBox(height: 9),
+                _TaskProgressLine(task: task),
               ],
             ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _PlanProgressBar extends StatelessWidget {
+  const _PlanProgressBar({required this.progress});
+
+  final PlanProgress progress;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final completed = progress.hasTasks && progress.percent >= 100;
+    final parts = <String>[
+      if (progress.active > 0) '待执行 ${progress.active} 项',
+      if (progress.attention > 0) '需要处理 ${progress.attention} 项',
+      if (progress.closed > 0) '已关闭 ${progress.closed} 项（不计入完成率）',
+      if (progress.cancelled > 0) '已取消 ${progress.cancelled} 项',
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text(
+              '总进度',
+              style: TextStyle(
+                color: colors.textSecondary,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            Text(
+              progress.hasTasks
+                  ? '已完成 ${progress.completed} / ${progress.executableTotal} · ${progress.percent}%'
+                  : '暂无任务',
+              style: TextStyle(
+                color: colors.textSecondary,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: 0, end: progress.value),
+          duration: const Duration(milliseconds: 450),
+          curve: Curves.easeOutCubic,
+          builder: (context, value, _) => ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: progress.hasTasks ? value : null,
+              minHeight: 7,
+              backgroundColor: colors.border,
+              valueColor: AlwaysStoppedAnimation(
+                completed ? colors.success : colors.accent,
+              ),
+            ),
+          ),
+        ),
+        if (progress.hasTasks && parts.isNotEmpty) ...[
+          const SizedBox(height: 6),
+          Text(
+            parts.join(' · '),
+            style: TextStyle(
+              color: progress.attention > 0 ? colors.danger : colors.muted,
+              fontSize: 12,
+              height: 1.5,
+            ),
+          ),
+        ] else if (!progress.hasTasks) ...[
+          const SizedBox(height: 6),
+          Text(
+            '课程同步后生成的任务会出现在这里。',
+            style: TextStyle(color: colors.muted, fontSize: 12, height: 1.5),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _TaskProgressLine extends StatelessWidget {
+  const _TaskProgressLine({required this.task});
+
+  final LearningTask task;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final observed = task.observation?.effectiveFraction;
+    final closed = taskIsClosed(task);
+    final (double? value, Color color, String label) = closed
+        ? (0.0, colors.muted, taskClosedDetail(task))
+        : switch (task.state) {
+            LearningTaskState.confirmed => (1.0, colors.success, '平台确认完成'),
+            LearningTaskState.cancelled => (
+                observed ?? 1.0,
+                colors.muted,
+                '已取消',
+              ),
+            LearningTaskState.preparing || LearningTaskState.running => (
+                observed,
+                colors.accent,
+                observed == null
+                    ? '执行中，等待观察数据'
+                    : '执行观察 ${formatPercent(observed)}',
+              ),
+            LearningTaskState.waitingVerification => (
+                1.0,
+                colors.warning,
+                '等待平台确认',
+              ),
+            LearningTaskState.needsAttention || LearningTaskState.failed => (
+                observed ?? 0.0,
+                colors.danger,
+                '需要处理',
+              ),
+            LearningTaskState.paused => (
+                observed ?? 0.0,
+                colors.warning,
+                '已暂停',
+              ),
+            _ => (
+                observed ?? 0.0,
+                colors.accent,
+                observed == null ? '等待执行' : '执行观察 ${formatPercent(observed)}',
+              ),
+          };
+    final percent = value == null ? '进行中' : '${(value * 100).round()}%';
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: colors.textSecondary, fontSize: 12),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              percent,
+              style: TextStyle(color: colors.muted, fontSize: 12),
+            ),
+          ],
+        ),
+        const SizedBox(height: 5),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: LinearProgressIndicator(
+            value: value,
+            minHeight: 5,
+            backgroundColor: colors.border,
+            valueColor: AlwaysStoppedAnimation(color),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1036,4 +1202,196 @@ class _TaskGroup {
 
   final String title;
   final List<LearningTask> tasks;
+}
+
+/// 当前页的任务列表；“当前”筛选按执行状态分组，其余筛选平铺。
+class _TaskListPage extends StatelessWidget {
+  const _TaskListPage({
+    required this.tasks,
+    required this.onTap,
+    required this.onRedispatch,
+    required this.grouped,
+  });
+
+  final List<LearningTask> tasks;
+  final ValueChanged<LearningTask> onTap;
+  final ValueChanged<LearningTask> onRedispatch;
+  final bool grouped;
+
+  @override
+  Widget build(BuildContext context) {
+    if (!grouped) {
+      return Column(
+        children: [
+          for (final task in tasks)
+            _TaskRow(
+              task: task,
+              onTap: () => onTap(task),
+              onRedispatch: () => onRedispatch(task),
+            ),
+        ],
+      );
+    }
+    final groups = <_TaskGroup>[
+      _TaskGroup(
+        title: '执行中',
+        tasks: tasks
+            .where((task) =>
+                task.state == LearningTaskState.running ||
+                task.state == LearningTaskState.preparing)
+            .toList(growable: false),
+      ),
+      _TaskGroup(
+        title: '等待平台确认',
+        tasks: tasks
+            .where(
+                (task) => task.state == LearningTaskState.waitingVerification)
+            .toList(growable: false),
+      ),
+      _TaskGroup(
+        title: '接下来',
+        tasks: tasks
+            .where((task) => task.state == LearningTaskState.pending)
+            .toList(growable: false),
+      ),
+      _TaskGroup(
+        title: '已暂停',
+        tasks: tasks
+            .where((task) => task.state == LearningTaskState.paused)
+            .toList(growable: false),
+      ),
+    ];
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        for (final group in groups)
+          if (group.tasks.isNotEmpty) ...[
+            Padding(
+              padding: const EdgeInsets.only(top: 6, bottom: 7),
+              child: Text(
+                '${group.title} · ${group.tasks.length}',
+                style: TextStyle(
+                  color: context.colors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.4,
+                ),
+              ),
+            ),
+            for (final task in group.tasks)
+              _TaskRow(
+                task: task,
+                onTap: () => onTap(task),
+                onRedispatch: () => onRedispatch(task),
+              ),
+          ],
+      ],
+    );
+  }
+}
+
+/// 右下角页码切换控件。
+class _TaskPagerControls extends StatelessWidget {
+  const _TaskPagerControls({
+    required this.page,
+    required this.totalPages,
+    required this.busy,
+    required this.hasPrevious,
+    required this.hasNext,
+    required this.onPrevious,
+    required this.onNext,
+  });
+
+  final int page;
+  final int totalPages;
+  final bool busy;
+  final bool hasPrevious;
+  final bool hasNext;
+  final VoidCallback? onPrevious;
+  final VoidCallback? onNext;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          totalPages > 0 ? '$page / $totalPages' : '$page',
+          style: TextStyle(
+            color: colors.textSecondary,
+            fontSize: 12,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(width: 4),
+        _PagerIcon(
+          icon: Icons.chevron_left,
+          tooltip: '上一页',
+          busy: busy,
+          enabled: hasPrevious,
+          onTap: onPrevious,
+        ),
+        _PagerIcon(
+          icon: Icons.chevron_right,
+          tooltip: '下一页',
+          busy: busy,
+          enabled: hasNext,
+          onTap: onNext,
+        ),
+      ],
+    );
+  }
+}
+
+class _PagerIcon extends StatelessWidget {
+  const _PagerIcon({
+    required this.icon,
+    required this.tooltip,
+    required this.busy,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String tooltip;
+  final bool busy;
+  final bool enabled;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = context.colors;
+    final active = enabled && !busy;
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: active ? onTap : null,
+        borderRadius: BorderRadius.circular(7),
+        child: Container(
+          width: 28,
+          height: 28,
+          decoration: BoxDecoration(
+            color: active ? colors.surfaceSubtle : Colors.transparent,
+            borderRadius: BorderRadius.circular(7),
+            border:
+                Border.all(color: active ? colors.border : Colors.transparent),
+          ),
+          child: busy
+              ? Padding(
+                  padding: const EdgeInsets.all(7),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation(colors.muted),
+                  ),
+                )
+              : Icon(
+                  icon,
+                  size: 18,
+                  color: active ? colors.textSecondary : colors.muted,
+                ),
+        ),
+      ),
+    );
+  }
 }

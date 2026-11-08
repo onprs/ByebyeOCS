@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:byebyeocs_client/core/models/plan.dart';
+import 'package:byebyeocs_client/design/components.dart';
 import 'package:byebyeocs_client/features/courses/course_detail_page.dart';
 import 'package:byebyeocs_client/features/plans/plan_editor.dart';
 
@@ -55,6 +56,46 @@ void main() {
     });
   }
 
+  testWidgets('390px 关闭任务独立展示且不进入章节完成率分母', (tester) async {
+    final server = TestServer(overrides: {
+      'GET /api/v1/courses/c1': (_) async => jsonResponse({
+            ...courseOutlineFixture,
+            'task_point_count': 2,
+            'incomplete_task_point_count': 1,
+            'closed_task_point_count': 1,
+            'chapters': [
+              {
+                'id': 'progress-chapter',
+                'external_id': 'progress-chapter',
+                'title': '进度章节',
+                'attachments': [
+                  {
+                    'id': 'confirmed-point',
+                    'title': '已确认任务',
+                    'is_task_point': true,
+                    'passed_known': true,
+                    'platform_passed': true
+                  },
+                  {
+                    'id': 'closed-point',
+                    'title': '当前关闭任务',
+                    'is_task_point': true,
+                    'counted_incomplete': true,
+                    'availability': 'closed'
+                  },
+                ],
+              },
+            ],
+          }),
+    });
+    await pumpTestPage(tester, const CourseDetailPage(courseId: 'c1'),
+        handler: server.call, size: const Size(390, 1100));
+    expect(find.text('1 / 1 · 1 个已关闭'), findsOneWidget);
+    expect(find.widgetWithText(StatusPill, '已关闭'), findsOneWidget);
+    expect(find.text('当前关闭任务'), findsOneWidget);
+    expect(tester.takeException(), isNull);
+  });
+
   testWidgets('手机展示深层目录时缩进有界且保留所有层级', (tester) async {
     final chapters = List.generate(
         32,
@@ -95,7 +136,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('安排勾选目录分支后保存实际章节，排除目录分组和其他分支', (tester) async {
+  testWidgets('编辑原选定章节的安排时统一保存为全部章节', (tester) async {
     final planMap = <String, dynamic>{
       ...planFixture,
       'scope': {
@@ -104,9 +145,13 @@ void main() {
         'chapters': <Map<String, dynamic>>[],
       },
     };
+    var detailRequested = false;
     Map<String, dynamic>? saved;
     final server = TestServer(overrides: {
-      'GET /api/v1/courses/c1': (_) async => jsonResponse(courseOutlineFixture),
+      'GET /api/v1/courses/c1': (_) async {
+        detailRequested = true;
+        return jsonResponse(courseOutlineFixture);
+      },
       'GET /api/v1/plans/p1': (_) async =>
           jsonResponse(planMap, headers: {'etag': '"v3"'}),
       'PATCH /api/v1/plans/p1': (request) async {
@@ -118,21 +163,19 @@ void main() {
     await pumpTestPage(
         tester, PlanEditorSheet(plan: LearningPlan.parse(planMap)),
         handler: server.call);
-    final group = find.widgetWithText(CheckboxListTile, '1 课程导学');
-    await tester.ensureVisible(group);
-    await tester.tap(group);
-    await settle(tester);
-    expect(tester.widget<CheckboxListTile>(group).value, isTrue);
+
+    expect(find.text('章节范围'), findsNothing);
+    expect(find.textContaining('保存后统一为全部章节'), findsOneWidget);
+    expect(find.text('选择章节'), findsNothing);
+
     await tester.tap(find.text('保存安排'));
     await settle(tester);
+
     expect(saved, isNotNull);
     final scope = saved!['scope'] as Map<String, dynamic>;
-    final selected = (scope['chapters'] as List)
-        .cast<Map<String, dynamic>>()
-        .map((chapter) => chapter['chapter_id'])
-        .toSet();
-    expect(
-        selected, {'chapter-900', 'chapter-100', 'chapter-700', 'chapter-50'});
+    expect(scope['kind'], 'all');
+    expect(scope['chapters'], isEmpty);
+    expect(detailRequested, isFalse);
     expect(tester.takeException(), isNull);
   });
 }

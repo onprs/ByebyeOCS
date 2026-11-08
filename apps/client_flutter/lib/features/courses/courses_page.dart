@@ -131,13 +131,13 @@ class _CoursesPageState extends ConsumerState<CoursesPage> {
     final filtered = data.courses.where((course) {
       return switch (_filter) {
         _CourseFilter.all => true,
-        _CourseFilter.pending => course.incompleteTaskPointCount > 0,
+        _CourseFilter.pending => course.pendingTaskPoints > 0,
         _CourseFilter.confirmed => course.allConfirmed,
       };
     }).toList()
       ..sort(_compareCourses);
     final pending = data.courses
-        .where((course) => course.incompleteTaskPointCount > 0)
+        .where((course) => course.pendingTaskPoints > 0)
         .length;
     final confirmed =
         data.courses.where((course) => course.allConfirmed).length;
@@ -361,14 +361,16 @@ class _CourseCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
-    final progress = course.taskPointCount == 0
+    final progress = course.executableTaskPoints == 0
         ? 0.0
-        : course.confirmedTaskPoints / course.taskPointCount;
+        : course.confirmedTaskPoints / course.executableTaskPoints;
     return Semantics(
       button: true,
       label: course.detailsPending
           ? '${course.title}，课程内容待同步'
-          : '${course.title}，平台已确认 ${course.confirmedTaskPoints} 个，待完成 ${course.incompleteTaskPointCount} 个',
+          : course.isClosed
+              ? '${course.title}，课程已结束'
+              : '${course.title}，平台已确认 ${course.confirmedTaskPoints} 个，待完成 ${course.pendingTaskPoints} 个，已关闭 ${course.closedTaskPointCount} 个',
       child: InkWell(
         onTap: onTap,
         borderRadius: colors.cardRadius,
@@ -408,7 +410,14 @@ class _CourseCard extends StatelessWidget {
                             ),
                           ),
                         ),
-                        if (course.stale)
+                        if (course.isClosed)
+                          const StatusPill(
+                            label: '已结束',
+                            tone: StatusTone.neutral,
+                            compact: true,
+                            icon: Icons.event_busy_outlined,
+                          )
+                        else if (course.stale)
                           const StatusPill(
                             label: '待同步',
                             tone: StatusTone.warning,
@@ -470,7 +479,7 @@ class _CourseCard extends StatelessWidget {
                         Text(
                           course.detailsPending
                               ? ''
-                              : ' / ${course.taskPointCount}',
+                              : ' / ${course.executableTaskPoints}',
                           style: TextStyle(
                             color: colors.muted,
                             fontSize: 13,
@@ -487,14 +496,19 @@ class _CourseCard extends StatelessWidget {
                           child: Text(
                             course.detailsPending
                                 ? '课程内容待同步'
-                                : course.taskPointCount == 0
-                                    ? '该课程暂无任务点'
-                                    : course.incompleteTaskPointCount > 0
-                                        ? '${course.incompleteTaskPointCount} 个任务点待完成'
-                                        : '任务点已全部确认',
+                                : course.isClosed
+                                    ? '课程已结束，不再派发任务'
+                                    : course.executableTaskPoints == 0
+                                        ? '该课程任务点均已关闭'
+                                    : course.pendingTaskPoints > 0
+                                        ? '${course.pendingTaskPoints} 个任务点待完成${course.closedTaskPointCount > 0 ? ' · ${course.closedTaskPointCount} 个已关闭' : ''}'
+                                        : course.closedTaskPointCount > 0
+                                            ? '任务点已确认 · ${course.closedTaskPointCount} 个已关闭'
+                                            : '任务点已全部确认',
                             style: TextStyle(
                               color: course.detailsPending ||
-                                      course.incompleteTaskPointCount > 0
+                                      course.isClosed ||
+                                      course.pendingTaskPoints > 0
                                   ? colors.textSecondary
                                   : colors.success,
                               fontSize: 12,
@@ -521,13 +535,14 @@ class _CourseCard extends StatelessWidget {
 
 int _courseRank(CourseSummary course) {
   if (course.detailsPending) return 2;
-  if (course.taskPointCount == 0) return 3;
-  if (course.incompleteTaskPointCount > 0) return 0;
+  if (course.isClosed) return 4;
+  if (course.executableTaskPoints == 0) return 3;
+  if (course.pendingTaskPoints > 0) return 0;
   return 1;
 }
 
 int _compareCourses(CourseSummary a, CourseSummary b) {
   final rank = _courseRank(a).compareTo(_courseRank(b));
   if (rank != 0) return rank;
-  return b.incompleteTaskPointCount.compareTo(a.incompleteTaskPointCount);
+  return b.pendingTaskPoints.compareTo(a.pendingTaskPoints);
 }

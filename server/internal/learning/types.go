@@ -52,10 +52,13 @@ const (
 	FailureSubmissionUnknown  FailureClass = "submission_unknown"
 	FailureStopped            FailureClass = "stopped"
 	FailureCancelled          FailureClass = "cancelled"
+	// FailurePlatformClosed 表示任务点在学习通已关闭或当前不可作答，不是能力缺陷。
+	FailurePlatformClosed FailureClass = "platform_closed"
 )
 
 // Failure 只携带可安全展示的分类和摘要，不包含上游原始响应、Cookie 或地址。
 type Failure struct {
+	Code       string
 	Class      FailureClass
 	RetryAfter time.Duration
 	Detail     string
@@ -112,6 +115,8 @@ type PlatformCourse struct {
 	Term             string
 	CoverURL         string
 	CoverKnown       bool
+	// PlatformState 为 active/closed/unknown；closed 表示平台已结束课程。
+	PlatformState string
 }
 
 // CourseCoverImage 是已校验、缩小并去除原始元数据的静态JPEG。
@@ -144,6 +149,8 @@ type PlatformAttachment struct {
 	Passed          bool
 	PassedKnown     bool
 	SortOrder       int
+	// 保留关闭章节的历史附件时，沿用原平台核验时间。
+	ProgressCheckedAt *time.Time
 }
 
 type PlatformChapter struct {
@@ -151,6 +158,7 @@ type PlatformChapter struct {
 	ParentExternalID string
 	Number           string
 	IsGroup          bool
+	Closed           bool
 	Title            string
 	SortOrder        int
 	Attachments      []PlatformAttachment
@@ -285,16 +293,19 @@ func (f QuestionsPolicyValidatorFunc) ValidateQuestionPolicy(ctx context.Context
 
 // ExecutionRequest 携带已领取尝试、绑定安排版本和平台会话。
 type ExecutionRequest struct {
-	AttemptID      string
-	TaskID         string
-	UserID         string
-	FenceToken     int64
-	Session        []byte
-	TaskKind       string
-	Task           PlatformTaskRef
-	PlanRevision   string
-	Priority       int
-	QuestionPolicy QuestionPolicy
+	// ReportObservation 只写执行观察，不产生平台完成或播放证据。
+	ReportObservation     func(context.Context, Observation) error
+	AnswerRetryGeneration int
+	AttemptID             string
+	TaskID                string
+	UserID                string
+	FenceToken            int64
+	Session               []byte
+	TaskKind              string
+	Task                  PlatformTaskRef
+	PlanRevision          string
+	Priority              int
+	QuestionPolicy        QuestionPolicy
 	// MediaDurationSeconds 是课程快照中的附件时长；0 表示未知。
 	MediaDurationSeconds float64
 	// StopRequested 在用户/管理员请求暂停或取消后为 true，执行器必须安全确认后返回。
@@ -307,6 +318,9 @@ type ExecutionResult struct {
 	StopAcknowledged bool
 	Observation      Observation
 	Media            MediaEvidence
+	// PlatformCompletion 是平台在执行响应里明确返回的完成事实，
+	// 用于卡片不提供完成字段的任务（例如文档“考核点已经完成”）。
+	PlatformCompletion *PlatformCheck
 }
 
 type Executor interface {

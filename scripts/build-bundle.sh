@@ -83,6 +83,10 @@ for notice in "$ROOT"/NOTICE* "$ROOT"/COPYING*; do
   [[ -f "$notice" ]] || continue
   cp -a -- "$notice" "$BUILD_DIR/THIRD_PARTY_NOTICES/"
 done
+# 字体参考与 Unicode 属性数据的授权随业务程序一起分发。
+if [[ -d "$ROOT/licenses" ]]; then
+  cp -a -- "$ROOT/licenses" "$BUILD_DIR/THIRD_PARTY_NOTICES/licenses"
+fi
 if [[ -f "$ROOT/README.md" ]]; then
   cp -a -- "$ROOT/README.md" "$BUILD_DIR/README.md"
 fi

@@ -485,7 +485,7 @@ func TestVerificationCodesStopOperations(t *testing.T) {
 		{"人脸或交互验证", FailureVerificationNeeded, StateNeedsAttention, "", 3},
 		{"身份失效", FailureIdentityInvalid, StateNeedsAttention, "identity_invalid", 3},
 		{"403", FailureForbidden, StateNeedsAttention, "forbidden", 3},
-		{"429", FailureRateLimited, StateNeedsAttention, "", 1},
+		{"429", FailureRateLimited, StatePending, "", 1},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -532,8 +532,8 @@ func TestVerificationCodesStopOperations(t *testing.T) {
 				WHERE id = $1`, taskID).Scan(&nextAttempt); err != nil {
 				t.Fatal(err)
 			}
-			if test.class == FailureRateLimited && nextAttempt != nil {
-				t.Fatal("限流耗尽后仍在自动重试")
+			if test.class == FailureRateLimited && nextAttempt == nil {
+				t.Fatal("限流没有进入有界冷却恢复")
 			}
 		})
 	}
@@ -2068,7 +2068,7 @@ func TestPreCompletedSkipsExecutorAndCharge(t *testing.T) {
 	}
 }
 
-func TestPreflightUnknownOrErrorStopsBeforeExecutor(t *testing.T) {
+func TestPreflightUnknownAllowsProtocolValidationWithoutConfirming(t *testing.T) {
 	pool := testPool(t)
 	platform := defaultFakePlatform()
 	platform.checks["video-1"] = PlatformCheck{Status: CheckUnknown, CheckedAt: time.Now().UTC(), Source: "fresh-preflight"}
@@ -2090,12 +2090,12 @@ func TestPreflightUnknownOrErrorStopsBeforeExecutor(t *testing.T) {
 	taskID := taskIDsForUser(t, pool, userID)[0]
 	job := claimOne(t, service)
 	service.execute(context.Background(), job)
-	if executorCalls != 0 {
-		t.Fatal("核验未知仍调用执行器")
+	if executorCalls != 1 {
+		t.Fatal("受支持协议未执行自身字段核验")
 	}
 	state, _, platformStatus, _, _, _ := taskRow(t, pool, taskID)
-	if state != StateNeedsAttention || platformStatus == CheckConfirmed {
-		t.Fatalf("核验未知未停止复核: %s/%s", state, platformStatus)
+	if state != StateWaitingVerification || platformStatus == CheckConfirmed {
+		t.Fatalf("未知状态替代了平台确认: %s/%s", state, platformStatus)
 	}
 }
 
@@ -2199,5 +2199,34 @@ func TestSettlementReporterErrorRollsBackSQLOnly(t *testing.T) {
 	}
 	if marker := billingMarker(t, pool); marker != "clean" {
 		t.Fatalf("结算状态失败留下部分 SQL: %s", marker)
+	}
+}
+
+// TestPlatformClosedMarksTaskPointAvailability 验证平台关闭的测验会回写
+// 稳定任务点可用性表，而不是只改当前快照版本的附件行。
+func TestPlatformClosedMarksTaskPointAvailability(t *testing.T) {
+	pool := testPool(t)
+	service, _, taskID := prepareTask(t, pool, defaultFakePlatform())
+	job := claimOne(t, service)
+	if err := service.applyExecutionResult(context.Background(), job, ExecutionResult{},
+		Fail(FailurePlatformClosed, "测验已关闭"), service.opts.Executor.Capabilities()); err != nil {
+		t.Fatal(err)
+	}
+	state, _, _, _, _, _ := taskRow(t, pool, taskID)
+	if state != StateNeedsAttention {
+		t.Fatalf("关闭任务状态错误: %s", state)
+	}
+	var errorCode, availability string
+	if err := pool.QueryRow(context.Background(), `SELECT t.last_error_code, v.availability
+		FROM public.learning_tasks t
+		JOIN public.learning_task_point_availability v
+		  ON v.user_id=t.user_id AND v.course_id=t.course_id
+		 AND v.chapter_external_id=t.chapter_external_id
+		 AND v.task_point_id=t.task_point_id AND v.cycle_key=t.cycle_key
+		WHERE t.id=$1`, taskID).Scan(&errorCode, &availability); err != nil {
+		t.Fatal(err)
+	}
+	if errorCode != "quiz_closed" || availability != "closed" {
+		t.Fatalf("任务点可用性未回写: %s/%s", errorCode, availability)
 	}
 }

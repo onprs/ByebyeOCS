@@ -1472,6 +1472,8 @@ paths:
       - $ref: '#/components/parameters/States'
       - $ref: '#/components/parameters/CourseID'
       - $ref: '#/components/parameters/PlanIDFilter'
+      - $ref: '#/components/parameters/ActionableTasks'
+      - $ref: '#/components/parameters/TaskCategory'
   /api/v1/tasks/{id}:
     get:
       operationId: getTask
@@ -1677,6 +1679,8 @@ paths:
       - $ref: '#/components/parameters/CourseID'
       - $ref: '#/components/parameters/PlanIDFilter'
       - $ref: '#/components/parameters/UserIDFilter'
+      - $ref: '#/components/parameters/ActionableTasks'
+      - $ref: '#/components/parameters/TaskCategory'
   /admin/api/v1/account-operations:
     post:
       operationId: runAdminAccountOperations
@@ -3699,6 +3703,22 @@ components:
         type: string
         description: 按名称、学校或内部用户 UUID 搜索
         maxLength: 80
+    TaskCategory:
+      name: category
+      in: query
+      required: false
+      description: 服务端统一分类分页；返回同一快照的分类总数、安排进度及版本。范围变更后复用游标返回 409 task_list_changed。
+      schema:
+        type: string
+        enum: [current, attention, closed, history]
+    ActionableTasks:
+      name: actionable
+      in: query
+      required: false
+      description: 只返回当前非归档安排版本仍关联的可处理异常，排除平台关闭、旧版本及无当前安排的历史任务；同时返回 total_count。
+      schema:
+        type: boolean
+        default: false
     States:
       name: state
       in: query
@@ -5273,6 +5293,10 @@ components:
           type: string
           nullable: true
           format: date-time
+        availability:
+          type: string
+          enum: [unknown, open, closed]
+          description: 当前稳定任务点可用性；已关闭且未确认完成的附件单独展示，不进入可执行任务分母。
       additionalProperties: false
       required:
       - id
@@ -5289,6 +5313,10 @@ components:
       type: object
       description: 按平台目录前序排列的节点；父子关系通过同一课程内的 external_id 关联。
       properties:
+        availability:
+          type: string
+          enum: [unknown, open, closed]
+          description: 平台目录明确关闭的章节仍保留；内容不可读时只保留已知历史，不表示没有任务或已经完成。
         id:
           type: string
           format: uuid
@@ -5323,7 +5351,15 @@ components:
       - attachments
     CourseSummary:
       type: object
+      description: 目录概要及最新独立平台核验的进度投影；已确认数由任务点总数减未确认数计算，待完成数再扣除关闭任务。
       properties:
+        platform_state:
+          type: string
+          enum: [unknown, active, closed]
+        closed_task_point_count:
+          type: integer
+          minimum: 0
+          description: 未确认且已关闭或不可作答的任务点数量。
         cover_url:
           type: string
           readOnly: true
@@ -5379,7 +5415,15 @@ components:
       - resource_count
     CourseDetail:
       type: object
+      description: 概要与章节附件在同一只读可重复读事务中返回，并叠加最新平台核验。
       properties:
+        platform_state:
+          type: string
+          enum: [unknown, active, closed]
+        closed_task_point_count:
+          type: integer
+          minimum: 0
+          description: 未确认且已关闭或不可作答的任务点数量。
         cover_url:
           type: string
           readOnly: true
@@ -5885,6 +5929,13 @@ components:
     TaskSummary:
       type: object
       properties:
+        category:
+          type: string
+          enum: [current, attention, closed, history]
+        availability:
+          type: string
+          enum: [unknown, open, closed]
+          description: 当前目录章节可用性；独立任务点的关闭事实仍保存在 last_error_code。
         id:
           type: string
           format: uuid
@@ -5999,9 +6050,37 @@ components:
       - estimate
       - created_at
       - updated_at
+    TaskProgress:
+      type: object
+      properties:
+        total: {type: integer, minimum: 0}
+        completed: {type: integer, minimum: 0}
+        active: {type: integer, minimum: 0}
+        attention: {type: integer, minimum: 0}
+        closed: {type: integer, minimum: 0}
+        cancelled: {type: integer, minimum: 0}
+        percent: {type: integer, minimum: 0, maximum: 100}
+      required: [total, completed, active, attention, closed, cancelled, percent]
+      additionalProperties: false
     TaskPage:
       type: object
       properties:
+        total_count:
+          type: integer
+          minimum: 0
+          description: actionable=true 或 category 存在时提供完整筛选数量，不受当前页条数影响。
+        task_meta:
+          type: object
+          properties:
+            plan_revision_id:
+              type: string
+            category:
+              type: string
+              enum: [current, attention, closed, history]
+            progress:
+              $ref: '#/components/schemas/TaskProgress'
+          required: [plan_revision_id, category, progress]
+          additionalProperties: false
         items:
           type: array
           items:

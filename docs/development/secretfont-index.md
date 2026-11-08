@@ -1,76 +1,87 @@
-# 字形索引维护
+# 题面字形解码与维护
 
-学习通在未作答的章节测验页面上把题干与选项文字替换成随机码点，并在页面 `cxSecretStyle` 样式块里内嵌一份字体。码点每页随机，字形本身来自固定字体，所以“码点 → 真实字符”的映射每页都不同，而“字形 → 真实字符”的映射是稳定的。
+本文面向开发维护环境。正式服务的参考字体与目录随 Go 程序内置，公开运行环境无需安装字体、Python、浏览器或 OCR 服务。
 
-`server/internal/adapters/chaoxing/secretfont.go` 只做字形签名查表：
+学习通把题面文字替换为随机码点，再下发一份字体把这些码点画成原来的字。平台 `cmap` 只能说明“密文码点使用哪个字形”，无法直接给出原文 Unicode。当前保存的字体标识为 Source Han Sans CN Normal 1.000；是否可解码仍由实际几何轮廓决定，不单凭字体名称判断。
 
-1. 从页面取出内联 base64 字体，解析 `cmap`、`loca`、`glyf`，复合字形递归展开。
-2. 把每个字形还原成绝对坐标轮廓点，按闭合轮廓、端点、坐标生成截断 SHA-256 签名。
-3. 用签名查 `secretfont_index.txt`；命中即替换文本节点与 `aria-label`/`title` 属性。
+## 当前方案
 
-实际使用的字形中只要有一个没有收录，整个页面解码失败并按“字体加密，无法可信解码”转人工。这里不做模糊匹配，避免生成可疑题干后提交错误答案。
+默认路径使用原版字体的完整 Unicode 目录，自动建立几何参考，替代按课程抓页面、识字、补签名的常规维护方式。
 
-## 索引文件
+1. 提取内联或平台允许的外部字体；支持 TrueType、CFF OpenType 与 WOFF1。内联样式和外部样式的 `@import` 按各自地址解析，循环导入去重，最多读取 8 份外部样式、尝试 12 个字体声明。一个声明包含多个 `src` 时继续尝试可解析格式。
+2. 只在实际使用码点时解析轮廓。未使用的异常字形不阻断题面；实际使用的损坏字形仍返回失败，只有确实为空的轮廓才作为空格。
+3. 将轮廓统一到 1000 单位/em，按最大 0.2 单位的曲线展开误差自适应取样；位置、大小、基线与笔画全部保留。
+4. 用轮廓数量和包围范围分桶查候选，再逐轮廓一对一核对双向边界距离。轮廓顺序、起点、方向，以及三次曲线转换为二次曲线，不要求相同。允许的绝对边界误差为 6/1000 em，用于容纳平台字体转换误差；多个不同字符同时满足时保留歧义，不按最近的候选任选一个。
+5. Unicode 17.0 的 `Equivalent_Unified_Ideograph` 属性、汉字兼容规范化和原字体明确共享的注记别名负责归并部首。不同符号、大小写、全半角不作一般性归并。
+6. 原版轮廓结果优先。仍有歧义或缺少参考时，只使用既有已核对的精确签名兼容；正式路径不再采用旧 24×24 特征的相对置信差距猜字。
+7. 有 `font-cxsecret` 容器时，只改写容器及后代的文本与 `aria-label`、`title`。脚本、样式和模板跳过，其他明文保持原样。外部字体候选必须实际产生码点还原，避免把无关界面字体误当成题面字体。
 
-- `secretfont_index.txt`：自动生成，每行 `签名<TAB>字符`。
-- `secretfont_curated.txt`：人工确认条目，优先于自动投票，用于语境唯一但字形高度相近的字。
+字体资源继续使用无 Cookie 的静态客户端和平台 HTTPS 地址限制。正常答题的自动取题、查询、填写、提交与独立平台核验流程保持原有语义；本方案不增加提交审批。
 
-两者都由 `server/tools/secretfont-index` 合并写出，不要在运行时修改。
+## 参考数据与来源
 
-## 打标与生成
+- `server/internal/adapters/chaoxing/secretfont_reference.bin.gz`：SFR2 数据，含原版字体与自动生成的 44,264 条轮廓目录条目；覆盖源字体完整 cmap，跳过空白并归并明确别名。请求路径按索引找候选，不遍历整份字符表逐字渲染。
+- 原字体：Adobe Source Han Sans **1.000**，固定提交 `f25136e6c310c99be8354d447b7e17404075415f`，文件 `Normal/OTC/SourceHanSansSC-Normal.otf`。
+- 字体 SHA-256：`36eb5329cfd4850e8b514b6a2184da169f319fc349b60f23462ab23a5b622d14`。
+- `secretfont_unicode.go`：从 Unicode 17.0 `EquivalentUnifiedIdeograph.txt` 转换的 348 条标准等价映射。
+- `secretfont_index.txt`、`secretfont_curated.txt`：保留历史已核对签名，作为少量视觉别名的兼容资料。
+- `secretfont_features.bin.gz` 与旧特征生成工具：保留维护对照能力，正式解码不加载或采用其最近邻结果。
 
-`scripts/secretfont/label_pages.py` 对每页每个码点做两级匹配：
+参考包为 14,104,053 字节，解压数据 18,571,120 字节；这些数字不包含 Go 对象、索引与请求开销。参考库只初始化一次，跨页面轮廓结果缓存最多 4,096 条，并发相同轮廓使用 singleflight 合并；缓存键包含 unitsPerEm 与轮廓签名，不以每页随机码点作为共享键。
 
-1. **栅格粗筛**：把页面字形与参考字形都画进固定 em 框（基线固定），缩放到 32×32，按灰度差排序取前 40。
-2. **轮廓精排**：页面字形轮廓与候选轮廓按采样点做对称倒角距离（chamfer），得到分数与最佳/次佳差距。
+来源与授权保存在根目录 `NOTICE` 和 `licenses/`，发布包同时收录。
 
-参考字形来自本机思源黑体同族字体（`NotoSansCJK-DemiLight.ttc` 字体序号 2，即 Source Han Sans Normal 等效字重）。签名与投票由 Go 工具完成：同一签名在不同页面必须给出相同标签，冲突条目丢弃。
+## 重建参考库
 
-```bash
-# 1) 抓取未作答测验页面并打标（维护环境，凭据只从仓库根 .env 读取）
-python3 scripts/secretfont/label_pages_parallel.py 6 .local/probe/pages/*.html
-
-# 2) 生成索引（可带人工确认条目）
-go -C server run ./tools/secretfont-index \
-  -manifest .local/probe/secretfont-labels-v3.json \
-  -curated internal/adapters/chaoxing/secretfont_curated.txt \
-  -out internal/adapters/chaoxing/secretfont_index.txt
-```
-
-只有未作答页面才加密；已提交页面是明文。因此补索引要针对尚未作答的章节测验，抓取脚本遇到明文页面会跳过。
-
-## 形状兜底（全量特征表）
-
-精确签名未收录时，解码器按形状兜底：把页面字形渲染到固定坐标系（480×480、字号 360、基线 y=384、按字形宽度居中），盒式平均降采样成 16×16 粗特征与 24×24 灰度精特征，先粗筛前 40 个候选，再按精特征最近邻排序，用 `1 - 最优/次优` 作置信度。
-
-- 特征表 `secretfont_features.bin.gz`（约 0.35MB gzip，7016 个码点）由 `server/tools/secretfont-features` 离线生成。
-- 参考字体使用 Source Han Sans CN Normal 的等效实例：Noto Sans SC 可变字体实例化到 `wght=350`。实测该字重与平台内嵌字体最接近（300/350/400 三档中 350 的标签一致率最高）。
-- 兜底阈值 `secretFeatureMargin = 0.7`：在 155 个页面上按精确索引真值评估，990 个字形中保留 897 个正确结果、0 个错判；阈值 0.6 会多保留 54 个正确但放进 1 个错判（士→土）。宁可转人工也不放错字。
-- 没有特征表或置信度不足时仍然失败，不猜测。
-
-生成命令：
+以下为维护环境步骤，在仓库根目录执行。`font-build/` 是维护员自行创建的临时目录，不是公开运行前提。
 
 ```bash
-# 用可变字体实例化出静态 TTF（需要 fonttools）
-python3 - <<'PY'
-from fontTools.ttLib import TTFont
-from fontTools.varLib.instancer import instantiateVariableFont
-vf = TTFont("NotoSansSC[wght].ttf", lazy=False)
-instantiateVariableFont(vf, {"wght": 350}, inplace=False, updateFontNames=False).save("noto-sc-w350.ttf")
-PY
-go -C server run ./tools/secretfont-features -font noto-sc-w350.ttf \
-  -out internal/adapters/chaoxing/secretfont_features.bin -chars-file gb2312.txt
-gzip -9 -c internal/adapters/chaoxing/secretfont_features.bin > internal/adapters/chaoxing/secretfont_features.bin.gz
+mkdir -p font-build
+curl --fail --location \
+  https://raw.githubusercontent.com/adobe-fonts/source-han-sans/f25136e6c310c99be8354d447b7e17404075415f/Normal/OTC/SourceHanSansSC-Normal.otf \
+  --output font-build/SourceHanSansSC-Normal.otf
+
+go -C server run ./tools/secretfont-reference \
+  -font ../font-build/SourceHanSansSC-Normal.otf \
+  -sha256 36eb5329cfd4850e8b514b6a2184da169f319fc349b60f23462ab23a5b622d14 \
+  -out internal/adapters/chaoxing/secretfont_reference.bin.gz
 ```
 
-## 索引审计
+构建读取源字体自己的 Unicode cmap，不读取课程、凭据或人工字形标签。相同源文件必须生成相同二进制；回归测试检查可复现性、压缩校验及完整目录载入。更换源字体时必须重新核对字体版本、授权与真实样本，不根据“同族”或字重名称直接替换。
 
-精确索引来自打标投票，仍可能有个别错标。维护时用兜底匹配做交叉审计：把索引标签当真值，全量跑一遍兜底匹配，人工核对不一致条目的原文语境。
+## 只读审计
 
-本轮审计发现并修正 1 处：`嵑` 出现在“先变小再变大 / 先变大再变小”选项里，索引误标成“太”，已写入 `secretfont_curated.txt` 改为“大”。
+`secretfont-audit` 只读取已保存的 HTML，不发送平台请求，不调用题库，不作答或提交；报告仅含文件名、计数和固定解码原因。
 
-## 覆盖范围与限制
+```bash
+go -C server run ./tools/secretfont-audit \
+  -pages ../font-build/pages \
+  -report ../font-build/audit.json
 
-索引只收录已经抓取并打标过的字形。补字形时优先处理解码失败页面的缺失签名，人工确认后写入 `secretfont_curated.txt`，不需要修改运行时代码。
+# 禁用历史签名，单独检查原版轮廓覆盖
+go -C server run ./tools/secretfont-audit \
+  -pages ../font-build/pages -legacy=false
+```
 
-维护环境实测：155 个加密页面、997 条签名，全部页面可完整解码（缺失签名 0）。新增课程或新题型出现未收录字形时，按上面的流程补抓、补标、重建索引即可。
+本地维护样本回归：155 个已保存加密页面全部解码通过；共 5,389 次页面内去重用字，5,380 次由原版轮廓还原，9 次由历史精确签名处理别名。该批扫描约 4.8 秒，属于本机只读结果，不代表生产吞吐或实际提交成功。
+
+另对保存字体中的 1,078 种不同轮廓核对：1,075 种有唯一原版结果，3 种存在视觉别名；原版结果与 3 个历史标签不同，在页面审计中出现 11 次。当前优先采用原版几何结果，避免旧打标结果覆盖它。回归还通过重新分配码点的小型字体验证未收录的罕用字和扩展汉字，旧签名表置空后仍可解码。
+
+回归覆盖曲线转换、轮廓起点/方向变化、非等价字符冲突、共享缓存并发与容量、未使用损坏字形、实际损坏字形、Unicode cmap、内联 WOFF、无关明文、嵌套/循环导入、格式回退和界面字体排除。常规检查：
+
+```bash
+go -C server vet ./...
+go -C server test -race ./...
+```
+
+## 参考项目
+
+- [OCS 5.0 字体解码模块](https://github.com/ocsjs/ocsjs/tree/91bf7611a281fdeb6937e70d9cc49759a805de1e/packages/scripts/src/utils/font-decrypt)：从原版字体生成位图特征，粗筛、精排与增量缓存。借鉴源字体参考和增量处理思路；本实现用几何边界的绝对误差与唯一性决定是否采用结果。
+- [Samueli924/chaoxing 字体模块](https://github.com/Samueli924/chaoxing/blob/45d2106b16764231c2de2038fb042e71b23d878f/api/cxsecret_font.py)：提取字形坐标计算 MD5，查询静态映射并处理部首别名。固定点序哈希无法统一轮廓方向、起点和曲线转换，因此仅保留本项目历史精确签名作为兼容。
+- [Adobe 原版字体](https://github.com/adobe-fonts/source-han-sans/tree/f25136e6c310c99be8354d447b7e17404075415f)与 [Unicode 等价属性](https://www.unicode.org/Public/17.0.0/ucd/EquivalentUnifiedIdeograph.txt)提供实际参考数据。
+
+## 边界
+
+此方案解决当前“随机码点与字体子集”机制，消除了常规新增课程对逐字补表的依赖。任意字体并不存在仅凭随机码点就能恢复原文的通用逆运算：源字体完全更换、轮廓实质改变、字体文件缺失，或不同 Unicode 字符显示为相同轮廓时，仍可能需要新的整份参考字体或明确兼容依据。
+
+当前直接支持 TTF、CFF OpenType、WOFF1；只提供 WOFF2 或解析器不支持的 CFF2 时仍返回未支持，存在其他 `src` 则自动回退。没有可信字体且题面仍含私用码点、实际使用字形损坏或无法消除歧义时保持明确失败，不把乱码送给模型或继续提交。

@@ -1,6 +1,12 @@
 package chaoxing
 
 import (
+	"context"
+	"encoding/base64"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -45,14 +51,137 @@ func TestSecretFontRejectsUnknownGlyph(t *testing.T) {
 	}
 }
 
-// 未作答页面含有“重做”等模板文字，不能被判定为已提交。
+// 未作答页面含有“重做”“查看正确答案”“已完成”等模板文字，不能被判定为已提交。
 func TestWorkPageConfirmedSubmittedMarkers(t *testing.T) {
-	unsubmitted := "做作业 提交 重做 作业详情 剩余次数"
-	if workPageConfirmedSubmitted(unsubmitted) {
-		t.Fatal("未作答页面被判定为已提交")
+	for _, page := range []string{
+		"做作业 提交 重做 作业详情 剩余次数",
+		"查看正确答案 重做 作业详情 本页已完成",
+		"我的答案入口 剩余作答次数 已完成章节",
+		"章节已完成 未提交",
+	} {
+		if workPageConfirmedSubmitted(page) {
+			t.Fatalf("未作答页面被判定为已提交: %s", page)
+		}
+		if workPageAppearsSubmitted(page) {
+			t.Fatalf("未作答页面被判定为已提交: %s", page)
+		}
 	}
-	submitted := "查看已批阅作业 本次成绩 我的答案 正确答案 已完成"
+	submitted := "查看已批阅作业 本次成绩 100 分 我的答案 A 正确答案 A 已完成"
 	if !workPageConfirmedSubmitted(submitted) {
 		t.Fatal("已提交页面未识别")
+	}
+	if workPageConfirmedSubmitted("本次成绩 85 分") {
+		t.Fatal("只有成绩模板不能判定为已提交")
+	}
+	if !workPageConfirmedSubmitted("本次成绩 85 分 我的答案 A 正确答案 B") {
+		t.Fatal("带答案的成绩页未识别")
+	}
+	if !workPageConfirmedSubmitted("我的答案 A 正确答案 A") {
+		t.Fatal("批阅试卷未识别")
+	}
+	// 只有标签没有具体值时仍属于未作答模板，不能判为已提交。
+	if workPageConfirmedSubmitted("我的答案 正确答案 查看已批阅作业") {
+		t.Fatal("无结果值的标签被判定为已提交")
+	}
+}
+
+// 平台不同课程使用过 cxSecretStyle 变体或没有 id 的样式块；
+// 内联字体仍必须能解码，外部字体地址仍然拒绝。
+func TestSecretFontStyleBlockVariants(t *testing.T) {
+	base, err := os.ReadFile("testdata/secretfont-page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name   string
+		old    string
+		repl   string
+		wantOK bool
+	}{
+		{"后缀变体", `id="cxSecretStyle"`, `id="cxSecretStyle2"`, true},
+		{"无 id 样式块", `id="cxSecretStyle"`, ``, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			page := strings.Replace(string(base), tc.old, tc.repl, 1)
+			decoder, err := newSecretFontDecoder([]byte(page))
+			if tc.wantOK && err != nil {
+				t.Fatalf("内联字体未被识别: %v", err)
+			}
+			if tc.wantOK {
+				root := parseHTMLDocument([]byte(page))
+				if err := rewriteSecretText(root, decoder); err != nil {
+					t.Fatalf("变体样式块解码失败: %v", err)
+				}
+			}
+		})
+	}
+
+	external := []byte(`<html><head><style type="text/css">@font-face{font-family:x;src:url('https://example.test/font.ttf')}</style></head><body><p class="font-cxsecret">x</p></body></html>`)
+	if _, err := newSecretFontDecoder(external); err == nil {
+		t.Fatal("外部字体地址不应被当作内联字体")
+	}
+}
+
+// 字体位于外部样式表时，必须从同域样式与字体文件恢复解码，而不是直接转人工。
+func TestSecretFontLoadsExternalStylesheetFont(t *testing.T) {
+	page, err := os.ReadFile("testdata/secretfont-page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(page)
+	start := strings.Index(strings.ToLower(text), "<style id=\"cxsecretstyle\"")
+	if start < 0 {
+		t.Fatal("夹具缺少内联字体样式")
+	}
+	end := strings.Index(text[start:], "</style>")
+	if end < 0 {
+		t.Fatal("夹具样式块未闭合")
+	}
+	style := text[start : start+end+len("</style>")]
+	encoded := secretFontBase64.FindStringSubmatch(style)
+	if len(encoded) != 2 {
+		t.Fatal("夹具缺少内联字体数据")
+	}
+	font, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(string(encoded[1])), ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	css := `@font-face{font-family:cx;src:url('/font.ttf') format('truetype')}`
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/font.css":
+			io.WriteString(w, css)
+		case "/font.ttf":
+			w.Write(font)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	platform := testAdapter(t, server)
+	pageURL, err := url.Parse(server.URL + "/work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stripped := text[:start] + `<link rel="stylesheet" href="/font.css">` + text[start+end+len("</style>"):]
+	restored, hasFont := platform.ensureSecretFont(context.Background(), []byte(stripped), pageURL)
+	if !hasFont {
+		t.Fatal("外部样式字体没有被识别")
+	}
+	if secretFontStyleBlock(restored) == nil {
+		t.Fatal("外部样式字体没有被内联")
+	}
+	decoder, err := newSecretFontDecoder(restored)
+	if err != nil {
+		t.Fatalf("恢复后的字体无法解码: %v", err)
+	}
+	root := parseHTMLDocument(restored)
+	if err := rewriteSecretText(root, decoder); err != nil {
+		t.Fatalf("恢复后的页面无法解码: %v", err)
+	}
+	if !strings.Contains(htmlNodeText(root), "指的性目含") {
+		t.Fatal("恢复后的页面题干不正确")
 	}
 }

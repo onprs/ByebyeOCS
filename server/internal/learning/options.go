@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/onprs/ByebyeOCS/server/internal/platform/fault"
 	"github.com/onprs/ByebyeOCS/server/internal/platform/runtimeconfig"
 )
 
@@ -86,7 +87,7 @@ func (o *Options) withDefaults() {
 		o.MaxAttempts = 3
 	}
 	if o.MaxVerifications <= 0 {
-		o.MaxVerifications = 3
+		o.MaxVerifications = 12
 	}
 	if o.PreflightTimeout <= 0 {
 		o.PreflightTimeout = 20 * time.Second
@@ -106,26 +107,29 @@ func (o *Options) withDefaults() {
 }
 
 func (o *Options) validate() error {
+	// 启动校验的失败必须带着具体原因到命令行；用 fault 而不是 API 错误，
+	// 否则 serve 只能输出笼统的 internal_error。
+	invalid := func(message string) error { return fault.New("config_invalid", message) }
 	if o.ExecutionEnabled && o.Executor == nil {
-		return validation("已启用执行但未提供执行器")
+		return invalid("已启用执行但未提供执行器")
 	}
 	if o.ExecutionEnabled && o.Sessions == nil {
-		return validation("已启用执行但未提供平台会话解析器")
+		return invalid("已启用执行但未提供平台会话解析器")
 	}
 	if o.HeartbeatInterval >= o.LeaseTTL {
-		return validation("心跳间隔必须小于租约时长")
+		return invalid("心跳间隔必须小于租约时长")
 	}
 	if o.RequestTimeout < 50*time.Millisecond || o.RequestTimeout > 2*time.Minute {
-		return validation("学习接口超时必须在50毫秒至2分钟之间")
+		return invalid("学习接口超时必须在50毫秒至2分钟之间")
 	}
 	if o.ShutdownTimeout > 2*time.Minute {
-		return validation("执行退出等待时间过长")
+		return invalid("执行退出等待时间过长")
 	}
 	if o.PreflightTimeout > 2*time.Minute {
-		return validation("执行前核验超时过长")
+		return invalid("执行前核验超时过长")
 	}
-	if o.GlobalConcurrency > 256 || o.AccountConcurrency > 64 {
-		return validation("并发上限超出允许范围")
+	if o.GlobalConcurrency > 256 || o.AccountConcurrency > 256 {
+		return invalid("并发上限超出允许范围（1–256）")
 	}
 	return nil
 }
