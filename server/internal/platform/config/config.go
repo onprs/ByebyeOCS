@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -258,7 +259,7 @@ func readLimited(path string, limit int64, private bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > limit || (private && info.Mode().Perm()&0077 != 0) {
+	if !info.Mode().IsRegular() || info.Size() > limit || (private && runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0) {
 		return nil, fault.New("file_invalid", "文件类型、大小或权限不符合要求")
 	}
 	data, err := io.ReadAll(io.LimitReader(file, limit+1))

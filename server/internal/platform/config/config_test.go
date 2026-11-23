@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -59,11 +60,13 @@ func TestSecretFilesAndOverrides(t *testing.T) {
 	if err != nil || cfg.Database.DSN != testDSN {
 		t.Fatal("命令行连接文件未覆盖环境连接来源")
 	}
-	if err := os.Chmod(secretPath, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Load(configPath, environment(nil), Overrides{}); err == nil {
-		t.Fatal("接受了可被其他用户读取的连接文件")
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(secretPath, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(configPath, environment(nil), Overrides{}); err == nil {
+			t.Fatal("接受了可被其他用户读取的连接文件")
+		}
 	}
 	if _, err := Load("", environment(map[string]string{
 		"BYEBYEOCS_DATABASE_DSN": testDSN, "BYEBYEOCS_DATABASE_DSN_FILE": secretPath,

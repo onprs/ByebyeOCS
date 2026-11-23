@@ -11,14 +11,16 @@ LDFLAGS := -X github.com/onprs/ByebyeOCS/server/internal/command.Version=$(VERSI
 	-X github.com/onprs/ByebyeOCS/server/internal/command.Commit=$(COMMIT) \
 	-X github.com/onprs/ByebyeOCS/server/internal/command.BuildTime=$(BUILD_TIME)
 
-.PHONY: help server tiku tiku-source admin flutter-web build \
+.PHONY: help dev dev-doctor server tiku tiku-source admin flutter-web build \
 	check checks check-go check-admin check-flutter \
-	test test-go test-admin test-flutter test-integration test-deploy \
+	test test-go test-admin test-flutter test-dev test-integration test-deploy \
 	bundle clean
 
 help:
 	@printf '%s\n' \
 		'常用目标：' \
+		'  make dev                 一键拉起全栈本地热重载开发环境（支持 DEV_ARGS=...）' \
+		'  make dev-doctor          检查本地开发工具链、子模块与端口状态' \
 		'  make server              构建主 Go 二进制到 build/bin/byebyeocs' \
 		'  make tiku                构建独立题库 Go 二进制到 build/bin/ocs-tiku-fork' \
 		'  make admin               构建管理员静态应用' \
@@ -32,6 +34,12 @@ help:
 		'  make clean               清理 build/ 和 dist/' \
 		'' \
 		'项目许可见 LICENSE；bundle 同时收录项目许可证与第三方 NOTICE。'
+
+dev:
+	node scripts/dev.mjs up $(DEV_ARGS)
+
+dev-doctor:
+	node scripts/dev.mjs doctor $(DEV_ARGS)
 
 server:
 	mkdir -p $(BIN_DIR)
@@ -95,6 +103,9 @@ test-configs: server tiku
 
 test-deploy:
 	bash scripts/test-deploy.sh
+
+test-dev:
+	node --test scripts/dev/dev.test.mjs
 
 bundle: server tiku admin flutter-web
 	@test "$(VERSION)" != "dev" || { printf '错误：bundle 需要明确的 VERSION，例如 VERSION=1.2.3。\n' >&2; exit 1; }

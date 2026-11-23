@@ -10,7 +10,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -138,11 +137,15 @@ type Disk struct {
 }
 
 func (s *Service) Disk() Disk {
-	var info syscall.Statfs_t
-	if syscall.Statfs(s.options.DataDir, &info) != nil || info.Blocks == 0 {
+	total, available, ok := diskSpace(s.options.DataDir)
+	if !ok || total == 0 {
 		return Disk{Status: "unknown"}
 	}
-	percent := float64(info.Blocks-info.Bavail) * 100 / float64(info.Blocks)
+	var used uint64
+	if total > available {
+		used = total - available
+	}
+	percent := float64(used) * 100 / float64(total)
 	state := "ok"
 	if percent >= 90 {
 		state = "maintenance"
@@ -151,7 +154,7 @@ func (s *Service) Disk() Disk {
 	} else if percent >= 70 {
 		state = "warning"
 	}
-	return Disk{Status: state, UsedPercent: percent, AvailableBytes: strconv.FormatUint(info.Bavail*uint64(info.Bsize), 10)}
+	return Disk{Status: state, UsedPercent: percent, AvailableBytes: strconv.FormatUint(available, 10)}
 }
 func (s *Service) Guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

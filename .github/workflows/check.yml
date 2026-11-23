@@ -98,3 +98,58 @@ jobs:
             scripts/build-bundle.sh scripts/test-deploy.sh
       - name: 临时目录与假 SSH 测试
         run: make test-deploy
+
+  dev-environment:
+    name: 开发者全栈热重载脚本（${{ matrix.os }}）
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: |
+            server/go.sum
+            services/tiku/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/admin/package-lock.json
+      - name: 安装本机 PostgreSQL 工具（Ubuntu）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql
+          sudo systemctl stop postgresql || true
+      - name: 验证 Windows 原生 Go 检查与单元测试
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          go -C server vet ./...
+          go -C server test ./...
+          go -C services/tiku vet ./...
+          go -C services/tiku test ./...
+      - name: 验证入口脚本语法与环境自检（Ubuntu）
+        if: runner.os == 'Linux'
+        run: |
+          bash -n scripts/dev.sh
+          ./scripts/dev.sh --help >/dev/null
+          ./scripts/dev.sh doctor
+      - name: 验证 PowerShell 入口与环境自检（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\scripts\dev.ps1 --help | Out-Null
+          .\scripts\dev.ps1 doctor
+      - name: 开发脚本单元测试
+        run: node --test scripts/dev/dev.test.mjs
+      - name: 安装管理员端开发依赖
+        run: npm --prefix apps/admin ci
+      - name: 全栈一键拉起、自动登录与 Go 热编译重启冒烟验证
+        run: node scripts/dev/ci-smoke.mjs
