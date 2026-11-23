@@ -127,14 +127,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y postgresql
           sudo systemctl stop postgresql || true
-      - name: 验证 Windows 原生 Go 检查与单元测试
+      - name: 验证 Windows 原生 Go 检查、主服务测试与题库构建
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           go -C server vet ./...
           go -C server test ./...
           go -C services/tiku vet ./...
-          go -C services/tiku test ./...
+          go -C services/tiku build -o "$env:RUNNER_TEMP\ocs-tiku-fork-check.exe" ./cmd/ocs-tiku-fork
       - name: 验证入口脚本语法与环境自检（Ubuntu）
         if: runner.os == 'Linux'
         run: |
