@@ -385,15 +385,19 @@ async function startLocalPostgres({ pgTools, stateDir, pgPort, adminPassword, in
       pgOpts += ` -k '${socketDir.replace(/'/g, "'\\''")}'`
     }
     logger.info('db', `启动本机隔离 PostgreSQL 实例（127.0.0.1:${pgPort}）…`)
+    // pg_ctl start 会拉起常驻 postgres 进程；使用 stdio: 'ignore' 防止 Windows 后台进程继承管道句柄导致阻塞，日志由 -l 写入文件。
     const started = await runCommand(pgTools.pgCtl, [
       '-D', pgDataDir,
       '-l', pgLogFile,
       '-o', pgOpts,
       '-w',
       'start',
-    ], { timeoutMs: 30000 })
+    ], { stdio: 'ignore', timeoutMs: 30000 })
     if (started.code !== 0) {
-      throw new Error(`pg_ctl 启动失败：${(started.stderr || started.stdout).trim()}（日志：${pgLogFile}）`)
+      const logTail = fs.existsSync(pgLogFile)
+        ? fs.readFileSync(pgLogFile, 'utf8').trim().split(/\r?\n/).slice(-8).join('\n')
+        : ''
+      throw new Error(`pg_ctl 启动失败（退出码 ${started.code}，日志：${pgLogFile}）${logTail ? `\n${logTail}` : ''}`)
     }
   }
 

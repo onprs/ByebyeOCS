@@ -133,10 +133,11 @@ export function attachLineReader(stream, onLine) {
 
 export function runCommand(command, args = [], options = {}) {
   return new Promise((resolve, reject) => {
+    const defaultStdio = [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe']
     const child = spawnCrossPlatform(command, args, {
       cwd: options.cwd,
       env: options.env,
-      stdio: [options.input !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      stdio: options.stdio ?? defaultStdio,
       detached: false,
     })
 
@@ -178,7 +179,10 @@ export function runCommand(command, args = [], options = {}) {
       reject(err)
     })
 
-    child.on('close', (code, signal) => {
+    // 若未接管 stdout/stderr 管道（例如 pg_ctl start 拉起常驻守护进程），在子进程 exit 时立即返回，
+    // 防止 Windows 下后台子进程继承管道句柄导致 close 事件永久阻塞。
+    const doneEvent = (!child.stdout && !child.stderr) ? 'exit' : 'close'
+    child.on(doneEvent, (code, signal) => {
       if (settled) return
       settled = true
       if (timer) clearTimeout(timer)
