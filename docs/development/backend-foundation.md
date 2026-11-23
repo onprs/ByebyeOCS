@@ -1,107 +1,63 @@
-# Go 基础服务开发与验证
+# 后端 CLI 与隔离数据库测试手册
 
-本文面向开发维护环境，是阶段1A交付时的历史快照。下文能力限制描述当时状态；现有业务、双端应用、题库与最新验证请看 [当前实现](local-implementation.md)，公开安装看 [部署指南](../../deploy/README.md)。React设计原型继续独立保留。
+> **适用范围**：开发维护环境，详述主服务二进制 `byebyeocs` 与独立题库二进制 `ocs-tiku-fork` 的命令行工具集、配置覆盖优先级及 PostgreSQL 隔离集成测试机制。
 
-## 已实现范围
+## 1. 主服务 CLI 参考（`byebyeocs`）
 
-- 独立的 `server/` Go 模块，避免构建和测试纳入保留的研究源码。
-- 原生二进制及双端监听，用户端默认 `127.0.0.1:8090`、管理员默认 `127.0.0.1:8091`；目前仅接受回环 IP。
-- 严格 YAML 配置、环境变量和命令行覆盖、受保护的连接文件、JSON 安全日志、服务端请求编号及限时优雅停止。
-- PostgreSQL 连接、版本检查、显式迁移、事务级咨询锁、内置迁移 SHA-256 校验、未来版本拒绝运行。
-- 内部用户、管理员、双端偏好和审计表结构；不创建任何账号，也未开放读写 API。
-- 已实现接口的 OpenAPI 契约和自动响应校验。其余业务契约仍在阶段 0 待补。
+构建命令：`make server`（生成 Linux 目标二进制至 `build/bin/byebyeocs`）或直接运行 `go -C server build -o ../bin/byebyeocs ./cmd/byebyeocs`。
 
-这不构成阶段 1 的完整验收。管理员认证、用户授权、数据隔离权限、偏好接口、限流、幂等、完整审计写入和备份恢复仍需后续实现。
+### 1.1 子命令速查
 
-## 维护环境要求
-
-- 构建：Go 1.26 或更高版本，首次解析依赖需要能访问 Go 模块服务。
-- 运行：Linux、PostgreSQL 16 或更高版本，以及可连接到专用数据库的数据库角色。当前现场验证仅覆盖 PostgreSQL 16.15。
-- 集成测试：隔离的 PostgreSQL 实例，测试角色还需要 `CREATEDB` 权限。测试随机创建并清理 `byebyeocs_it_*` 数据库，不在连接 URL 指定的基础库中执行迁移。
-- 以下命令从仓库根目录执行；已取得源码是开发维护前提。Docker 和浏览器均不是 Go 服务运行依赖。
-
-## 构建与配置
-
-```bash
-CGO_ENABLED=0 go -C server build -trimpath -o ../bin/byebyeocs ./cmd/byebyeocs
-./bin/byebyeocs version
-```
-
-示例配置位于 `server/configs/byebyeocs.example.yaml`。创建本机配置和私有连接文件：
-
-```bash
-mkdir -p .local
-chmod 700 .local
-cp server/configs/byebyeocs.example.yaml .local/service.yaml
-umask 077
-printf '%s\n' 'postgres://service:REPLACE_WITH_URL_ENCODED_PASSWORD@127.0.0.1:5432/byebyeocs?sslmode=disable' > .local/database.dsn
-chmod 600 .local/database.dsn
-export BYEBYEOCS_DATABASE_DSN_FILE="$PWD/.local/database.dsn"
-```
-
-执行前，将示例 URL 改为本机专用 PostgreSQL 库和角色的实际连接信息；密码中的特殊字符使用 URL 编码。迁移角色须具备该库 `public` schema 的建表权限。当前命令不会创建数据库或数据库角色。连接串是私密配置，不应提交到仓库。
-
-回环 IP 的本地数据库允许显式 `sslmode=disable`；远程数据库必须显式 `sslmode=verify-full`，并按 PostgreSQL 驱动要求配置可信根证书。远程 TLS 分支目前有配置校验测试，尚未进行外部数据库现场验证。
-
-支持的配置覆盖如下：
-
-| 配置 | 环境变量 | 命令行 |
+| 命令 | 数据库依赖 | 用途说明 |
 | --- | --- | --- |
-| 配置文件位置 | `BYEBYEOCS_CONFIG` | `--config` |
-| 用户监听地址 | `BYEBYEOCS_USER_LISTEN` | `--user-listen` |
-| 管理员监听地址 | `BYEBYEOCS_ADMIN_LISTEN` | `--admin-listen` |
-| 日志级别 | `BYEBYEOCS_LOG_LEVEL` | `--log-level` |
-| 数据库连接文件 | `BYEBYEOCS_DATABASE_DSN_FILE` | `--database-dsn-file` |
-| 数据库连接 URL | `BYEBYEOCS_DATABASE_DSN` | 无，避免命令行历史与进程参数记录连接串 |
+| `byebyeocs config init [参数]` | 无 | 初始化新 YAML 配置、`application-v1.key` 与独立 `identity.key`（目标文件已存在时拒绝覆盖）；本地开发可加 `--development` |
+| `byebyeocs config check --config PATH` | 无 | 校验 YAML 语法、未知字段、监听地址、Origin、DSN 格式与密钥权限，输出 JSON 能力摘要 |
+| `byebyeocs migrate status --config PATH` | 只读连接 | 检查当前数据库已应用的迁移版本、连续性与 SHA-256 校验和 |
+| `byebyeocs migrate up --config PATH` | 读写事务锁 | 获取咨询锁并显式执行所有待应用的内置 SQL 迁移（共 34 个版本） |
+| `byebyeocs doctor --config PATH` | 只读连接 | 校验数据库连通性且全部迁移均已就绪（返回 `{"status":"ok","database":"ok","schema":"current"}`） |
+| `byebyeocs admin create --config PATH ...` | 读写连接 | 通过 `--username`、`--password-file` 及 `--totp-output-file`（或 `--totp-secret-file`）创建管理员 |
+| `byebyeocs keys generate --output PATH` | 无 | 生成新的 Base64 编码 32 字节随机密钥文件（权限 `0600`，拒绝覆盖已有文件） |
+| `byebyeocs keys reencrypt --config PATH` | 读写连接 | 将存量旧版本密文按小批事务平滑重封装为当前 `auth.encryption_key_version` |
+| `byebyeocs serve --config PATH` | 读写连接 | 校验迁移与运行门控后启动用户监听、管理监听及后台调度/同步/事件协程 |
+| `byebyeocs version` | 无 | 输出 JSON 格式的 `version`、`commit` 与 `build_time` |
 
-其余超时和连接池参数使用 YAML。优先级为命令行、环境变量、YAML、内置默认值。配置文件中的相对 `dsn_file` 以 YAML 文件目录为基准，环境变量与命令行路径以当前目录为基准。两个数据库连接环境变量同时设置会报错；显式 `--database-dsn-file` 可以覆盖它们。YAML 不接受直接写入连接 URL。
+### 1.2 环境变量与命令行覆盖优先级
 
-## 迁移与启动
+配置合并遵循 **命令行标志 > `BYEBYEOCS_*` 环境变量 > YAML 配置文件 > 内置默认值**：
 
-```bash
-./bin/byebyeocs config check --config .local/service.yaml
-./bin/byebyeocs migrate status --config .local/service.yaml
-./bin/byebyeocs migrate up --config .local/service.yaml
-./bin/byebyeocs doctor --config .local/service.yaml
-./bin/byebyeocs serve --config .local/service.yaml
-```
+- 基础连接与监听：`BYEBYEOCS_CONFIG`（`--config`）、`BYEBYEOCS_USER_LISTEN`（`--user-listen`）、`BYEBYEOCS_ADMIN_LISTEN`（`--admin-listen`）、`BYEBYEOCS_LOG_LEVEL`（`--log-level`）、`BYEBYEOCS_DATABASE_DSN_FILE`（`--database-dsn-file`）、`BYEBYEOCS_DATABASE_DSN`（仅限环境变量，不提供 CLI 参数以防进程列表泄露密码；不可与 `BYEBYEOCS_DATABASE_DSN_FILE` 同时设置）。
+- 运行与安全路径：`BYEBYEOCS_MODE`、`BYEBYEOCS_AUTH_ENABLED`、`BYEBYEOCS_COOKIE_SECURE`、`BYEBYEOCS_AUTH_KEY_FILE`、`BYEBYEOCS_AUTH_KEY_VERSION`、`BYEBYEOCS_IDENTITY_KEY_FILE`、`BYEBYEOCS_USER_ORIGIN`、`BYEBYEOCS_ADMIN_ORIGIN`、`BYEBYEOCS_DATA_DIR`、`BYEBYEOCS_ADMIN_ASSETS_DIR`、`BYEBYEOCS_CLIENT_ASSETS_DIR`、`BYEBYEOCS_BACKUP_STATUS_FILE`。
+- 外部能力与凭据：`BYEBYEOCS_LEARNING_ENABLED`、`BYEBYEOCS_EXECUTION_ENABLED`、`BYEBYEOCS_PAYMENTS_ENABLED`、`BYEBYEOCS_CHARGING_ENABLED`、`BYEBYEOCS_ZPAY_MERCHANT_ID`、`BYEBYEOCS_ZPAY_KEY_FILE`、`BYEBYEOCS_ZPAY_NOTIFY_URL`、`BYEBYEOCS_ZPAY_RETURN_URL`、`BYEBYEOCS_TIKU_ENABLED`、`BYEBYEOCS_TIKU_URL`、`BYEBYEOCS_TIKU_TOKEN_FILE`。
 
-`config check` 只核对配置，不连接数据库。`migrate status` 为只读检查，空库返回 `ready=false`。`migrate up` 显式执行迁移，并以事务锁串行处理并发调用；整批 SQL 和迁移记录共同提交，失败共同回滚。提交结果不明时应先重新查状态。
+## 2. 独立题库 CLI 参考（`ocs-tiku-fork`）
 
-`serve` 和 `doctor` 都要求迁移全部完成。服务启动不会创建表或自动升级；记录缺失、编号不连续、名称或校验和不匹配、数据库版本高于程序时拒绝运行。校验针对迁移记录，不等同于检测所有手动 DDL 改动。历史迁移一旦应用，后续修改应新增递增文件，不改原 SQL。
+构建命令：`make tiku`（需已拉取 `services/tiku` 子模块）。
 
-当前迁移仅建立身份、偏好和审计基础表。审计触发器阻止普通 SQL 修改、删除和清空已有事件；数据库所有者仍可更改 DDL。这不代表应用权限、完整审计机制或保留期清理已经完成。
+- `ocs-tiku-fork config check -config PATH`：校验 JSON 配置、数据库 DSN 文件、32+ 字符服务令牌、上游模型密钥文件与面板账号哈希文件。
+- `ocs-tiku-fork migrate -config PATH`：显式执行题库库内置的 8 个连续 SQL 迁移。
+- `ocs-tiku-fork panel-password -password-file IN -out OUT`：从私密密码文件生成 `/panel/` 维护账号密码哈希文件（权限 `0600`）。
+- `ocs-tiku-fork serve -config PATH`：校验迁移就绪后启动题库 API、`/panel/` 维护面板（若开启）、价格参考预热及每 24 小时有界清理协程。
 
-## 接口检查
+## 3. 单元、竞态与隔离 PostgreSQL 集成测试
 
-在第二个终端执行：
-
-```bash
-curl --fail http://127.0.0.1:8090/api/v1/capabilities
-curl --fail http://127.0.0.1:8091/admin/api/v1/capabilities
-curl --fail http://127.0.0.1:8091/health/live
-curl --fail http://127.0.0.1:8091/health/ready
-```
-
-能力接口的全部业务标志为 `false`，并公布石墨默认值与三套配色。用户监听地址不提供管理员 API 或健康检查，管理员监听地址不提供用户 API。未知路由返回统一 JSON 404；已知接口仅接受 GET、HEAD。接口不开放跨域。
-
-`live` 不查询数据库；`ready` 每次读取数据库迁移状态，数据库不可用、迁移不匹配或正在停止时返回 503。响应头和响应体中的请求编号一致，编号由服务端生成；HEAD 不返回响应体。日志不记录 URL、请求头、正文、连接串或原始异常。
-
-使用 Ctrl+C 或 SIGTERM 停止服务。两个监听同时关闭；正在处理的请求在配置的停止期限内完成，超时后取消并关闭连接。端口冲突会退出并释放已取得的监听，不会停止其他进程。
-
-## 自动检查
+### 3.1 无需外部数据库的快速检查与竞态单测
 
 ```bash
-go -C server vet ./...
+make check-go
 go -C server test -race ./...
-BYEBYEOCS_TEST_DATABASE_DSN_FILE="$PWD/.local/test-database.dsn" go -C server test -race -tags=integration ./internal/platform/postgres
-npm --prefix prototypes run build
+go -C services/tiku test -race ./...
 ```
 
-集成测试连接文件同样要求 0600 或更严格，必须指向隔离测试实例。显式启用 `integration` 标签却未配置连接文件时，测试失败，避免把未执行数据库验证写成通过。测试不会自动访问真实学习通、支付或题库服务。
+### 3.2 隔离 PostgreSQL 16+ 完整集成测试
 
-根目录 Makefile 提供 `build`、`check`、`test`、`test-integration`。GitHub Actions 单独运行 Go/PostgreSQL 测试与 React 构建；CI 的 PostgreSQL 容器仅用于测试，不构成公开部署前提。
+集成测试使用 `-tags=integration`（跨服务联调附加 `-tags=integration,tiku_fork`），通过环境变量 `BYEBYEOCS_TEST_DATABASE_DSN_FILE` 读取指向**本地隔离测试 PostgreSQL 实例**的私密连接文件（权限 `0600`，对应测试角色须具备 `CREATEDB` 权限）：
 
-## 后续衔接
+```bash
+umask 077
+printf '%s\n' 'postgres://byebyeocs_test:test_password@127.0.0.1:5432/byebyeocs_test?sslmode=disable' > .local/test.dsn
 
-阶段 1B 先补管理员 Argon2id/TOTP 认证、独立会话、CSRF/限流、权限和审计服务，再实现经过身份验证的双端外观偏好。用户外部身份仍需先验证主体稳定性与授权方式。钱包、支付、学习执行和题库按后续阶段分别启用，继续保留价格与外部授权门槛。
+# 一键运行主服务与题库全部集成测试
+BYEBYEOCS_TEST_DATABASE_DSN_FILE="$PWD/.local/test.dsn" make test-integration
+```
+
+**安全隔离机制**：`server/internal/testsupport` 不会在 DSN 指定的入口数据库中直接建表，每次测试都会动态创建带随机后缀的独立临时数据库（`byebyeocs_it_*`），运行全部迁移与并发断言后自动销毁临时库。切勿将测试 DSN 指向任何包含真实数据的生产或维护数据库。

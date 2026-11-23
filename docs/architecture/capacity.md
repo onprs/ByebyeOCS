@@ -1,79 +1,43 @@
-# 容量规划与低内存部署
+# 资源预算与容量规划架构
 
-本文面向公开Linux原生部署环境。正式任务执行使用HTTP请求，不运行浏览器、播放器或媒体解码器。主服务、独立题库、PostgreSQL及HTTPS代理需要分别控制资源；Web静态资源和App在构建环境生成。
+> **适用范围**：面向公开自托管生产环境的单机资源规划参考（默认基准目标约 **2 vCPU / 4 GiB 内存 / 30 GiB SSD**，并提供 1 GiB–2 GiB 低内存起步调优参数）。所有预算值均为工程边界约束，具体承载并发以目标硬件与上游网络实测为准。
 
-2C1G可作为低并发试用规格；2C4G/30GB保留为有更多余量的规划基线。CPU、内存、磁盘和并发需要结合实际发行版、活跃任务及外部请求现场验证，尚不承诺真实用户数量。
+## 1. 内存与并发池有界控制
 
-## 1. 已完成的1GB受限组件验证
+系统在架构设计上杜绝与排队任务总数或注册用户总数成正比的内存增长——未领取的排队任务静态保存在 PostgreSQL 中，在线空闲客户端不独占数据库连接：
 
-维护环境将以下组件置于同一个Linux cgroup：
+### 1.1 标准 2C4G 生产部署默认预算
 
-- PostgreSQL16.15，同一集群中的主库与题库使用独立数据库、角色。
-- 正式Go主服务和正式题库二进制。
-- 原生HTTP执行器的本地TLS协议夹具，完成60秒普通请求执行。
-- 两次管理员密码校验、40次已认证管理API读取及40次静态入口读取。
-- 一次真实pg_dump双数据库备份及age加密，保留为本地归档。
+| 组件 | 内存规划区间 / 限制 | 连接池与并发默认值 |
+| --- | --- | --- |
+| Go 主服务（`byebyeocs`） | `GOMEMLIMIT=512MiB`，systemd `MemoryMax=768M` | `database.max_connections: 12`；学习并发全局 `4` / 单账号 `4`；单课章节并发 `4`；题库客户端并发 `2`；SSE 流上限 `64` |
+| 独立题库服务（`ocs-tiku-fork`） | systemd `MemoryMax=384M` | `database_max_connections: 4`；模型请求并发 `2`；单请求上限 `32 MiB`、最多 `8` 张图（单图 `5 MiB` / `16MP`） |
+| PostgreSQL 16+（承载主库与题库库） | 约 `768–1024 MiB` | 同实例双独立数据库与角色，避免运行两套数据库守护进程 |
+| 操作系统、systemd 与 HTTPS 反向代理 | 约 `512–768 MiB` | 负责 TLS 握手、静态缓存与访问日志 |
+| 定时 `pg_dump` / `age` 加密流式缓冲与安全余量 | 预留约 `1 GiB` | 流式管道打包加密，不在内存驻留整份转储文件 |
 
-控制组内存上限为1000000000字节（内核页对齐后999997440字节），交换空间上限0，CPU配额200%。本次复验采用主服务 `e5e6d29` 与独立题库 `3b80c40`，控制组峰值349245440字节，约333.1 MiB；内核上限、CPU配额与零交换空间均直接读取核对，内存上限和OOM事件均为0。该场景没有真实平台、模型或资金流量。题库进程在本场景中处于待机，自动测验的模型请求和提交负载尚未纳入资源测量。
+注：主服务内置嵌入的 Source Han Sans 几何字形参考库（压缩包约 `14.1 MiB`）采用单次延迟初始化与 `4,096` 条有界轮廓结果缓存；课程页码目录内存 LRU 上限 `4,096` 条；客户端封面回源单图缩放上限 `768px` / `256 KiB`。
 
-这些数据包含组件进程及控制组计入的文件缓存，尚未包含宿主系统、HTTPS代理、完整外部连接、长期业务数据、大图/大导出及长期压力。资源夹具与实际云主机可能具有不同的共享页缓存和CPU调度条件。因此，该结果支持低并发试用，实际部署仍须保留系统余量并检查峰值。
+### 1.2 低内存主机（1 GiB–2 GiB）起步调优
 
-## 2. 低内存起点
+针对轻量级低并发自托管实例，仓库随附 `deploy/systemd/byebyeocs-low-memory.conf` 与 `ocs-tiku-low-memory.conf` 可选覆盖配置，推荐搭配以下保守参数运行：
 
-下表给出低内存配置起点。Go软目标、连接池、并发和PostgreSQL参数来自本次场景；分服务systemd限额是部署建议，需结合现场峰值核对。安装完整发布目录、准备数据库和双端来源后，在现有配置中调整对应字段。
+- **主服务**：`GOMEMLIMIT=192MiB`，`MemoryHigh=256M` / `MemoryMax=384M`；`database.max_connections: 4`，`learning.global_concurrency: 1`、`account_concurrency: 1`、`chapter_concurrency: 2`，`questions.concurrency: 1`。
+- **题库服务**：`GOMEMLIMIT=96MiB`，`MemoryHigh=128M` / `MemoryMax=192M`；`database_max_connections: 2`，`limits.concurrency: 1`，单次请求收紧至 `8 MiB` / 最多 `2` 张 `2 MiB` 图片。
+- **PostgreSQL**：`shared_buffers=64MB`、`work_mem=1MB`、`maintenance_work_mem=16MB`、`max_connections=20`（保持完整事务持久化与 Argon2id 安全参数不变）。
 
-| 项目 | 低内存起点 |
-| --- | --- |
-| 主服务Go内存软目标 | `GOMEMLIMIT=192MiB` |
-| 主服务控制组 | `MemoryHigh=256M`、`MemoryMax=384M` |
-| 题库Go内存软目标 | `GOMEMLIMIT=96MiB` |
-| 题库控制组 | `MemoryHigh=128M`、`MemoryMax=192M` |
-| 主服务数据库池 | `database.max_connections: 4` |
-| 题库数据库池 | `database_max_connections: 2` |
-| 学习执行并发 | `learning.global_concurrency: 1`、`learning.account_concurrency: 1`（兼容上限 1–256） |
-| 主平台与题库查询并发 | 主配置`questions.concurrency: 1`，题库`limits.concurrency: 1`（两侧上限均为 16，本地均为 16） |
-| 题库请求与图片 | 请求8 MiB，最多2张图，每张2 MiB |
-| PostgreSQL | `shared_buffers=64MB`、`work_mem=1MB`、`maintenance_work_mem=16MB`、`max_connections=20` |
+## 2. 30 GiB 磁盘空间分配基准
 
-主服务与题库运行配置相互独立，两侧的并发都需要调整。PostgreSQL的`work_mem`会被多个查询节点和连接分别使用；上述值需要结合报表、索引维护和备份校准。正常的持久化、账务事务和密码哈希强度保持启用。
+| 存储分区内容 | 规划容量（GiB） | 控制机制 |
+| --- | ---: | --- |
+| Linux 基础系统与 PostgreSQL 运行时 | `6` | 无桌面环境、无浏览器、无容器镜像层开销 |
+| 主数据库与独立题库数据库（表与索引） | `8` | 过程日志、Outbox、缓存与查询正文按 TTL 自动分批清理 |
+| PostgreSQL 本地 WAL 日志 | `2` | 正常检查点回收，严禁手动删除 WAL |
+| 结构化应用日志与 `journald` | `1` | 配置 `journald` `SystemMaxUse` 滚动上限 |
+| 加密数据导出、课程封面表与备份临时暂存区 | `3` | 导出单包 `<= 8 MiB` 限时清理；封面总预算 `<= 256 MiB`；异机备份校验成功后立即移除本地临时包 |
+| 程序版本目录（`current` + 上一可回滚版本） | `2` | 清理更早历史发布目录，客户端 APK 放独立下载站 |
+| 峰值缓冲与安全余量 | `8` | 配合 `70%` 告警、`80%` 阻断新写入、`90%` 维护保护 |
 
-项目提供两个可选systemd内存配置。在发布目录中、首次启动前安装：
+## 3. 扩容演进边界
 
-```sh
-sudo install -d /etc/systemd/system/byebyeocs.service.d /etc/systemd/system/ocs-tiku.service.d
-sudo install -m 0644 deploy/systemd/byebyeocs-low-memory.conf /etc/systemd/system/byebyeocs.service.d/memory.conf
-sudo install -m 0644 deploy/systemd/ocs-tiku-low-memory.conf /etc/systemd/system/ocs-tiku.service.d/memory.conf
-sudo systemctl daemon-reload
-```
-
-题库部署在别处时只安装主服务配置。修改数据库、并发和内存设置后先运行配置检查，再按[部署指南](../../deploy/README.md)启动。已有实例在维护窗口应用设置。生产内存上限要结合现场峰值调整；交换空间只能用于短时缓冲。
-
-## 3. 默认部署与4GB规划
-
-默认主服务Go内存软目标512MiB、控制组硬上限768M；题库控制组硬上限384M。主服务数据库池默认12，题库池默认4，学习并发4、账号并发1、题库并发2。内存软目标和控制组上限不代表进程的固定常驻占用。
-
-4GB规划为数据库、系统缓存、较大的业务数据及操作峰值保留更多空间。原有工程预算为：主服务384–640 MiB、题库128–256 MiB、PostgreSQL768–1024 MiB、系统/代理512–768 MiB、备份增量128–256 MiB，并尽量保留约1 GiB余量。这些是预算，实际组件占用以现场指标为准。
-
-主库与题库使用同一PostgreSQL集群中的独立数据库和角色，避免重复运行两个数据库实例。题库也可通过受保护的内部接口独立部署；数据库和题库迁出后应重新测量整条请求链路。
-
-## 4. 30GB磁盘规划
-
-| 部分 | 预算GB |
-| --- | ---: |
-| 系统与原生依赖 | 6 |
-| 主库、题库数据与索引 | 8 |
-| PostgreSQL本机WAL | 2 |
-| 应用、journald与备份日志 | 1 |
-| 临时图片、导出、备份暂存 | 3 |
-| 程序版本与Web静态资源 | 2 |
-| 安全余量 | 8 |
-
-这是规划分配。题库原图默认保留24小时、答案缓存7天；长期加密备份和App安装包放在独立目标，应用主机只保留当前及上一可回滚版本。导出及备份耗时必须满足实际恢复点要求。磁盘70%提醒、80%保护新操作、90%维护，见[数据保留](data-retention.md)。
-
-## 5. 现场验收
-
-分别观察活跃任务、排队任务、SSE连接、查询量、图片体积、管理员报表、认证并发及备份的组合。记录内存RSS/cgroup峰值、CPU、数据库连接/锁/延迟、队列年龄、事件补偿与恢复点。先使用受控上游，再对明确授权的真实账号小规模验证。
-
-队列保存在PostgreSQL；未执行的排队任务和在线客户端不各自占用一条数据库连接。过程记录有界合并，资金与确认事实按事务保留。达到资源保护阈值、出现资金不变量失败或备份目标失效时停止增加负载；平台身份、权限、403/429等异常仍停止相关操作。
-
-当前结果见[本地实现与验收](../development/local-implementation.md)，正式执行决策见[ADR0009](../decisions/0009-native-http-execution.md)。
+在更高规格主机上，`owner` 可在 `config.yaml` 与管理端“运行安全”中按配置上限平滑上调连接池（主库最高 `100`、题库最高 `32`）、学习执行并发（最高 `256`）、章节同步并发（最高 `64`）与题库并发（两侧最高均为 `16`）；也可通过内网 HTTPS 将独立题库服务或 PostgreSQL 拆分至独立主机。当前架构面向单主服务进程设计，因外部学习通接口不识别内部 `fencing_token`，在未引入跨节点外部副作用协调层前不应水平启动多个主服务 `serve` 实例同时消费同一任务队列。

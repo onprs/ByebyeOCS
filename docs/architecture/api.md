@@ -1,191 +1,37 @@
-# REST API、实时事件与版本兼容
+# REST 与 SSE 接口架构
 
-已实现双端认证、业务、幂等、版本、隐私和SSE，机器可读契约见 [`api/openapi.yaml`](../../api/openapi.yaml)。React管理端和Flutter客户端调用正式Go服务，设计原型继续独立。下文说明接口设计规则；确切路径、字段和响应以当前OpenAPI与服务路由为准。
+> **适用范围**：全栈接口设计规范。主服务的精确路径、请求体、响应 Schema 与状态码定义以仓库根目录 [api/openapi.yaml](../../api/openapi.yaml) 为唯一机器可读契约（测试套件自动对实际 HTTP 响应执行 OpenAPI Schema 校验）。
 
-## 1. 共同约定
+## 1. 四类接口面与网络边界
 
-- 用户路径 `/api/v1`，管理员路径 `/admin/api/v1`，不同认证与权限。
-- ID、金额最小单位和游标使用字符串；时间为 UTC RFC 3339，展示时转换时区。
-- 修改安排和偏好使用 `ETag` / `If-Match`；缺失必要条件返回 428，冲突返回 412。
-- 下单、人工调整、退款、提交测验等命令要求 `Idempotency-Key`。按主体、方法、路径和请求摘要作用域隔离，相同键不同请求返回 409。
-- 幂等记录与业务事务共同保存。保留期覆盖业务最长生命周期；过期意图需要重新确认，不能把旧键悄悄当新请求执行。账务业务唯一键永久保护资金记录。
-- 分页支持有界 limit 与稳定游标，默认不返回全量记录；管理员多选仅影响显式 ID 集。
-- 认证失败 401、权限不足 403、输入无效 422；错误包含业务码、可读信息、request_id、可重试性和影响范围，不包含上游敏感内容。
+系统按受众与信任级别将 HTTP 接口划分为四个互不穿透的边界：
 
-```json
-{
-  "error": {
-    "code": "plan_version_conflict",
-    "message": "安排已更新，请重新加载后编辑。",
-    "request_id": "req_...",
-    "retryable": false,
-    "scope": "request"
-  }
-}
-```
+| 接口面 | 默认监听与路径前缀 | 认证方式 | 用途说明 |
+| --- | --- | --- | --- |
+| 用户端接口 | `127.0.0.1:8090` `/api/v1/*` | Web 同源 Cookie + CSRF；原生端 Bearer 访问令牌 | 服务于 Flutter Web/Android/iOS 客户端的身份、课程、安排、任务、题库查询、钱包、SSE 与隐私请求 |
+| 管理端接口 | `127.0.0.1:8091` `/admin/api/v1/*`（另含 `/health/*` 与 `/payments/callbacks/zpay`） | 管理员同源 Cookie + CSRF + RBAC（支付回调走渠道验签） | 服务于 React 管理员控制台的运行监控、用户与任务管控、对账调账、参数热调与隐私复核 |
+| 题库内部与查询接口 | `127.0.0.1:8092` `/internal/v1/offerings`、`/api/v2/*`（兼容 `/api/search`） | `Authorization: Bearer <32+字符服务令牌>` | 仅供主服务在内网或回环网络同步公开模型目录、执行幂等查题与发起错误缓存失效 |
+| 题库维护面板接口 | `127.0.0.1:8092` `/panel/api/*`（经管理端域名同源代理 `/panel/`） | 面板独立 `HttpOnly` `SameSite=Strict` Cookie + 精确 `Origin` + CSRF | 仅供题库维护员管理提供商、上游模型、公开价格版本、缓存与面板设置 |
 
-## 2. 用户 API
+## 2. 通用数据编码与幂等契约
 
-| 方法与路径 | 作用 | 关键约束 |
-| --- | --- | --- |
-| POST `/auth/chaoxing/challenges` | 创建已批准方式的登录挑战 | 返回能力、到期与隐私版本，不假设 OAuth |
-| GET `/auth/chaoxing/challenges/{id}` | 查询扫码/验证状态 | 挑战绑定当前客户端、限次与过期 |
-| POST `/auth/chaoxing/challenges/{id}/verify` | 提交学习通账号与密码 | 只需要 account/password；学校由平台返回后写入身份；敏感输入不记录 |
-| POST `/auth/refresh` | 刷新 App 会话或轮换 Web 会话 | 一次性刷新链，复用撤销 |
-| POST `/auth/logout` | 撤销客户端会话 | 明确是否同时撤销云端执行授权 |
-| GET `/me` | 身份摘要与会话提示 | 无密码、Cookie 或外部令牌 |
-| GET/PATCH `/me/preferences` | 配色、浅深模式、通知 | 默认石墨，版本更新 |
-| POST `/me/data-exports` | 请求导出 | 新鲜验证、异步、受限下载 |
-| POST `/me/deletion-requests` | 请求删除 | 资金和必要保留记录先复核 |
-| POST `/me/identity-appeals` | 身份变更申诉 | 不自动转移余额 |
-| GET `/courses` | 课程摘要 | 平台已确认、待完成与已关闭分别统计；在目录快照上叠加最新独立平台核验，无需重新同步目录；`platform_state=closed` 表示整门课程已结束，不再派发任务 |
-| POST `/course-syncs` | 发起同步 | 202，后台任务、账号去重和限速 |
-| GET `/courses/{id}` | 章节、任务点与普通资源 | 校验用户归属；概要、章节附件采用与列表相同的进度投影；附件 `availability` 表示可用性，关闭且未完成的任务不进入可执行分母，平台记录时长与执行观察分开 |
-| GET/POST `/plans` | 列表或建立安排 | 不可变版本、范围校验；`progress` 含 `closed`，关闭任务不进入完成率分母 |
-| GET/PATCH `/plans/{id}` | 查看和编辑 | If-Match，返回新版本及生效边界 |
-| POST `/plans/{id}/controls` | 启停后续安排 | 202，不伪称当前任务已停止 |
-| DELETE `/plans/{id}` | 删除安排 | 归档语义，需 Idempotency-Key；列表隐藏、停止派发、保留任务与账本 |
-| GET `/tasks` | 当前任务、异常、历史 | 按用户、安排、状态及 `category=current/attention/closed/history` 过滤；分类分页的 `task_meta`、`total_count` 与当前页共用可重复读快照，包含当前安排版本及完整进度；游标绑定归属、筛选与版本，变化后返回 409 `task_list_changed`；`actionable=true` 仅返回当前有效安排可处理异常，并提供独立于分页的 `total_count`；`availability` 表示当前章节可用性，`quiz_closed`、`course_closed`、`chapter_closed` 分别保留平台关闭原因；`observation` 只表示执行观察 |
-| GET `/tasks/{id}` | 任务证据与时间线 | 观察/平台/媒体字段独立 |
-| POST `/tasks/{id}/controls` | 暂停、继续、取消、重调度 | 状态条件、命令版本和幂等 |
-| GET `/question-models` | 题库面板已发布且用户可用的模型条目 | 不含上游模型名、服务密钥或内部健康细节 |
-| POST `/question-queries` | 查询答案，提交模型条目、`cache_first`/`always_llm`、预算 | 服务端价格快照、预占、`Idempotency-Key`；不能提交任意上游模型 |
-| GET `/question-queries/{id}` | 原题、答案、模型、缓存命中、token 分解与状态 | 无虚构置信度；不返回上游密钥 |
-| POST `/question-cache-reports` | 报告错误缓存/答案 | 标记待复核，不直接删除财务证据 |
-| 安排中的题库策略 | 后台自动取题、作答、提交与复核 | 不提供人工提交API；按冻结版本、试卷指纹和持久提交状态执行 |
-| GET `/pricing`、GET `/usage` | 已确定的用量模式、有效价格/计量版本、个人用量和结算 | 单位或价格未配置时明确不可收费，不能当 0 元价格 |
-| GET `/wallet` | 可用、预占与币种 | 字符串整数分 |
-| GET `/wallet/entries` | 充值/消费/释放/退款 | 可解释业务关联与价格版本 |
-| GET/POST `/recharge-orders` | 查询或创建充值 | 服务端校验金额、渠道和唯一意图 |
-| GET `/recharge-orders/{id}` | 支付与到账独立状态 | 不依赖返回页事实 |
-| GET `/capabilities` | 版本、授权模式、渠道和可用任务类型 | 服务端策略，客户端不能自己启用能力 |
-| GET `/events` | 用户 SSE | 同源 Cookie 或 App 认证头 |
+1. **金额与费率零浮点传输**：所有货币最小单位（人民币整数分 `*_minor`）与微元费率（`*_micros`，`1 分 = 10,000 微元`）在 JSON 中一律编码为十进制整数字符串（如 `"available_minor": "5450"`、`"cost_micros": "4716"`），彻底消除 JavaScript `Number` 与双精度浮点舍入误差。
+2. **明确区分“零费用”与“未定价”**：缓存命中时 `cache.hit = true` 且 `usage.total_tokens = 0`；尚未配置单价或模型未定价时明确返回 `pricing.state = "unpriced"`，上游返回 token 不完整时标记 `usage.complete = false`，客户端据此展示准确状态，绝不将未定价渲染为“免费 0.00 元”。
+3. **写操作幂等与乐观锁**：创建充值订单、提交题库查询、执行人工调账、审批退款及复核答案报告均支持并校验 `Idempotency-Key` 请求头（相同键搭配不同参数返回 `409 idempotency_conflict`，相同参数返回首次处理结果）；配置、偏好与安排编辑通过 `ETag: "v<version>"` 与 `If-Match: "v<version>"` 实施条件更新（缺少请求头返回 `428 precondition_required`，版本失配返回 `412 version_conflict`）。
+4. **快照一致游标分页**：列表接口统一采用不透明游标分页（`cursor` + `limit`）。尤其是任务安排列表接口，在同一可重复读数据库快照内同时计算分类汇总计数、当前安排版本与当前页记录，并在游标中绑定过滤条件与版本指纹，拒绝跨版本或跨账号混用游标。
+5. **统一错误包络**：所有错误响应返回 `{ "error": { "code": "<稳定机器码>", "message": "<面向用户的中文说明>", "request_id": "req_...", "retryable": false, "scope": "request|service" } }`，不暴露 SQL 报错、文件路径或堆栈信息。
 
-## 3. 管理员 API
+## 3. 事务 Outbox 与严格有序 SSE 实时流
 
-| 方法与路径 | 权限和用途 |
-| --- | --- |
-| GET `/capabilities` | 管理员API版本、实际可用能力、配置缺失原因与外观选项 |
-| POST `/auth/login`、POST `/auth/step-up` | 独立管理员认证与敏感操作提升验证 |
-| GET/PATCH `/me/preferences` | 当前管理员外观偏好，与普通用户隔离 |
-| GET `/dashboard` | 聚合运行、财务和服务摘要 |
-| GET `/users`、GET `/users/{id}` | 脱敏用户/账号摘要 |
-| POST `/account-operations` | 显式账号集合的暂停、限制、配置；原因必填 |
-| GET `/tasks`、GET `/tasks/{id}` | 跨用户任务与归属，要求 `learning.read`；详情含尝试、控制命令与独立平台事实，普通用户接口仍校验本人归属 |
-| POST `/task-operations` | 逐项控制和冲突结果，审计；已持久化最终提交的任务重新调度只进入独立平台核验，核验关卷后回写稳定可用性并停止重试，不改写原提交、报价或预占 |
-| GET `/orders`、GET `/wallets/{id}/entries` | 订单与账本，限制财务可见范围 |
-| POST `/wallet-adjustments` | 金额、原因、关联单据、提升验证和专用权限 |
-| POST `/refunds` | 资金来源核对、渠道能力和审批 |
-| GET/POST `/reconciliations` | 对账状态、复核与异步扫描 |
-| GET/PATCH `/settings/{group}` | 配置版本与校验；密钥只接受安全写入，不返回原值 |
-| GET `/question-models` | 只读题库公开目录与价格 | 发布、编辑、下架和测试只在题库维护面板；主管理端不写目录 |
-| GET `/question-usage` | 查询次数、缓存命中、普通输入/输出、缓存读取/创建 token、估算微元成本 | 目录从题库同步；价格未发布时显示“未定价” |
-| GET `/question-queries` | 跨用户查询与用量，权限受限 | 题目内容按权限和保留期脱敏 |
-| POST `/question-cache/invalidations` | 标记错误缓存失效 | 记录操作者、原因、影响条目 |
-| POST `/question-queries/{id}/releases` | 释放“结果未知”查询的幂等键，允许重新作答 | 只接受 `request_unknown`/`request_cancelled`/`upstream_timeout`/`pending_record_missing`/`pending_state_unknown`；释放预占、旧记录改名保留、写审计；已有用量事实的查询拒绝释放；响应附带受影响的作答任务编号，便于重新排队 |
-| GET `/question-recovery` | 在途查询回收器的运行观测 | 运行次数、处理条数、失败次数、最近运行时间与最近错误码 |
-| POST `/providers/{id}/tests` | 可达性/功能测试分开，功能测试需成本确认 |
-| GET `/audit-events` | 脱敏审计、分页和导出权限 |
-| POST `/backups`、POST `/maintenance/updates` | 提升验证、备份/签名/维护流程，不执行任意 shell |
-| GET `/events` | 管理员事件流，受角色过滤 |
+### 3.1 为什么不直接使用自增主键做游标
 
-题库维护面板使用独立账号和 Cookie，不经过主管理端会话。主平台通过服务令牌读取题库内部接口 `GET /internal/v1/offerings`；该接口只在内网或回环入口提供，不面向用户。
+在并发 PostgreSQL 事务中，两个事务分配 `BIGSERIAL` 自增 ID 的先后顺序可能与实际 `COMMIT` 可见顺序相反；若直接按自增 ID 轮询，后提交的小 ID 记录会被永久漏读。因此系统采用 **两阶段事务 Outbox 串行发布架构**：
 
-支付回调使用单独 `/payments/callbacks/{provider}` 入口，不使用用户 Cookie；通过提供商验签、商户与订单校验认证。路径命中不代表可以写钱包。
+1. **业务事务写入 Outbox**：课程、任务、钱包或隐私状态变更时，在同一数据库事务内向 `learning_outbox`（或直接调用事件写入器）插入带 `event_id`、受众、业务资源 `resource_id` 与递增 `resource_version` 的未发布记录。
+2. **串行流头分配**：后台桥接器通过 `FOR UPDATE SKIP LOCKED` 批量取出已提交的 Outbox 记录，在同一短事务内锁定目标流头（`event_stream_heads`）分配严格单调递增的投递序号 `seq`，批量写入 `event_stream_entries` 并标记 Outbox 已发布，随后唤醒内存订阅通道推送给在线 SSE 连接。
 
-## 4. 代表性数据
+### 3.2 连接配额、断线补偿与权限过滤
 
-```json
-{
-  "id": "task_...",
-  "state": "waiting_verification",
-  "desired_state": "run",
-  "version": 7,
-  "observation": { "fraction": 1.0, "source": "executor", "observed_at": "2026-10-20T06:30:00Z" },
-  "platform": { "status": "unconfirmed", "checked_at": "2026-10-20T06:30:02Z" },
-  "media_evidence": { "available": false },
-  "estimate": { "remaining_seconds_min": null, "remaining_seconds_max": null, "estimated": true }
-}
-```
-
-进度观察可以为浮点比例，资金仍必须整数；观察结束不变成平台通过。没有足够依据时不输出预计时长，不能制造倒计时。
-
-题库查询请求：
-
-```json
-{
-  "model_offering_id": "qm_standard",
-  "mode": "cache_first",
-  "question": {
-    "title": "下列说法中正确的是？",
-    "options": "A. ...\nB. ...",
-    "type": "single",
-    "images": []
-  },
-  "budget": { "max_output_tokens": 1024 }
-}
-```
-
-客户端传 `Idempotency-Key`；服务端校验配额、模型可见性、价格/预占和图片权限，再调用 fork。主平台不接受客户端自定义的上游模型名或服务地址。
-
-题库查询响应：
-
-```json
-{
-  "id": "qq_...",
-  "status": "answered",
-  "model": { "offering_id": "qm_standard", "display_name": "标准模型" },
-  "mode": "cache_first",
-  "cache": { "hit": false },
-  "answer": "A",
-  "usage": {
-    "input_tokens": 1284,
-    "output_tokens": 96,
-    "total_tokens": 1380,
-    "complete": true,
-    "calls": [
-      { "slot": "answer", "input_tokens": 1284, "output_tokens": 96, "total_tokens": 1380 }
-    ]
-  },
-  "pricing": { "price_version": "v1", "cost_micros": "4716", "state": "quoted" }
-}
-```
-
-缓存命中时 `cache.hit=true`、`usage.total_tokens=0`、`calls=[]`；价格未发布时 `pricing.state="unpriced"`，不能把 `cost_micros` 当 0 元账单。金额字段用十进制字符串，避免客户端数字精度问题。
-
-```json
-{
-  "color_scheme": "graphite",
-  "theme_mode": "system",
-  "notifications": { "task_attention": true, "wallet_changes": true },
-  "version": 1
-}
-```
-
-正式外观模式支持 `system/light/dark`。当前原型提供 light/dark，本机保存配色和模式；跨设备同步由正式偏好接口实现。
-
-## 5. SSE 持久化与顺序
-
-业务事务只写 Outbox UUID 与资源版本，不直接发送事件。单实例投递器在业务提交后，将 Outbox 转成用户/管理员投递流，锁定流头递增序号，并在同一短事务提交流条目和新流头，再向连接推送。
-
-**不能直接把 PostgreSQL 自增 ID 当作事务提交顺序。** 两个并发事务可能先分配 ID 后反序提交，导致按最大 ID 补偿漏事件。投递流序号在提交后的串行发布事务中分配；同一资源事件仍带版本，客户端丢弃旧版本。
-
-```text
-event: wallet.updated
-id: 184
-data: {"event_id":"evt_...","resource_id":"wallet_...","resource_version":12,"available_minor":"5450"}
-```
-
-首次快照包含流 watermark。客户端按 watermark 连接并补偿；快照可能领先尚未发布的业务事件，此时依靠资源版本忽略旧状态，不能回退余额。
-
-重连使用 `Last-Event-ID` 或不含秘密的游标。游标过期返回 `resync_required`，客户端重新取快照。SSE 流默认保留 3 天、已投递 Outbox 7 天；客户端缓冲和补偿批量有限制；慢连接断开后补偿，不无限占内存。
-
-心跳是进程内网络写入，不每次写数据库。认证到期、权限变化、账号撤销和服务更新触发重连/重验证。管理员事件按角色过滤，不携带其他角色不可见的账务或身份详情。
-
-## 6. 版本与降级
-
-能力接口包含 API 主版本、最小客户端版本和功能开关。尚未发布正式客户端时 `minimum_client_version` 为 null，不虚构兼容版本。新增字段保持兼容，未知枚举由客户端显示可理解的待处理状态，不能默认为成功。
-
-SSE 不可用时对正在运行任务和待到账订单使用有界轮询；回到前台先取快照，不只补一串旧事件。客户端缓存的余额与进度不作为执行、扣费或提交依据。当前已确定主服务按有效任务点用量、题库独立收费；单价或题库价格未配置时 `capabilities` 必须关闭真实扣费。
-
-Web 产物按内容哈希缓存，入口及时重新验证；Flutter/React 的旧资源与服务端兼容窗口需测试。API 不通过一条最低版本提示直接删除用户历史或让已创建订单失效。
+- **连接上限**：全局并发 SSE 连接受 `operations.max_event_streams`（默认 `64`）约束，同一用户或同一管理员最多同时建立 `3` 条并发流，防止慢连接耗尽文件描述符。
+- **水位线与补偿**：常规快照接口返回当前流的水位线序号；客户端携带 `Last-Event-ID` 或游标重连时，服务端优先补发保留窗口内的增量事件（SSE 流条目默认保留 3 天，已投递 Outbox 默认保留 7 天）；若游标已早于最早保留序号，立即下发 `resync_required` 事件引导客户端重拉全量快照。
+- **最小载荷与角色隔离**：SSE 载荷仅携带轻量通知事实与最新版本号（不含敏感凭据或长文本）；管理员 SSE 流（`/admin/api/v1/events`）在推送前按当前管理员角色逐条调用 `allowedAdminEvent` 过滤——例如仅具备 `learning.read` 的运营角色不会收到 `wallet.*` 或 `privacy.*` 事件。

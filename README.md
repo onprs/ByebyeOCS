@@ -1,21 +1,34 @@
 # ByebyeOCS
 
-面向学习通用户的自托管课程与任务安排平台，提供独立管理员控制台，以及同一 Flutter 工程构建的 Web、Android 和 iOS 客户端。
+面向学习通用户的自托管课程与学习安排管理平台，包含用户端（Web、Android、iOS）、管理员控制台与独立题库维护面板。
 
-- 查看课程封面、章节、任务点与学习资料，创建和修改多课程安排。
-- 自动执行普通视频、音频、文档/阅读和支持题型的章节测验，查看状态与平台确认，暂停、继续或取消任务。
-- 查看钱包、充值订单、账务明细和题库用量；付款与余额到账分别显示。
-- 从设置进入题库查询，选择题库面板发布的模型并报告答案问题。
-- 选择题库面板发布的模型，按精确缓存优先或每次调用模型作答；安排启用后自动取题、填写、提交并复核结果。
-- 管理会话、通知、数据导出与删除申请；默认石墨，支持青禾、靛蓝及浅色、深色主题。
+## 主要功能
 
-管理员可管理用户与任务、计费与扣费开关、订单、对账、异常退款复核、人工余额调整、权限，以及执行与课程同步并发；公开模型与 token 价格在独立题库维护面板发布，主管理端提供入口。普通用户使用学习通身份进入，无需注册第二套账号。
+### 用户端
 
-## 安装与运行
+- 使用学习通账号直接登录，同步课程封面、多级章节目录、任务点与学习资料。
+- 按多门课程创建和编辑学习安排，支持按课程名或教师搜索课程。
+- 自动执行普通视频、音频、文档阅读与支持题型的章节测验，实时展示任务进度与平台确认状态，支持暂停、继续、取消和重新调度。
+- 在安排中选择题库面板发布的答题模型与答案复用方式（优先复用答案或每次调用模型），自动完成取题、作答、提交与结果复核。
+- 在个人设置中使用独立题库查询功能，查看模型答案并提交答案问题报告。
+- 查看钱包余额、充值订单、账务明细与题库用量，管理登录会话、通知偏好、个人数据导出与账号删除申请。
+- 默认采用石墨配色，可切换青禾、靛蓝配色及跟随系统、浅色、深色模式。
 
-服务端支持 Linux amd64/arm64，需要 PostgreSQL 16 或以上。生产访问使用两个独立 HTTPS 地址；管理员首次创建需要密码和 TOTP 动态验证码。学习任务通过原生请求执行，运行已构建的服务不需要浏览器、播放器、Node.js、Flutter、Docker或桌面环境。
+### 管理端与题库面板
 
-从完整源码构建，需要 Git、Go 1.26 或以上、Node.js 22.12 或以上、npm、Flutter 3.47.7、GNU Make 和 Python 3：
+- 查看系统运行总览、活跃任务、异常提醒、财务汇总与实时动态。
+- 管理用户与学习通会话状态、全局任务队列、角色权限、数据导出与删除申请，复核用户提交的答案问题报告。
+- 配置有效任务点价格、扣费开关、订单对账、异常退款复核与人工余额调整，在线调整任务并发与课程同步请求节奏。
+- 通过独立题库维护面板配置模型服务商、上游模型与密钥，发布公开答题模型、价格版本与缓存期限，查看查询记录并清理错误缓存。
+
+## 系统要求
+
+- **运行环境**：Linux（`amd64` 或 `arm64`）、systemd、PostgreSQL 16 及以上版本，以及两个独立的 HTTPS 访问域名（分别用于用户端与管理员控制台）。启用题库功能时需在 PostgreSQL 中准备独立的题库数据库与角色。
+- **源码构建环境**：Git、Go 1.26+、Node.js 22.12+、npm、Flutter 3.47.7、GNU Make、Python 3。
+
+## 构建与安装
+
+克隆仓库及子模块并构建 Linux 发布目录（`arm64` 主机将 `GOARCH=amd64` 替换为 `GOARCH=arm64`）：
 
 ```bash
 git clone --recurse-submodules https://github.com/onprs/ByebyeOCS.git
@@ -23,24 +36,50 @@ cd ByebyeOCS
 make bundle VERSION=0.1.0 GOARCH=amd64
 ```
 
-已有 Git 源码先执行 `git submodule update --init --recursive`，再运行构建命令。
+若已克隆仓库但未拉取子模块，先执行 `git submodule update --init --recursive` 再运行构建。
 
-构建目录位于 `dist/byebyeocs-0.1.0-linux-amd64/`。将其复制到目标 Linux 主机后，按 [部署指南](deploy/README.md) 安装，配置自己的数据库和两个 HTTPS 地址，创建管理员，再启动服务。arm64 主机使用 `GOARCH=arm64`。
+构建完成后生成 `dist/byebyeocs-0.1.0-linux-amd64/`。将该目录上传至目标 Linux 主机，执行安装脚本并传入用户端与管理端的 HTTPS 地址：
 
-[配置示例](configs/server.example.yaml) 和 [题库配置](configs/ocs-tiku.example.json) 随程序提供；升级、备份、恢复和密钥轮换见 [部署与维护](docs/deployment/README.md)。
+```bash
+cd byebyeocs-0.1.0-linux-amd64
+sudo ./deploy/install.sh \
+  --user-origin https://learn.example.com \
+  --admin-origin https://admin.example.com
+```
 
-## 功能启用
+安装完成后按顺序完成数据库初始化、管理员创建与反向代理配置：
 
-学习通身份校验和学习执行需要部署者配置已获授权、经过核实的接入信息。默认关闭外部平台连接、学习执行、付款与自动收费；未定价和用量不完整时不自动扣费。
+1. 在 `/etc/byebyeocs/secrets/database.dsn` 中写入主数据库连接串（权限 `0600`，属主 `byebyeocs`），核对 `/etc/byebyeocs/config.yaml`。
+2. 执行主库迁移并创建首个管理员账号（需准备管理员密码文件并绑定 TOTP 动态验证码）：
+   ```bash
+   sudo -u byebyeocs /opt/byebyeocs/current/bin/byebyeocs migrate up --config /etc/byebyeocs/config.yaml
+   sudo -u byebyeocs /opt/byebyeocs/current/bin/byebyeocs admin create \
+     --config /etc/byebyeocs/config.yaml \
+     --username admin \
+     --password-file /path/to/admin.password \
+     --totp-output-file /etc/byebyeocs/secrets/admin-totp-setup.json
+   ```
+3. 如启用题库，按 `/etc/ocs-tiku/ocs-tiku-fork.json.example` 配置 `/etc/ocs-tiku/ocs-tiku-fork.json` 与独立数据库连接文件，执行题库数据库迁移：
+   ```bash
+   sudo -u ocs-tiku /opt/byebyeocs/current/bin/ocs-tiku-fork migrate -config /etc/ocs-tiku/ocs-tiku-fork.json
+   ```
+4. 参考 `configs/nginx-user.example.conf` 与 `configs/nginx-admin.example.conf` 配置两个 HTTPS 站点的反向代理，随后启动服务：
+   ```bash
+   sudo systemctl enable --now ocs-tiku.service byebyeocs.service
+   ```
 
-主服务以平台确认的有效任务点计量，题库按服务端回传的 token 单独计量。题库公开条目与 token 价格由题库维护面板发布；部署后先在题库面板配置上游模型与密钥，再发布公开条目和价格；题库目录、查询记录与维护入口只在独立面板中提供。有效任务点价格、舍入规则和 ZPay 商户信息由部署配置；服务不提供默认价格或默认管理员。题库使用独立数据库，上游模型密钥只保存在题库服务。
+完整的反向代理、备份、恢复与升级步骤见 [安装指南](deploy/README.md) 与 [运维手册](docs/deployment/README.md)。
 
-Android 工程可构建调试 APK。正式 APK 分发需要发布签名；iOS 原生构建和分发需要 macOS、签名及适用的分发条件。目前不提供已签名安装包或下载站地址。
+## 配置与使用说明
 
-## 设计原型
+- **默认安全状态**：新安装的实例默认关闭外部平台连接、自动学习执行、在线收款与自动扣费，不预设默认管理员账号或默认价格。
+- **平台与执行配置**：在 `/etc/byebyeocs/config.yaml`（参考 [主配置示例](configs/server.example.yaml)）中填写已获授权的学习通连接参数后开启课程读取与任务执行。
+- **题库与模型配置**：在 `/etc/ocs-tiku/ocs-tiku-fork.json`（参考 [题库配置示例](configs/ocs-tiku.example.json)）中开启维护面板并配置面板账号后，通过管理端域名的 `/panel/` 添加模型服务商与密钥，发布公开模型与价格后即可在主服务启用题库功能。
+- **计费与收款配置**：主服务按平台确认的有效任务点计费，题库按模型实际消耗的 token 独立计费；收款支持配置 ZPay（`zpayz.cn`）商户参数，在管理端“系统设置 → 计费与价格”发布单价并开启扣费后生效。
+- **客户端使用**：浏览器可直接访问用户端 HTTPS 域名；移动端客户端首次启动可在“连接服务”页面填写自托管的用户端 HTTPS 地址。客户端构建说明见 [apps/client_flutter/README.md](apps/client_flutter/README.md)。
 
-`prototypes/` 保留 React 设计原型，使用合成数据。安装 Node.js 依赖后执行 `npm --prefix prototypes run dev`，在默认的 <http://127.0.0.1:5186/review> 查看三套外观；原型与正式 Flutter 客户端分别运行。
+更多文档见 [文档目录](docs/README.md)。
 
-产品范围和当前能力见 [DESIGN.md](DESIGN.md)。
+## 许可证
 
-项目采用 [MIT 许可证](LICENSE)。
+本项目采用 [MIT 许可证](LICENSE)，第三方字体与数据许可声明见 [NOTICE](NOTICE)。

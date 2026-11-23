@@ -1,96 +1,98 @@
-# 本地全栈热重载开发环境
+# 本地全栈热重载开发指南
 
-本文面向在本地（Windows 或 Ubuntu / Linux）开发调试本仓库的开发者。所有运行态配置、随机密钥、开发数据库与临时构建产物均位于 `.local/dev-stack/`（已被 `.gitignore` 忽略），仅监听 `127.0.0.1` 回环地址，不依赖任何维护者私有配置或线上凭据。
+> **适用范围**：开发维护环境，支持 **Windows** 与 **Ubuntu / Linux**（及 macOS）跨平台开发调试。所有生成的本地配置、随机密钥、隔离数据库与临时编译产物统一保存在被 `.gitignore` 忽略的 `.local/dev-stack/` 中，仅监听 `127.0.0.1` 回环地址，零维护者私有环境或线上凭据依赖。
 
-## 前置条件
+## 1. 开发工具要求
 
-按需要启动的模块准备对应工具：
+- **必选工具**：
+  - Git（克隆后须初始化子模块：`git submodule update --init --recursive`）
+  - Node.js `22.12+` 与 npm（`scripts/dev.mjs` 纯标准库实现，零第三方依赖）
+  - Go `1.26+`
+- **PostgreSQL 数据库（三选一，脚本自动按序探测）**：
+  1. **Docker 模式**：自动拉起本工作区专属隔离容器与具名卷（优先复用本机已有 PostgreSQL 16/17 镜像，无缓存时拉取 `postgres:17-alpine`）；
+  2. **本机原生工具模式（`local-pg`）**：自动探测 PATH 或系统安装目录下的 `initdb` / `pg_ctl` / `psql`，在 `.local/dev-stack/pgdata` 初始化独立数据库集群（已处理 Windows 下 `pg_ctl` 管道句柄继承与 UTF-8 编码兼容）；
+  3. **外部数据库模式（`external`）**：通过 `--main-dsn` 与 `--tiku-dsn` 指向自行准备的两个独立 PostgreSQL 库。
+- **按需可选工具**：
+  - Flutter `3.47.7`：启用用户端 Dart 代码保存热重载；若本机未安装 Flutter，脚本会自动检测并回退至已编译的 `apps/client_flutter/build/web` 静态产物，不阻断后端与管理端联调。
+  - Python 3：监听 `design/tokens.json` 变更并自动同步生成三端样式与色板文件。
 
-- **必选**：Git（并初始化子模块 `git submodule update --init --recursive`）、Node.js 22.12+（脚本零第三方依赖，仅用内置模块）、Go 1.26+、npm。
-- **PostgreSQL（三选一）**：
-  - 安装并运行 Docker（默认优先自动拉起本工作区专属隔离容器与具名数据卷）；
-  - 或本机安装 PostgreSQL 16+（自动探测 `initdb` / `pg_ctl` / `psql`，在 `.local/dev-stack/pgdata` 创建隔离实例）；
-  - 或通过 `--main-dsn` / `--tiku-dsn` 连接已有的两套独立数据库。
-- **可选**：
-  - Flutter 3.47.7（开启用户端热重载；未安装时自动回落到已构建的 `apps/client_flutter/build/web` 静态产物，不阻断后端与管理端调试）；
-  - Python 3（修改 `design/tokens.json` 时自动同步三端 CSS 与 Dart 变量）。
+## 2. 快速自检与一键启动
 
-## 快捷启动
-
-先做环境自检（只读，不修改任何文件）：
+首次运行前可先执行只读环境与端口自检：
 
 ```bash
+# 跨平台统一入口
 node scripts/dev.mjs doctor
+
+# Ubuntu / macOS 包装脚本或 Make
+./scripts/dev.sh doctor
+make dev-doctor
+
+# Windows PowerShell 包装脚本
+.\scripts\dev.ps1 doctor
 ```
 
-一键拉起全栈热重载环境：
+一键拉起全栈热重载开发环境：
 
 ```bash
-# 跨平台统一命令（Windows / Ubuntu / macOS 通用）
-node scripts/dev.mjs
-
-# Ubuntu / macOS 快捷脚本或 Make
-./scripts/dev.sh
-make dev
+# Ubuntu / macOS
+./scripts/dev.sh            # 等同于 make dev 或 node scripts/dev.mjs up
 
 # Windows PowerShell
 .\scripts\dev.ps1
 ```
 
-需要同时调试用户端登录页但尚未配置真实学习通接入时，可显式启用仓库内置的 `devfixture` 本地合成登录（仅用于本地 UI/API 联调，不连接学习通）：
+若需在不接入真实学习通账号的情况下联调用户端登录与业务流程，可显式附加 `--dev-login`（使用仅限开发模式的 `devfixture` 编译标签启用本地合成测试身份，该标签绝不进入生产构建）：
 
 ```bash
 node scripts/dev.mjs --dev-login
 ```
 
-## 默认访问地址与热生效范围
+## 3. 默认端口矩阵与实时热生效机制
 
-| 入口 | 默认地址 | 实时修改热生效方式 |
-|---|---|---|
-| 用户端（同源入口） | `http://127.0.0.1:5188` | `/api/*` 代理至主服务（SSE 无缓冲透传），其余 HTTP/WebSocket 代理至 Flutter Dev；保存 `apps/client_flutter/lib/**` 自动触发热重载（`r`），修改 `pubspec.yaml` 自动 `pub get` 并热重启（`R`） |
-| 管理员控制台 | `http://127.0.0.1:5187` | Vite 原生 HMR 毫秒级更新；已开启本地回环自动登录，同域代理 `/admin/api`、`/health` 与 `/panel/` |
-| 题库维护面板 | `http://127.0.0.1:5187/panel/` | `services/tiku/internal/platform/panel/assets/*` 直读磁盘 **0ms** 刷新生效；修改题库 Go 源码自动增量编译重启；已开启本地回环自动登录 |
-| 主服务 Go API | `127.0.0.1:8090` / `8091` | 监听 `server/` 下的 `.go` / `.sql` / `go.mod`，保存后增量编译并优雅重启；`.sql` 变更自动先执行 `migrate up`；编译失败不中断旧进程 |
-| 独立题库 Go API | `127.0.0.1:8092` | 监听 `services/tiku/` 源码，保存后增量编译并优雅重启；`.sql` 变更自动先执行 `migrate` |
-| 设计变量同步 | `design/tokens.json` | 修改后自动运行 `scripts/generate-design-tokens.py`，联动触发管理端、题库面板与用户端刷新 |
-| 设计原型（可选） | `http://127.0.0.1:5186/review` | 传入 `--with-prototypes` 时启用 Vite HMR |
-| 开发数据库 | `127.0.0.1:25435` | 隔离维护主库 `byebyeocs_dev` 与题库独立库 `byebyeocs_tiku_dev` 及各自角色 |
+| 模块与入口 | 默认监听地址 | 文件变更热生效行为 |
+| --- | --- | --- |
+| 用户端同源入口 | `http://127.0.0.1:5188` | `/api/*` 无缓冲透传至主服务 `8090`（完整支持 SSE），其余 HTTP/WS 转发至内部 Flutter 开发端口（`5189`）；保存 `apps/client_flutter/lib/**` 自动发送热重载（`r`），修改 `pubspec.yaml` 自动执行 `pub get` 并热重启（`R`） |
+| 管理员控制台 | `http://127.0.0.1:5187` | Vite HMR 毫秒级热替换；自动开启回环 `local_admin_auto_login`，同域代理 `/admin/api`、`/health` 与 `/panel/` |
+| 题库维护面板 | `http://127.0.0.1:5187/panel/` | 经内部热读代理（`18092`）直读 `services/tiku/internal/platform/panel/assets/*` 磁盘源文件，刷新浏览器 **0ms** 生效；自动开启回环 `panel.local_auto_login` |
+| Go 主服务 | `127.0.0.1:8090` / `8091` | 监听 `server/` 下 `.go`、`.sql` 与 `go.mod`；`.sql` 新增或变更时自动先执行 `migrate up`，增量编译成功后平滑替换进程，编译报错时保留旧进程在线 |
+| 独立题库服务 | `127.0.0.1:8092` | 监听 `services/tiku/` 源码与迁移文件，保存后自动迁移（如有）并增量重编重启 |
+| 设计令牌同步 | `design/tokens.json` | 保存后自动运行 `scripts/generate-design-tokens.py`，联动触发管理端、题库面板与 Flutter 刷新 |
+| 视觉原型（可选） | `http://127.0.0.1:5186/review` | 附加 `--with-prototypes` 时拉起 `prototypes/` Vite 服务 |
+| 隔离开发数据库 | `127.0.0.1:25435` | 自动创建独立主库 `byebyeocs_dev` 与独立题库库 `byebyeocs_tiku_dev` 及各自专属角色 |
 
-## 常用开发组合与快捷键
+## 4. 常用参数组合与终端交互快捷键
 
 ```bash
-# 仅启动数据库 + 主服务 + 题库 + 管理端（跳过 Flutter 用户端）
+# 按需裁剪模块（可选模块：db,server,tiku,admin,client,tokens,prototypes）
 node scripts/dev.mjs --skip client
+node scripts/dev.mjs --only db,server,admin
 
-# 多工作区并行调试：整体平移所有端口 +100
+# 多工作树并行开发：一键平移全部默认端口（例如整体 +100）
 node scripts/dev.mjs --port-offset 100
 
-# 指定本机 Flutter SDK 路径或调试桌面/移动设备
+# 指定 Flutter 路径并在桌面/移动真机调试（自动向原生端注入 API_BASE_URL）
 node scripts/dev.mjs --flutter /path/to/flutter --flutter-device linux
 
-# 使用外部 PostgreSQL
-node scripts/dev.mjs --main-dsn "postgres://main:pw@127.0.0.1:5432/byebyeocs_dev?sslmode=disable" \
-  --tiku-dsn "postgres://tiku:pw@127.0.0.1:5432/byebyeocs_tiku_dev?sslmode=disable"
-
-# 退出时保留开发数据库常驻，加速下次启动
+# 退出脚本时保持隔离 PostgreSQL 继续后台运行以加速二次启动
 node scripts/dev.mjs --keep-db
-node scripts/dev.mjs down     # 手动停止常驻开发数据库
+node scripts/dev.mjs down              # 手动停止后台开发数据库
 
-# 彻底重置本地开发数据库与配置（重新初始化）
-node scripts/dev.mjs reset
+# 保留数据库业务数据，仅重新生成默认开发配置文件
+node scripts/dev.mjs --reinit-config
+
+# 彻底销毁并重建本工作区的开发数据库与配置
+node scripts/dev.mjs reset --yes
 ```
 
-运行中在交互终端可直接按键：
+服务运行期间，可直接在终端按下单键执行快捷维护：
 
-- `s`：手动重编并重启主服务
-- `t`：手动重编并重启题库服务
-- `r` / `R`：手动触发 Flutter 热重载 / 热重启
-- `m`：立即执行主库与题库显式迁移
-- `d`：手动同步 `design/tokens.json`
-- `p`：重新打印所有访问地址
-- `h`：显示快捷键说明
-- `q` 或 `Ctrl+C`：优雅关闭全部子进程与开发数据库
+- `s`：重编并重启主服务
+- `t`：重编并重启独立题库服务
+- `m`：立即对主库与题库执行数据库迁移
+- `r` / `R`：触发 Flutter 热重载 / 热重启
+- `d`：重新生成三端设计令牌产物
+- `p` / `h`：打印当前会话访问地址汇总 / 查看快捷键说明
+- `q`（或 `Ctrl+C`）：优雅终止所有子进程并按策略停止开发数据库
 
-## 配置持久化与自定义
-
-常规重启不会覆盖已生成的 `.local/dev-stack/server.yaml` 与 `.local/dev-stack/ocs-tiku-fork.json`，在题库维护面板中添加的测试供应商/模型、在主管理端调整的运行参数或手动编辑的本地配置均会保留。若希望恢复默认开发配置而不清库，可追加 `--reinit-config`。
+常规重启 `scripts/dev.mjs` 会完整保留 `.local/dev-stack/server.yaml` 与 `ocs-tiku-fork.json` 中通过面板或管理端保存的本地调试配置。开发脚本自身的单元测试可通过 `make test-dev`（`node --test scripts/dev/dev.test.mjs`）运行。

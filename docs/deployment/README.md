@@ -1,107 +1,123 @@
-# 部署与维护
+# 生产运维与灾难恢复手册
 
-本文面向公开用户自行管理的 Linux 生产环境。首次安装、PostgreSQL角色、HTTPS与静态应用步骤见 [安装指南](../../deploy/README.md)，配置见 [主服务示例](../../configs/server.example.yaml) 和 [独立题库示例](../../configs/ocs-tiku.example.json)。开发维护环境的验证记录见 [本地实现](../development/local-implementation.md)。
+> **适用范围**：公开用户生产运维环境。首次安装、目录布局与反向代理配置请先阅读 [Linux 原生部署指南](../../deploy/README.md)；参数定义见 [主配置示例](../../configs/server.example.yaml) 与 [题库配置示例](../../configs/ocs-tiku.example.json)。
 
-## 基础要求与隔离
+## 1. 安全基线与运行隔离
 
-运行发布目录需要 Linux amd64/arm64、PostgreSQL16+、systemd 和两个独立HTTPS入口。备份另需 PostgreSQL16+客户端工具、age、SSH/scp，以及脚本声明的通用工具。构建才需要Go、Node与Flutter。任务执行通过原生HTTP，服务运行不需要浏览器、播放器或媒体解码器。
+- **权限与网络隔离**：主服务（`byebyeocs`）与题库服务（`ocs-tiku`）分别使用独立的非 root 系统账号、独立的配置密钥目录（`0700`/`0600`）以及独立的 PostgreSQL 数据库与角色。业务进程仅监听 `127.0.0.1` 回环地址，公网 TLS 终结与 HTTP/2 由前置反向代理负责。
+- **显式变更原则**：生产实例启动时只读核对数据库迁移版本与每条 SQL 的 SHA-256 摘要，遇到空库、缺号、摘要不一致或高于当前二进制的版本时立即拒绝启动。任何版本升级均须先备份再显式执行迁移。
+- **凭据脱敏**：管理员密码、TOTP 种子、数据库 DSN、应用主密钥、身份索引密钥、ZPay 商户密钥与上游大模型 API 密钥均通过受保护文件注入，后台 API、前端界面与结构化日志均不回显明文秘密。
 
-主服务和题库分别使用系统用户、数据库角色与数据库。监听默认仅回环，TLS由反向代理提供；来源必须与实际HTTPS地址匹配。原生客户端连接自己的服务HTTPS地址，Web使用同源API。
+## 2. 业务能力分步启用清单
 
-生产启动不自动迁移、不生成账号、不写业务演示数据。首次迁移后通过CLI显式创建管理员，密码从私有文件读取；用 `--totp-secret-file` 提供自己的TOTP材料，或用 `--totp-output-file` 写入私有的一次性绑定文件。通过验证器保存TOTP后安全删除一次性文件。
+新部署实例默认关闭外部学习通连接、HTTP 任务执行、ZPay 支付与自动扣费，部署者按实际授权与准备情况逐项开启：
 
-## 功能与价格
+1. **学习通身份与只读同步（`learning.enabled`）**：
+   - 须同时启用 `auth.enabled`，填写 `authorization_reference` 与稳定的 `subject_namespace`。
+   - 支持两类主体探针：`json` 模式（校验 `subject_probe_url`、`subject_path` 与 `session_expiry_path`）或 `profile` 模式（读取服务端渲染账户资料页提取不可变 UID，配合 `school_probe_url` 与 1–168 小时的保守 `subject_ttl_hours`）。
+2. **原生 HTTP 学习执行（`learning.execution_enabled`）**：
+   - 依赖 `learning.enabled: true`，并填写独立的目标验证依据 `execution_evidence_reference`。
+   - 所有者可在管理端“系统设置 → 运行安全”在线热调全局并发（`1–256`）、单账号并发（`1–global`）、单课同步章节并发（`1–64`）、上游最小请求间隔（`50ms–2s`）与自适应提速下限（`10ms–interval`），保存即时生效并原子写回主配置文件。
+3. **独立题库与全自动测验（`questions.enabled`）**：
+   - 在题库维护面板（管理端同域 `/panel/`）添加模型提供商、探测并保存上游模型（热加载并写回题库私密密钥文件），再为目标模型发布一对一的公开条目、微元价格版本与缓存期限。
+   - 在主服务配置内网回环 `questions.url` 与至少 16 字节的 `questions.token_file`；跨用户共享缓存默认关闭（需主服务 `questions.allow_shared_cache`、题库 `cache.shared_enabled` 与条目策略同时允许才生效）。
+4. **计费与 ZPay 在线收款（`payments.enabled` / `payments.charging_enabled`）**：
+   - 生产模式开启收款或自动扣费时，强制要求 `operations.require_fresh_backup: true`。
+   - 在主配置填写 ZPay（`zpayz.cn`）商户号、密钥文件及不含查询参数的 HTTPS `notify_url` / `return_url`；在管理端“系统设置 → 计费与价格”发布有效任务点单价（微元，1 分 = 10,000 微元）与舍入规则（`ceil` / `floor` / `half_up`），再开启对应扣费开关。未定价条目或题库返回 `usage_incomplete` 时系统自动跳过扣费并保留核对记录。
 
-初始配置关闭真实平台、HTTP学习执行、付款和自动收费。学习通接入须填写已核实的命名空间、授权依据和稳定主体/会话到期JSON探针。学习执行由`learning.execution_enabled`控制，启用前填写独立的`execution_evidence_reference`。执行器读取平台任务上下文并保持普通请求节奏，交互或验证需求转人工处理；独立平台核验决定完成状态。
+## 3. 异机加密备份与恢复演练
 
-管理员发布任务点价格并配置单位精度、结算/舍入方式；题库维护员在题库面板发布每个公开模型的 token 价格，每个模型必须使用新版本变更费率。部署授权开关和管理员收费开关共同决定新操作能否收费，关闭收费不把价格改成零。未定价、用量不完整和未知结果进入待定/复核。人民币每分固定10000微元。
+### 3.1 定期异机加密备份
 
-ZPay商户信息、通道、通知域名和经营类别须按自己的商户实际能力配置。返回页不负责入账。回调验签/查单后的数据库事务负责订单和到账；未决支付和退款保留复核入口。
+`deploy/backup.sh` 读取 `/etc/byebyeocs/backup.env`（模板见 `deploy/backup.env.example`，文件须由 root 所有且权限 `0600`）：
 
-题库使用独立PostgreSQL和服务令牌，上游模型、密钥、公开模型与价格只在 `/panel/` 维护；上游模型保存后热加载并写回题库私密配置。主服务只读公开目录并冻结查询快照；管理端构建时可用 `VITE_TIKU_PANEL_URL` 指定面板地址，默认同域 `/panel/`。`cache_first`和`always_llm`的缓存及token规则见 [题库适配](../architecture/integrations.md)。安排启用题库策略后全自动取题、作答、填写、提交和独立平台复核，无需人工确认；实际平台执行仍由部署配置启用。
+1. 分别对主数据库和已启用的题库数据库执行 `pg_dump --format=custom` 一致性转储（两库各自一致，不跨库锁定同一物理时刻）。
+2. 收集 `/etc/byebyeocs` 与 `/etc/ocs-tiku` 下的完整配置、当前主密钥、历史解密 keyring 及长期身份索引密钥，生成文件 SHA-256 清单。
+3. 使用 `age` 公钥流式加密归档，经 `scp` 以 `.partial` 临时名上传至异机 SSH 目录，远端核对 SHA-256 一致并原子重命名后，才更新主服务读取的 `secrets/backup-status.json`（`last_recoverable_at` 保守记为转储开始时刻）。
+4. 显式传入 `--local-only` 仅在本地生成加密归档用于临时维护，不会将 `offsite` 标为 `true`，也不会刷新生产恢复点状态。
 
-## 备份与恢复点
+主服务默认要求 `backup_max_age <= 15m`；一旦异机恢复点超时，系统自动阻断新充值下单与新自动扣费，保护未备份资金窗口。`age` 解密私钥必须脱离生产主机离线妥善保管。
 
-`deploy/backup.sh`生成PostgreSQL一致性逻辑备份，将主/题库配置和私密keyring一起用age加密，并在异机传输与校验成功后更新私有状态。两个数据库分别取得一致快照，不宣称跨数据库原子时刻。本地归档不能写成异机成功恢复点。
+### 3.2 隔离恢复演练
 
-age解密身份单独离线保管；归档中的配置须包含全部当前/旧解密密钥与长期身份索引密钥。启用题库后同时配置题库数据库和配置目录，不遗漏上游密钥。根据数据量、带宽和备份完成时间安排周期、空间预算与告警。默认新收费恢复点最大年龄15分钟，超时即保护新操作；实际RPO取决于成功恢复点，不能用计划时间代替。
-
-使用 `deploy/restore-drill.sh` 在普通用户的临时initdb集群解密并恢复可信自有归档。它不会连接或写生产数据库，不更新生产备份状态。一次演练通过不证明长期可恢复性或2C4G容量；持续WAL/pgBackRest方案与目标见 [数据保留](../architecture/data-retention.md)。
-
-## 生产恢复
-
-保持应用停止和外部流量关闭，先在隔离环境验证归档、配置与keyring，再按数据库维护流程恢复到新库。不要覆盖仍在提供服务的实例。题库数据库与模型配置分别恢复和核对。
-
-恢复后、应用启动前，在配置的data_dir创建 `.recovery-required` 文件。该标记阻止新外部工作和资金承诺；已有支付回调、释放及必要对账依旧由各自路径处理。配置中保持学习执行、付款和自动收费关闭，完成核对后再逐项开启。
-
-备份可能包含曾被撤销的会话。通过私有连接在恢复库执行以下事务，使所有用户与管理员重新验证；命令仅用于已经停止服务的恢复环境：
-
-```sql
-BEGIN;
-UPDATE public.client_sessions
-SET status = 'revoked', revoked_at = now(), revoke_reason = 'restore_recovery', updated_at = now()
-WHERE status = 'active';
-UPDATE public.admin_sessions
-SET status = 'revoked', revoked_at = now(), revoke_reason = 'restore_recovery', updated_at = now()
-WHERE status = 'active';
-UPDATE public.platform_sessions
-SET status = 'revoked', revoked_at = now(), revoke_reason = 'restore_recovery', updated_at = now()
-WHERE status = 'active';
-DELETE FROM public.login_challenges;
-UPDATE public.learning_plans SET status = 'paused', updated_at = now()
-WHERE status = 'active';
-UPDATE public.learning_tasks
-SET desired_state = 'pause', stop_requested_at = now(), version = version + 1, updated_at = now()
-WHERE state NOT IN ('confirmed', 'cancelled');
-SELECT public.reapply_privacy_closures();
-COMMIT;
-```
-
-若恢复点早于删除完成，函数无法推断随后关闭的用户。必须从备份之外保留的最小关闭清单补录：
-
-```sql
-SELECT public.reapply_privacy_closures(ARRAY['待重放的用户UUID']::uuid[]);
-```
-
-清单只保留内部用户UUID及必要闭户事实，按敏感维护数据隔离保管；它不重新结算资金，不删除账本。真实执行前替换占位值并核对清单来源。
-
-随后核对未决支付、到账、预占、退款、题库用量、任务确认和外部副作用，处理恢复点之后的事实；重新验证学习账号，不自动继续旧任务。完成恢复检查、取得新鲜异机备份后移除标记，逐项恢复功能与流量。RPO≤15分钟/RTO≤4小时是待现场演练的目标。
-
-## 加密主密钥轮换
-
-长期 `identity_key_file` 用于稳定身份索引和用户隔离作用域，正常轮换不改变它。加密主密钥负责主体、平台会话、管理员TOTP与隐私导出。
-
-先保存完整备份和旧密钥，再生成新文件；新文件不存在时才会写入：
+在任意具备 PostgreSQL 客户端工具与 `age` 的机器上，以**非 root 普通用户**执行隔离恢复演练：
 
 ```bash
-sudo -u byebyeocs /opt/byebyeocs/current/bin/byebyeocs keys generate \
-  --output /etc/byebyeocs/secrets/application-v2.key
+/opt/byebyeocs/current/deploy/restore-drill.sh \
+  --archive /path/to/byebyeocs-backup-YYYY-MM-DDTHH-MM-SSZ-PID.tar.age \
+  --identity /path/to/offline-age-identity.txt \
+  --report /tmp/restore-drill-report.json
 ```
 
-将配置调整为：
+脚本仅在 `/tmp` 下初始化独立临时 PostgreSQL 集群验证解密、清单哈希、`pg_restore` 与关键表可读性，结束后自动销毁临时目录，绝不触碰生产数据库或生产状态文件。
 
-```yaml
-auth:
-  encryption_key_file: secrets/application-v2.key
-  encryption_key_version: 2
-  identity_key_file: secrets/identity.key
-  decryption_key_files:
-    1: secrets/application-v1.key
-```
+## 4. 生产灾难恢复标准流程
 
-保留其余auth设置。重启服务后新密文使用v2，旧密文仍按记录版本读取。执行：
+发生主机损毁或数据库故障需要从异机归档恢复生产服务时，严格按以下顺序执行：
 
-```bash
-sudo -u byebyeocs /opt/byebyeocs/current/bin/byebyeocs keys reencrypt \
-  --config /etc/byebyeocs/config.yaml
-```
+1. **切断入口与副作用**：关闭反向代理公网流量，停止目标主机上的 `byebyeocs.service` 与 `ocs-tiku.service`，切勿向受损实例继续写入。
+2. **解密并还原至新库**：先用 `restore-drill.sh` 校验归档完好，随后解密归档，还原 `/etc/byebyeocs` 与 `/etc/ocs-tiku` 配置及全部密钥环，使用 `pg_restore` 分别恢复主数据库与题库数据库到洁净的新数据库实例。
+3. **放置恢复门控并关闭外部开关**：在主服务 `storage.data_dir`（默认 `/var/lib/byebyeocs`）下创建空文件 `.recovery-required`（属主 `byebyeocs`），并在 `config.yaml` 中临时将 `learning.execution_enabled`、`payments.enabled` 与 `payments.charging_enabled` 设为 `false`。`.recovery-required` 存在期间，系统禁止派发新外部任务与产生新资金预占，仅开放账务核对、预占释放与已有支付回调收敛。
+4. **吊销恢复点残留会话并重放隐私闭户**：备份快照可能包含恢复点之后已被撤销的会话或已闭户的用户。在启动服务前，连接恢复后的主数据库执行以下事务：
+   ```sql
+   BEGIN;
+   UPDATE public.client_sessions
+   SET status = 'revoked', revoked_at = now(), revoke_reason = 'restore_recovery', updated_at = now()
+   WHERE status = 'active';
 
-命令按小批事务重封装，失败可重试，输出计数不输出秘密。短期隐私导出也可能引用旧版本；保留旧解密文件，直至相关导出已到期且旧备份已按保留策略退出。同步更新异机keyring，核对登录/TOTP和平台会话后再规划移除旧版本；最多保留8个解密版本。
+   UPDATE public.admin_sessions
+   SET status = 'revoked', revoked_at = now(), revoke_reason = 'restore_recovery', updated_at = now()
+   WHERE status = 'active';
 
-## 日常维护
+   UPDATE public.platform_sessions
+   SET status = 'revoked', revoked_at = now(), revoke_reason = 'restore_recovery', updated_at = now()
+   WHERE status = 'active';
 
-- 磁盘70%提醒，80%保护，90%维护；检查导出、日志、题库正文与备份空间。
-- 运行总览与审计保留安全状态，不把密码、Cookie、支付密钥或完整上游响应放进工单。
-- 删除申请立即撤销授权；资金或运行活动未清只能延后，完成闭户保留不可变财务/审计与去重标记。驳回后用户重新验证，任务保持暂停。
-- 升级、回滚仅切程序与静态资源；数据库版本需要按兼容性检查和独立恢复计划处理。安装/升级脚本不隐式迁移，不覆盖配置和密钥。
-- Android发布签名、iOS构建/签名与分发、下载站地址独立准备；没有通用IPA直装承诺。
+   DELETE FROM public.login_challenges;
+
+   UPDATE public.learning_plans
+   SET status = 'paused', updated_at = now()
+   WHERE status = 'active';
+
+   UPDATE public.learning_tasks
+   SET desired_state = 'pause', stop_requested_at = now(), version = version + 1, updated_at = now()
+   WHERE state NOT IN ('confirmed', 'cancelled');
+
+   SELECT public.reapply_privacy_closures();
+   COMMIT;
+   ```
+   若备份时刻之后有已完成的闭户删除记录保存在外部合规台账中，额外执行 `SELECT public.reapply_privacy_closures(ARRAY['用户UUID']::uuid[]);` 补齐匿名化。
+5. **启动对账与解锁**：启动 `ocs-tiku` 与 `byebyeocs`，登录管理端核对账本借贷平衡、ZPay 渠道未决订单主动查单、在途预占释放与题库查询记录。确认无资金差异后，立即执行一次完整异机加密备份刷新恢复点，删除 `.recovery-required` 文件，按需恢复配置开关并重启服务开放公网访问。
+
+## 5. 加密主密钥平滑轮换
+
+`auth.identity_key_file` 用于计算稳定的外部主体 HMAC 索引与用户缓存隔离域，常规维护保持不变；`auth.encryption_key_file`（AES-GCM 主密钥，保护平台会话密文、管理员 TOTP 种子与加密导出包）支持在线平滑轮换：
+
+1. 执行一次完整备份，确保旧密钥已离线留存。
+2. 生成新版本密钥文件（命令拒绝覆盖已有文件）：
+   ```bash
+   sudo -u byebyeocs /opt/byebyeocs/current/bin/byebyeocs keys generate \
+     --output /etc/byebyeocs/secrets/application-v2.key
+   ```
+3. 更新 `/etc/byebyeocs/config.yaml` 中的 `auth` 段落，将新密钥设为当前写入版本，同时把旧密钥保留在 `decryption_key_files` 解密环中（最多支持 8 个版本）：
+   ```yaml
+   auth:
+     encryption_key_file: "secrets/application-v2.key"
+     encryption_key_version: 2
+     identity_key_file: "secrets/identity.key"
+     decryption_key_files:
+       1: "secrets/application-v1.key"
+   ```
+4. 重启 `byebyeocs.service`，使新写入数据立即采用版本 `2`，旧密文按版本号透明解密。
+5. 执行批量重封装命令，将数据库中存量密文逐批迁移至版本 `2`：
+   ```bash
+   sudo -u byebyeocs /opt/byebyeocs/current/bin/byebyeocs keys reencrypt \
+     --config /etc/byebyeocs/config.yaml
+   ```
+6. 待短期隐私导出文件全部过期、且依赖旧密钥的历史备份均退出保留周期后，再从 `decryption_key_files` 中移除旧版本配置；同步执行异机备份更新密钥环归档。
+
+## 6. 日常水位监控与巡检要点
+
+- **磁盘三级保护**：数据分区使用率达 `70%` 时在管理端运行总览发出提醒；达 `80%` 时拒绝新学习任务派发、新数据导出与新充值下单；达 `90%` 时进入严格维护保护，仅允许必要释放与恢复操作。发现水位升高时优先检查日志目录、本地临时备份归档与过期导出文件。
+- **健康探针**：主服务管理监听（默认 `127.0.0.1:8091`）提供 `/health/live`（存活检查）与 `/health/ready`（数据库连通性及迁移就绪检查，停机排水期间返回 `503`）；题库服务提供 `/healthz` 与 `/readyz`。
+- **隐私请求处理**：用户提交账号删除申请后，系统立即吊销其会话与平台执行授权；管理员在“隐私请求”页面核对无未决订单与在途预占后批准闭户，法定保留的不可变账本分录与审计记录自动脱离个人可识别信息。

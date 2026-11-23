@@ -1,29 +1,19 @@
-# 决策 0004：正式服务统一使用 PostgreSQL
+# 决策 0004：采用 PostgreSQL 作为正式服务唯一主数据库
 
-状态：用户已确认。
+- **状态**：已采纳并落地
 
-## 依据
+## 背景
 
-用户明确要求：“数据库换成postgres吧”。因此 PostgreSQL 从此前的推荐方案变为正式项目选型。
+核心业务包含多用户任务公平抢占、租约续期与 fencing 保护、复式记账借贷平衡事务、ZPay 异步回调幂等入账以及有序事件 Outbox 发布，需要成熟的行级并发锁（`FOR UPDATE SKIP LOCKED`）、可重复读事务隔离与严格的约束检查能力。
 
 ## 决策
 
-- PostgreSQL 是 Go 服务端唯一主数据库，覆盖内部用户、学习通身份、课程、任务、账本、支付、审计和事件。
-- 不再开发 SQLite 后端、双数据库兼容层或 SQLite → PostgreSQL 导入流程。
-- 开发、集成测试和生产使用同一 PostgreSQL 主版本系列；受支持版本和补丁在实施时固定。
-- 继续采用一个 Go 应用进程、Linux 原生二进制和 systemd，不增加 Docker 或微服务前提。
-- PostgreSQL 可由用户原生安装或使用合适的托管实例，作为公开部署的明确依赖。
+1. 确立 **PostgreSQL（16 及以上版本）** 为 Go 主服务的唯一正式数据库。
+2. 不开发 SQLite 生产存储后端、不抽象双数据库兼容层，也不维护跨数据库方言测试。
+3. 数据库结构演进采用编译内置的连续编号 SQL 迁移文件，仅在显式执行 `migrate up` 时通过事务咨询锁串行变更；服务启动时严格校验全部历史迁移文件的 SHA-256 摘要，杜绝静默建表或带病启动。
+4. 独立题库服务（见 [决策 0006](0006-tiku-fork-token-billing.md)）同样采用独立的 PostgreSQL 数据库与角色，与主库保持物理与权限隔离。
 
-## 本次变更范围
+## 当前落点与影响
 
-当前只有前端模拟原型，没有正式业务 schema、运行中的业务库或待迁移生产数据。本次更新设计、数据库/部署规格与路线，不安装数据库、不连接实例，也不执行真实数据迁移。
-
-研究目录不属于本次替换范围。独立 OCS-Tiku 在 [决策 0006](0006-tiku-fork-token-billing.md) 中决定 fork 并使用独立 PostgreSQL 数据库/角色；主平台仍只通过 Provider 接入，不跨库查询。
-
-## 后续实施
-
-连接池与事务明确面向 PostgreSQL；资金使用行锁、业务唯一键和原子分录；任务领取采用条件更新和必要的 `SKIP LOCKED`；事件顺序按提交后投递方案处理，不能直接使用自增 ID 推断提交顺序。
-
-备份、恢复、迁移、大版本升级与性能参数通过 PostgreSQL 集成和故障注入验收。具体工程参数由实施和测试确定，不再次作为用户的数据库选型问题。
-
-参见 [数据库设计](../architecture/database.md)、[部署规格](../architecture/deployment.md) 与 [开发路线](../product/roadmap.md)。
+- 主服务内置 34 个连续 SQL 迁移（`server/internal/platform/postgres/migrations/`），题库服务内置 8 个连续 SQL 迁移（`services/tiku/internal/platform/store/migrations/`）。
+- 本地全栈开发脚本（`scripts/dev.mjs`）与 CI 均针对真实隔离 PostgreSQL 实例执行迁移与竞态集成测试。

@@ -1,33 +1,23 @@
-# 0012 学习通账户资料页主体探针
+# 决策 0012：新增学习通账户资料页（Profile）主体探针模式
+
+- **状态**：已采纳并落地
 
 ## 背景
 
-用户登录要求服务端确认稳定的外部主体。既有验证器只接受返回稳定主体与会话到期的 JSON 信任探针。2026-10-25 核查实际账户会话后确认：
+系统绑定内部用户与钱包的前提是服务端独立核验不可变的学习通外部主体 ID。初期实现仅支持返回 JSON 结构的主体与会话过期时间探针；经核查实际学习通网页端协议发现：
 
-- `passport2.chaoxing.com/mooc/accountManage` 由服务端渲染 `id="uid"` 与 `id="messageName"`，UID 在同一账户的 `i.chaoxing.com/base` 页面保持一致；
-- `i.chaoxing.com/base/cacheUserOrg` 返回 `site[].schoolname` 与 `fid`，可用于学校信息；
-- 网页端没有同时返回稳定主体与会话到期的 JSON 资料端点。Cookie 中的 `_uid` 仍不作为主体依据。
+1. 网页端账户管理页（`passport2.chaoxing.com/mooc/accountManage`）由服务端直接渲染稳定的用户 `id="uid"` 与姓名 `id="messageName"`（与 `i.chaoxing.com/base` 一致），并不提供同时包含稳定 UID 与精确会话过期时间戳的单一公开 JSON 接口；
+2. 所属学校名称由独立的 `i.chaoxing.com/base/cacheUserOrg` JSON 接口返回；
+3. 客户端或登录响应 Cookie 中的 `_uid` 字段缺乏服务端页面级绑定校验，不能单独作为资产归属依据。
 
-## 决定
+## 决策
 
-新增 `profile` 主体探针模式，与 JSON 探针并存：
+在保留原有 `json` 探针模式的基础上，新增并列受支持的 **`profile` 账户资料探针模式**：
 
-- 只读取固定 HTTPS 账户资料地址，失败关闭；
-- 从服务端渲染页面提取 UID；缺少 UID 或格式异常时拒绝登录，不读取 Cookie 自述 UID；
-- 学校从 `school_probe_url` 的 JSON 读取，优先匹配会话 `fid`；学校不可用时保留登录，学校留空；
-- 会话到期使用配置的保守 TTL，允许 1–168 小时；当前生产使用 24 小时；
-- 稳定命名空间与授权依据仍为必填；执行、支付与收费开关不受影响。
+1. **严格解析服务端渲染 UID**：向配置的固定 HTTPS `subject_probe_url` 发起携带新登录会话的请求，仅从服务端渲染 HTML 节点提取不可变 UID 与姓名；非 `200` 响应、非预期页面结构或缺失合法 UID 时立即按失败关闭（Fail-Closed）拒绝登录。
+2. **学校信息补充与防明文降级**：从 `school_probe_url` 读取学校 JSON 并优先匹配当前会话 `fid`；若该接口返回携带 `ws` Cookie 的 `302` HTTP 重定向，客户端**绝不跟随明文 HTTP 跳转**，仅在原 HTTPS 地址安全重试一次；学校接口暂不可用时允许登录继续完成并将学校留空。
+3. **保守内部会话有效期**：通过 `learning.subject_ttl_hours`（合法范围 `1–168` 小时，推荐 `24` 小时）设定保守的平台会话重验周期，到期前迫使用户刷新认证。
 
-## 取舍与风险
+## 当前落点与影响
 
-- 学校接口可能先 302 到 HTTP 并下发 `ws` Cookie。探针不跟随明文降级，而是在原 HTTPS 地址重试一次；测试覆盖该路径。
-- 页面结构变化会让登录失败关闭，不会误用其他字段。探针测试覆盖缺少 UID、非 HTML、非 200、学校不可用、重定向重试和越界 TTL。
-- TTL 是内部策略，不是平台到期时间；更短的内部会话迫使重新登录，避免超出平台真实会话。
-- 学校接口不可用时登录仍完成，学校显示为空，后续平台读取可再次尝试。
-- 该模式不改变“平台确认、执行观察和媒体证据分离”的边界，也不启用真实学习执行。
-
-## 证据
-
-- 登录与读取证据：`chaoxing-progress-research/data/native-http/login-summary.json`（2026-10-20，账号密码登录成功，未要求验证码或二次验证）。
-- 账户页 UID 与 `base` 页 UID 一致；学校 JSON 结构经实际会话读取确认，未记录账号、UID、Cookie 或学校原值。
-- 2026-10-25 生产环境完成真实账号登录：挑战 201、验证 200、`/me` 返回姓名与学校，客户端浏览器登录进入 `/home`。
+- 实现位于 `server/internal/adapters/chaoxing/` 与 `server/internal/platform/config/runtime.go`，配置校验与重定向防降级均由单元测试完整覆盖。

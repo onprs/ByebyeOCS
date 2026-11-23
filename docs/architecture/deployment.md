@@ -1,70 +1,49 @@
-# Linux原生部署、备份与更新
+# 生产部署拓扑与安全沙盒架构
 
-本文面向公开用户部署环境，说明运行和恢复约束。实际安装命令见 [部署指南](../../deploy/README.md)，密钥与恢复步骤见 [维护手册](../deployment/README.md)；本地开发工具与现场证据单独记录于 [当前实现](../development/local-implementation.md)。
+> **适用范围**：公开用户生产环境的部署架构与安全隔离设计，对应 `deploy/` 脚本集、`deploy/systemd/` 单元模板与 `configs/` 示例配置。操作步骤见 [Linux 原生部署指南](../../deploy/README.md)。
 
-## 1. 运行要求
+## 1. 主机进程与反向代理拓扑
 
-Linux amd64/arm64、PostgreSQL16+、systemd、独立用户/管理员HTTPS来源、可写本地数据目录与时钟同步。2C1G可按低并发方案试用，2C4G/30GB保留为有余量的规划基线；组件受限检查及现场验收要求见[容量](capacity.md)。运行已构建服务不需要Go、Node、Flutter、Docker或图形桌面。
+生产环境采用“前置 HTTPS 反向代理 + 本机回环双 Go 守护进程 + 本机或受控 TLS PostgreSQL”的最小攻击面拓扑：
 
-公开用户自行提供数据库、域名、证书和代理；示例域名只是占位。正式任务执行使用原生HTTP，不安装浏览器、播放器或解码器。启用仍须配置平台授权及独立的目标协议验证依据；当前不提供内置TLS或任意平台通用执行承诺。
+```mermaid
+flowchart LR
+    Internet((公网客户端 / 支付网关))
+    subgraph Proxy["反向代理（Nginx / OpenResty / Caddy）"]
+      UHost["https://learn.example.com"]
+      AHost["https://admin.example.com"]
+    end
+    subgraph Systemd["Linux systemd 非特权沙盒"]
+      Main["byebyeocs.service<br/>用户: byebyeocs<br/>127.0.0.1:8090 / 8091"]
+      Tiku["ocs-tiku.service<br/>用户: ocs-tiku<br/>127.0.0.1:8092"]
+    end
+    PG[("PostgreSQL 16+<br/>独立库与独立角色")]
 
-## 2. 公开目录与隔离
+    Internet --> UHost & AHost
+    UHost -->|"/* 与 /api/v1/*"| Main
+    AHost -->|"/*、/admin/api/v1/*、/payments/callbacks/zpay"| Main
+    AHost -->|"/panel/*"| Tiku
+    Main -->|"127.0.0.1:8092 (Bearer Token)"| Tiku
+    Main --> PG
+    Tiku --> PG
+```
 
-| 内容 | 标准路径/规则 |
-| --- | --- |
-| 当前主程序 | `/opt/byebyeocs/current/bin/byebyeocs` |
-| 当前题库程序 | `/opt/byebyeocs/current/bin/ocs-tiku-fork` |
-| 版本 | `/opt/byebyeocs/releases/<version>/`，原子切换current |
-| 静态应用 | current下的`apps/admin/`与`apps/client-web/` |
-| 主配置/私密材料 | `/etc/byebyeocs/config.yaml`、`/etc/byebyeocs/secrets/` |
-| 题库配置/私密材料 | `/etc/ocs-tiku/ocs-tiku-fork.json`、`/etc/ocs-tiku/secrets/` |
-| 主数据 | `/var/lib/byebyeocs/` |
-| 运行目录 | `/run/byebyeocs/` |
-| 日志 | journald，结构化与脱敏 |
-| 备份 | 显式配置的受限暂存目录与不同主机目标 |
+- **双域名严格分离**：`auth.user_origin` 与 `auth.admin_origin` 必须为两个不同的 HTTPS Origin，从浏览器同源策略层隔绝管理员会话 Cookie、CSRF 域与用户端前端环境。
+- **受信任代理解析**：Go 服务强制只监听回环地址，仅当直连对端命中 `server.trusted_proxies`（默认 `127.0.0.1/32` 与 `::1/128`）时才解析单跳 `X-Forwarded-For` 作为限流与审计客户端 IP，防止伪造请求头绕过登录限流。
 
-主服务和题库使用不同非root系统用户与不同PostgreSQL角色/数据库。主服务两监听为127.0.0.1:8090/8091，题库默认127.0.0.1:8092。代理分别映射不同HTTPS来源，管理入口进一步按实际网络策略保护；健康接口不默认公开。
+## 2. 目录所有权与 systemd 安全加固
 
-配置/秘密文件仅所有者可读。程序和静态资源由安装者管理，服务只读；数据目录由对应服务写。不要给Web服务sudo能力，不从Web请求执行任意维护shell。
+`deploy/install.sh` 与 `deploy/systemd/*.service.in` 实施纵深权限收敛：
 
-## 3. 配置与能力
+1. **双非 root 服务账号**：`byebyeocs` 与 `ocs-tiku` 为两个无登录 Shell 的独立系统用户，安装脚本强制拒绝二者同名。
+2. **读写路径最小化**：
+   - `/opt/byebyeocs/releases/<version>` 与 `/opt/byebyeocs/current` 由 `root` 所有且全局只读，业务进程无权自修改二进制或前端静态资产。
+   - `byebyeocs.service` 开启 `NoNewPrivileges=true`、`PrivateTmp=true`、`ProtectSystem=strict`、`ProtectHome=true`、`UMask=0077`，仅对 `/var/lib/byebyeocs`（数据导出与恢复门控）及运行时的主配置文件路径（供 `owner` 热调并发参数原子写回）授予必要写权限；`secrets/` 下的密钥与 DSN 保持 `0600`。
+   - `ocs-tiku.service` 同样运行在严格沙盒下，仅开放 `/etc/ocs-tiku` 目录给 `ocs-tiku` 用户，供 `/panel/` 维护面板在保存上游模型时原子写回 JSON 配置与 `0600` 密钥文件。
+3. **禁止 Web 执行系统命令**：两个 Go 进程内不包含任何通过 Web 接口调用 `sh`、`pg_dump`、`systemctl` 或 `sudo` 的代码路径；安装、迁移、备份与恢复全部通过受操作系统权限管控的独立 CLI 或 `systemd.timer` 执行。
 
-实际字段和公开默认值集中于 [主配置](../../configs/server.example.yaml) 与 [题库JSON配置](../../configs/ocs-tiku.example.json)，不另维护一套不同字段的示例。主配置优先级为内建默认、文件、已声明环境变量和显式CLI覆盖；未知字段、无效Origin、非回环监听和矛盾功能设置拒绝启动。
+## 3. 原子发布、互斥锁与回滚契约
 
-主服务只保留题库内部地址和服务令牌；上游模型密钥在题库受保护配置。身份索引密钥长期独立，密文带版本以支持加密主密钥轮换。实际运行时检查配置及schema兼容，不自动迁移。
-
-平台读取/执行、ZPay付款和自动收费默认关闭。启用需要部署授权、配置、发布价格和相应外部验证；未定价与usage_incomplete不自动扣费。下载地址和签名条件缺失时不提供虚假下载链接。
-
-## 4. 交付与systemd
-
-构建工具生成两个原生二进制、React管理端与Flutter Web产物，携带校验清单、版本/架构信息、配置与安装脚本。Android调试APK不进入默认Linux发布包。当前是本地产物，未在线发布或提供不存在的下载命令。
-
-[systemd模板](../../deploy/systemd/)使用专用用户、UMask0077、只读程序/配置、可写数据/运行目录、明确进程与内存上限，终止时清理整个控制组。数据库顺序不依赖发行版特定单元名，连接失败由程序退出和服务重启处理。
-
-安装、升级、回滚与卸载只操作校验后的程序/静态资源、单元及显式目录。现有配置、密钥和数据默认保留；不启动服务、不执行迁移、不创建默认管理员、不打开收费。实际命令以脚本help和安装指南为准；doctor只检查数据库连接与schema，备份/恢复使用独立脚本，尚未提供Web自动更新。
-
-## 5. 更新与回滚
-
-1. 从可信来源取得匹配架构的固定产物并校验摘要；摘要不能替代来源信任。
-2. 核对schema兼容、完整配置/keyring与可恢复备份。
-3. 停止新副作用并安全停服务，保留待确认任务和未决付款。
-4. 显式执行计划中的迁移和版本切换，启动后先核验/对账。
-5. 失败只在schema兼容范围回退程序；不可逆数据变化采用独立恢复计划。
-
-当前脚本不会降级数据库或自动判定全部schema兼容，不能把切current成功当作完整业务回滚。
-
-## 6. 备份与恢复
-
-当前提供age加密的一致性pg_dump归档、实际SSH上传与远端摘要核对，以及普通用户临时initdb恢复演练。主/题库数据库分别一致，配置与所需keyring一起保管，age解密身份单独离线。只有成功异机校验才更新私有恢复点；本地复制、失败和计划时间都不能冒充成功。
-
-默认恢复点最大年龄15分钟，过期保护新收费/付款；安装备份timer后由部署者配置并显式启用。备份周期与耗时必须符合目标，实际恢复点以dump开始时刻的保守值计算。题库启用时同时覆盖题库数据库与秘密配置。
-
-更大规模采用 [数据保留](data-retention.md) 的每周全量、每日差异、持续异机WAL/pgBackRest及完整依赖链方案；它是生产运维目标，当前逻辑备份脚本不冒充已完成持续WAL能力。RPO≤15分钟/RTO≤4小时仍需现场演练。
-
-恢复时停止流量，先隔离恢复，创建recovery-required标记，撤销恢复出来的旧会话/平台授权、暂停任务，并重新应用隐私关闭标记与外部最小清单。核对账本、订单、平台付款、退款、题库和执行事实后再取得新备份、解除保护；详细步骤见 [恢复手册](../deployment/README.md)。支付平台不能推断丢失的全部本地消费语义，不明差异人工核对。
-
-## 7. 当前维护环境
-
-本地已具备Go、隔离PostgreSQL、Flutter/Android SDK与浏览器，可构建正式服务、静态应用和调试APK，使用测试二进制运行合成身份与课程的真实API联调。历史设计原型仍独立运行在5186。
-
-这些工具、绝对路径、测试账号、SSH/代理和已占用端口不作为公开前提。本轮没有实际SSH安装、真实商户、生产数据库或Apple构建环境，验证范围见 [当前实现](../development/local-implementation.md)。
+- **自校验发布包**：`scripts/build-bundle.sh` 拒绝打包任何 `debug` 产物、`.apk` 或符号链接，生成全文件 SHA-256 `checksums.txt` 并在打包末尾自校验；目标机执行 `install.sh`、`upgrade.sh` 或 `rollback.sh` 时首先复核校验和、CPU 架构与 `release.json` 清单。
+- **`flock` 前缀互斥与原子软链切换**：同一 `--prefix` 目录下的安装、升级、回滚与卸载全程持有文件排他锁，版本目录完整落盘后通过 `mv -Tf` 原子切换 `/opt/byebyeocs/current` 符号链接，中断自动清理半成品。
+- **程序回滚与数据库演进边界**：`rollback.sh` 仅回退程序二进制与前端静态资源，绝不自动回滚或删除 PostgreSQL 表列。含兼容扩展迁移的小版本可在兼容窗口内回退程序；含破坏性结构演进或数据修正的版本须遵循升级前备份与灾难恢复计划。

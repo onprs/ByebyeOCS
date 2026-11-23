@@ -1,138 +1,65 @@
-# PostgreSQL、实体关系与版本迁移
+# 数据库与迁移架构
 
-## 1. 已确认的选型
+> **适用范围**：开发维护环境，说明主服务 PostgreSQL 数据库（34 个连续迁移）与独立题库 PostgreSQL 数据库（8 个连续迁移）的模型设计、事务锁顺序与演进规则。
 
-用户已明确选择 PostgreSQL。正式服务统一使用 PostgreSQL，不再开发 SQLite 后端、双数据库兼容层或 SQLite → PostgreSQL 迁移路径。
+## 1. PostgreSQL 唯一存储基线与显式迁移
 
-当前没有正式业务数据库和生产数据，不做旧业务库迁移。主服务的身份、学习、资金/支付、题库编排、事件与隐私迁移位于 `server/internal/platform/postgres/migrations/`，独立题库有自己的数据库和迁移。PostgreSQL16+为唯一主数据库；当前验证使用隔离PostgreSQL16.15。实际迁移与状态以源码及 [当前实现](../development/local-implementation.md) 为准，下文保留实体职责与一致性设计。
+系统将 **PostgreSQL 16+** 作为唯一正式持久化引擎（见 [决策 0004](../decisions/0004-postgresql.md)），利用行级锁（`FOR UPDATE` / `SKIP LOCKED`）、可重复读快照事务、部分唯一索引与延迟/检查约束保障高并发调度与资金账本严密一致，不维护 SQLite 生产分支或双库 ORM 抽象。
 
-| 项目 | 正式方案 |
-| --- | --- |
-| 数据库 | 受支持的 PostgreSQL 稳定版本，实施时固定主/补丁版本 |
-| 部署 | Linux 原生 PostgreSQL 或用户提供的合适托管实例，不要求 Docker |
-| Go 连接 | PostgreSQL 专用连接池与显式事务，不为未规划数据库保留方言抽象 |
-| 钱包并发 | 按钱包/账本账户行锁，固定加锁顺序与业务唯一键 |
-| 任务领取 | 状态条件更新、活跃尝试唯一约束，候选领取可用 `FOR UPDATE SKIP LOCKED` |
-| 事件 | 业务事务 Outbox，提交后分配有序投递流 |
-| 备份 | 一致性备份与恢复演练，按 RPO/RTO 增加 WAL 归档或托管恢复 |
+两套服务共享相同的迁移安全铁律：
 
-数据库承担身份、课程、任务、账本、支付、审计和事件的持久化。不因为选择 PostgreSQL 就增加微服务、Redis、消息队列或多节点部署。
+- **显式执行与咨询锁**：仅 `byebyeocs migrate up` 与 `ocs-tiku-fork migrate` 会执行建表与结构变更，执行前获取 PostgreSQL 咨询锁串行化并发调用；单版本 SQL 与迁移元数据记录在同一事务中原子提交。
+- **启动强校验**：`serve` 与 `doctor` 启动时逐条比对内置迁移文件的编号连续性、文件名与内容 SHA-256 校验和；若发现数据库未初始化、缺号、历史迁移被篡改或数据库版本高于当前二进制，立即报错退出。
 
-## 2. 写负载不能按账号数判断
+## 2. 主数据库领域模型（34 个连续迁移）
 
-写负载近似由以下部分组成：
+主数据库位于 `server/internal/platform/postgres/migrations/`（`000001` 至 `000034`），按业务领域划分为六大表族：
 
-```text
-观察写入率 ≈ 实际运行任务数 / 检查点合并间隔
-总写入 = 观察检查点 + 租约续期 + 状态变化 + 安排修改
-       + 资金事务 + 支付 Inbox + 审计 + Outbox/投递流
-```
+### 2.1 身份、会话与隐私（迁移 01, 03, 08, 15）
 
-例如 200 个运行任务、15 秒合并一次，只有观察更新就约 13.3 次/秒；这只是计算示例，不是已测容量。租约可批量续期，过程事件可合并；账务事务和平台确认不能丢弃。
+- `users`、`external_identities`、`platform_sessions`：保存内部用户、HMAC 外部主体绑定及带密钥版本号的加密平台会话。
+- `admin_users`、`client_sessions`、`admin_sessions`、`login_challenges`：保存管理员账号与五类角色、Web Cookie 会话、原生旋转刷新令牌摘要族及短期登录挑战。
+- `user_preferences`、`admin_preferences`：隔离存储双端配色、主题模式与通知开关及乐观锁版本。
+- `data_export_requests`、`account_deletion_requests`、`privacy_closures`：管理有界加密导出、删除审批工作流与重放恢复所需的持久闭户匿名化清单（含 `reapply_privacy_closures` 存储函数）。
 
-容量验证测量：锁等待、事务提交 P95/P99、通知 Inbox 延迟、钱包请求延迟、WAL 增长、长事务和备份期间表现。PostgreSQL 的连接数、观察合并间隔和索引按实际负载调整，不把演示并发值当作生产容量。
+### 2.2 课程目录、共享缓存与三级可用性（迁移 04, 18, 25–28, 30–33）
 
-## 3. 一致性与运行参数
+- `learning_courses`、`learning_course_chapters`、`learning_course_attachments`：保存 `chaoxing-read-v2` 多级章节树（父子关系、章分组、原始序号、稳定小节 UUID）、附件 `card_index` 及课程级平台状态 `platform_state`（含已结束课程标记与结构指纹提示）。
+- `learning_resource_cache`、`learning_course_covers`：跨用户保存 24 小时有效的章节卡片页码目录缓存，以及无会话安全回源重编码的静态 JPEG 封面缓存。
+- `learning_task_point_availability` 与章节 `availability`：独立于课程快照重建周期，持久记录章节关闭与测验/任务点关闭（`platform_closed`）事实及最近核验时间。
 
-资金事务使用行锁并维持 `fsync`、`synchronous_commit` 和正常崩溃恢复配置。锁钱包及关联账本账户时按稳定顺序获取；死锁与序列化冲突限次重试，事务内不发网络请求。连接池按主机资源配置，不照搬演示并发值。
+### 2.3 学习安排、任务调度与异常恢复（迁移 04, 09, 10, 13, 16–19, 29, 34）
 
-使用受限业务角色、版本化 SQL 迁移、明确隔离级别和 `statement_timeout` / `lock_timeout` 等限制。迁移权限与日常业务写入权限分离；长报表分页，避免长期事务影响正常运行。
+- `learning_plans`、`learning_plan_revisions`、`learning_plan_tasks`：管理安排主记录（含归档删除时间戳）、不可变配置版本（课程范围、类型、题库模型与缓存模式）及当前版本任务绑定。
+- `learning_tasks`、`learning_task_attempts`、`learning_account_commands`：以稳定任务键去重，记录期望状态（`desired_state`）、运行状态（`state`）、租约持有人与到期时间、`fencing_token`、观察进度、独立平台核验状态、真实媒体证据标记、两轮瞬态冷却恢复计数、三代显式答案重查代数及测验最终提交持久化标记。
 
-维护币种与整数分约束、业务唯一键、版本条件更新和账本重建校验。没有通过终止进程、故障恢复与资金对账测试前，不提供财务正确性的运行承诺。
+### 2.4 复式账本、计费与支付（迁移 05, 11, 14, 21）
 
-## 4. 核心实体
+- `wallets`、`ledger_accounts`、`ledger_journals`、`ledger_postings`：每个用户钱包关联可用余额账户与预占账户，配合系统渠道清算、服务收入与退款应付账户；所有金额变动必须写入借贷和恒为零的不可变 `journals` + `postings`，钱包余额列仅为同一事务同步维护的受检缓存。
+- `billing_settings`、`billing_price_versions`、`charge_intents`、`wallet_holds`、`usage_records`：管理微元单价、舍入方式（`ceil`/`floor`/`half_up`）、收费意图、冻结预占与唯一任务点结算凭证。
+- `recharge_orders`、`payment_callbacks`、`refund_requests`：管理充值订单生命周期、ZPay 异步通知幂等 Inbox 及服务退回/渠道原路退款审批。
 
-所有业务主键使用服务端生成的稳定字符串 ID，升级和恢复时保留。时间保存 UTC，API 使用带时区时间。敏感主体、Cookie 与密钥存密文或引用，不作为明文索引内容。
+### 2.5 题库目录镜像、查询快照与报告复核（迁移 06, 12, 16, 17, 20, 22–24, 34）
 
-| 实体 | 关键字段 | 约束与用途 |
-| --- | --- | --- |
-| users | id、状态、创建时间、删除状态 | 内部账务主体，不要求注册用户名密码 |
-| external_identities | user_id、provider、namespace、主体索引、版本 | 有效主体唯一，归属不可随意改写 |
-| platform_sessions | identity_id、密文、key_version、到期、版本 | 加密，按身份隔离 |
-| execution_grants | user_id、范围、能力、同意版本、撤销时间 | 授权与登录会话分离 |
-| client_sessions / admin_sessions | 主体、摘要、轮换链、到期、撤销 | 管理员和用户分表/独立域 |
-| admin_users / roles / permissions | 管理员、角色、权限 | 不存在普通用户自动成为管理员的映射 |
-| courses / chapters / resources | 外部组合键、快照版本、显示信息 | 普通资源独立于任务点 |
-| task_points | 稳定外部任务键、课程、周期、平台事实 | 缺失标识不生成可执行任务 |
-| plans / plan_revisions | user_id、current_revision、范围、优先级 | 不可变版本，安排记录条件更新 |
-| plan_task_bindings | revision_id、canonical_task_id | 多安排共享规范任务 |
-| tasks | 规范任务、state、desired_state、control_version | 稳定任务范围唯一 |
-| execution_attempts | task_id、阶段、版本、token、租约、检查点 | 一个任务最多一个有效副作用尝试 |
-| progress_evidence | task_id、attempt_id、来源、查询时间、事实 | 观察、平台确认、媒体证据分开 |
-| question_queries / learning_work_runs | 查询内容与用量、冻结安排版本、试卷指纹、查询引用和提交状态 | 查询与自动提交分离，原题敏感字段限期保留 |
-| wallets / ledger_accounts | user_id、currency、可用/预占缓存 | 用户币种钱包唯一，缓存可由账本重建 |
-| journals / postings | 业务键、关联对象、账本账户、整数变动 | 业务键唯一，每笔 journal 变动和为零 |
-| question_offerings | 公开名称、fork 上游引用、能力、启停、默认、价格版本、输入/输出微元价、缓存策略 | 题库目录的只读镜像；由题库面板发布并同步，主库不承担定价权 |
-| question_queries | 用户/任务、公开条目、作答方式、缓存作用域、fork request_id、答案快照、用量汇总、价格版本、微元成本、完成状态 | 查询与提交分离；相同 request_id 幂等 |
-| question_calls | query_id、slot（caption/answer/agent）、输入/输出/total token、上游模型、状态、时间 | 每次模型调用的分解；用于展示和核对 |
-| learning_work_runs | task_id、plan_revision_id、试卷指纹、公开模型、模式、query_ids、答案摘要、提交状态 | 任务级最终提交独占，提交前检查租约；结果不明只核验 |
-| question_submissions | 旧接口历史记录 | 新流程不再写入；历史记录保留 |
-| usage_meters / usage_records / usage_settlements | 计量版本、稳定范围、唯一用量事件、证据、结算/冲正引用 | 主服务和题库独立；相同量跨重试和安排只计一次 |
-| charge_intents / holds | 收费主体键、价格快照、预占/消耗/释放 | 主服务和题库独立范围，重试共享意图，不按尝试 ID 新收费 |
-| recharge_orders / payment_attempts | 本地单号、金额、渠道、支付/到账状态 | 商户单号唯一，渠道交易号唯一 |
-| payment_inbox / refunds | 去重键、验签摘要、处理结果、退款状态 | 通知持久化，退款流程可恢复 |
-| funding_lots / allocations | 来源充值、可退款额、消费分配 | 防止退款超过原充值可退款范围 |
-| idempotency_requests | 主体、方法/路径、键、请求摘要、结果引用、期限 | 同键同意图复用，过期意图重新确认 |
-| audit_events / data_requests | 操作者、理由、对象、脱敏变更、请求状态 | 关键操作留痕，不含凭据 |
-| outbox / stream_heads / stream_entries | 事件 UUID、资源版本、流序号、投递状态 | 事务事实与提交后有序投递分开 |
-| user_preferences / admin_preferences | 配色、浅深模式、通知、版本 | 默认石墨，两类身份偏好隔离 |
+- `question_offerings`：以题库公开条目 UUID 为主键的只读目录镜像表（主库旧价格版本表与旧测试表已在迁移 24 收敛移除）。
+- `question_queries`：持久化每次题库查询的幂等请求键、冻结的公开条目与微元费率快照、冻结的输出 token 预算、缓存策略、调用槽位 token 汇总、计费状态及定期清理的正文载荷。
+- `question_reports`、`question_report_reviews`：保存用户提交的答案问题报告及管理员带幂等键的复核与缓存失效记录。
 
-## 5. 实体关系
+### 2.6 审计与有序事件流（迁移 02, 07, 19）
 
-```mermaid
-erDiagram
-    USERS ||--o{ EXTERNAL_IDENTITIES : owns
-    EXTERNAL_IDENTITIES ||--o{ PLATFORM_SESSIONS : authenticates
-    USERS ||--o{ PLANS : schedules
-    PLANS ||--|{ PLAN_REVISIONS : versions
-    PLAN_REVISIONS ||--o{ PLAN_TASK_BINDINGS : selects
-    TASKS ||--o{ PLAN_TASK_BINDINGS : referenced_by
-    TASK_POINTS ||--o| TASKS : identifies
-    TASKS ||--o{ EXECUTION_ATTEMPTS : attempts
-    TASKS ||--o{ PROGRESS_EVIDENCE : verifies
-    USERS ||--o{ WALLETS : owns
-    WALLETS ||--|{ LEDGER_ACCOUNTS : contains
-    JOURNALS ||--|{ POSTINGS : balances
-    LEDGER_ACCOUNTS ||--o{ POSTINGS : records
-    TASKS ||--o{ CHARGE_INTENTS : relates
-    TASKS ||--o{ USAGE_RECORDS : measures
-    USAGE_RECORDS ||--o{ USAGE_SETTLEMENTS : settles
-    CHARGE_INTENTS ||--o{ HOLDS : reserves
-    USERS ||--o{ RECHARGE_ORDERS : creates
-    RECHARGE_ORDERS ||--o{ PAYMENT_ATTEMPTS : pays
-    RECHARGE_ORDERS ||--o{ FUNDING_LOTS : funds
-    RECHARGE_ORDERS ||--o{ REFUNDS : refunds
-    USERS ||--o{ QUESTION_QUERIES : asks
-    QUESTION_MODEL_OFFERINGS ||--o{ QUESTION_QUERIES : selected
-    QUESTION_QUERIES ||--|{ QUESTION_CALLS : expands
-```
+- `audit_logs`：记录管理员与关键系统动作的不可变脱敏审计轨迹。
+- `learning_outbox`、`event_stream_heads`、`event_stream_entries`：承接业务事务写入的 Outbox 事件，经串行桥接分配严格单调递增的投递流序号。
 
-非课程任务等未来业务可扩展收费主体类型；不把所有财务交易强行外键到执行尝试。
+## 3. 独立题库数据库模型（8 个连续迁移）
 
-**题库 fork 使用独立 PostgreSQL 数据库**（建议 `ocs_tiku`）和独立角色。主要表为 `tiku.offerings`（公开条目与费率）、`tiku.offering_price_versions`（只追加价格版本）、`tiku.model_overrides`、`tiku.model_tests`、`tiku.requests`、`tiku.queries`、`tiku.model_calls`、`tiku.cache_entries` 和 `tiku.panel_audit`；主平台不直接读取这些表，也不做跨数据库 join。主平台保存目录镜像、查询事实、token 汇总、冻结价格快照和账本引用。
+题库库位于 `services/tiku/internal/platform/store/migrations/`（`000001` 至 `000008`），统一建于 `tiku` schema 下：
 
-公开条目 `provider_ref` 是 fork 配置中的模型引用；上游服务名、模型名、地址和密钥留在 fork 的受保护配置中，不进入主库或浏览器。主库 `question_offerings` 以题库条目 UUID 为关联键，价格版本与费率随每次目录读取同步；已发生查询另存冻结快照。主库价格版本表和主库模型测试表已删除。
+- `tiku.offerings` 与 `tiku.offering_price_versions`：维护公开模型条目（通过部分唯一索引强制每个活跃上游模型最多绑定一个未删除的公开条目，支持软删除释放绑定并保留历史引用）及只追加的微元价格版本历史。
+- `tiku.model_overrides`、`tiku.model_tests`：记录模型启停覆盖状态与连通性/功能测试结果。
+- `tiku.requests`、`tiku.queries`、`tiku.model_calls`：保存客户端幂等键与请求指纹摘要、规范化题目与响应载荷（到期自动脱敏清理正文，永久保留幂等摘要与 token 统计防重放）及作答/视觉转述槽位调用明细。
+- `tiku.cache_entries`：按规范化题目、选项、图片哈希、模型连接/密钥指纹、输出预算与策略期限存储精确答案缓存及主动失效原因。
+- `tiku.panel_audit`：记录 `/panel/` 维护面板的所有配置、发布与缓存失效审计日志。
 
-答案缓存按 `cache_key`、作用域、公开条目、规范化/提示词版本和 TTL 存储；缓存条目不是账本，不能代替 `question_queries` 或资金证据。
+## 4. 并发锁顺序与防死锁准则
 
-## 6. 索引与数据隔离
-
-用户可访问表携带 `user_id` 或有可验证的归属链；Repository 查询必须带主体，控制器不接受客户端自报 user_id 作为授权依据。对任务、订单、钱包等重点表使用复合外键/应用约束防止跨用户关联。
-
-必要索引包括：用户课程组合键、任务稳定键、任务状态和下次尝试时间、有效租约、用户订单时间、本地订单号、渠道交易号、账务业务键、用户流水、Outbox 未投递记录、流键与序号；题库公开条目、`question_queries.request_id`/user_id/时间、fork `answer_cache.cache_key`/expires、fork request idempotency。报表使用聚合快照，避免管理首页每次全表扫描。
-
-跨行借贷平衡不能仅靠单行 CHECK 保证。通过受限的账务入口、同一事务和并发测试保证；可增加 PostgreSQL 延迟约束验证。定期重建对账发现异常即停止相关资金操作。
-
-## 7. PostgreSQL schema 升级与恢复
-
-当前没有待迁移的旧业务库，正式开发直接建立 PostgreSQL schema。后续维护仅围绕 PostgreSQL 的版本化迁移和必要的大版本升级：
-
-1. 在与目标环境一致的 PostgreSQL 主版本上演练迁移，检查索引、约束和锁影响。
-2. 常规升级优先使用兼容旧/新程序的扩展再收敛策略；需要停写时停止新领取并安全停止副作用。
-3. 维护窗口中的支付通知明确返回可重试错误，不回复未持久化的成功；恢复后主动查单补偿。
-4. 升级前创建可恢复备份，保留身份、任务、密文、账本、订单、预占、幂等键、Inbox/Outbox 和事件游标。
-5. 核对逐用户余额、journal 平衡、充值/消费/退款、约束与审计；不能只核对总行数。
-6. 恢复时先核验任务和支付事实，完成账务检查后再开放新收费与领取。
-7. 程序回滚必须符合 schema 兼容范围；不可逆变更不直接指回旧备份继续写账。
-
-不维护双数据库契约测试。并发、幂等、恢复、迁移与备份测试统一针对正式 PostgreSQL。分层 TTL、财务证据保留、异机备份和容量预算见 [数据保留](data-retention.md) 与 [2C4G / 30GB 基线](capacity.md)。
+涉及多实体更新的事务严格遵守固定加锁顺序：**用户/钱包主行 → 账本账户（按账户 UUID 字典序排序） → 收费意图 / 预占行 → 业务订单或学习任务行**；严禁在持有数据库事务锁期间发起学习通、ZPay 或大模型网络 I/O。
